@@ -15,7 +15,7 @@
     "skipDefaultLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@dermatech-monorepo/dtos": ["libs/shared/dtos/src/index.ts"]
+      "@dermatech/shared-dtos": ["libs/backend/shared-dtos/src/index.ts"]
     }
   },
   "exclude": ["node_modules", "tmp"]

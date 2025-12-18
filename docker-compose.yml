@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  # ----------------------------------------------------------------
+  # INFRASTRUCTURE
+  # ----------------------------------------------------------------
+  
+  postgres_db:
+    image: postgres:15-alpine
+    container_name: dermatech_postgres
+    ports:
+      - "${DATABASE_PORT}:${DATABASE_PORT}"
+    environment:
+      POSTGRES_USER: ${DATABASE_USER}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+      POSTGRES_DB: ${DATABASE_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - dermatech_network
+    # Healthcheck para avisar cuando está lista
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER} -d ${DATABASE_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis_db:
+    image: redis:alpine
+    container_name: dermatech_redis
+    ports:
+      - "${REDIS_PORT}:${REDIS_PORT}"
+    networks:
+      - dermatech_network
+    # NUEVO: Healthcheck para Redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------------------------------------------
+  # MICROSERVICES
+  # ----------------------------------------------------------------
+
+  auth_service:
+    container_name: dermatech_auth_service
+    build:
+      context: .
+      dockerfile: apps/services/core/auth-service/Dockerfile
+      args:
+        PROJECT_NAME: auth-service
+    ports:
+      - "${AUTH_SERVICE_PORT}:${AUTH_SERVICE_PORT}"
+    env_file:
+      - .env
+    depends_on:
+      #  Esperar a que la condición sea 'service_healthy'
+      postgres_db:
+        condition: service_healthy
+      redis_db:
+        condition: service_healthy
+    networks:
+      - dermatech_network
+
+volumes:
+  postgres_data:
+
+networks:
+  dermatech_network:
+    driver: bridge

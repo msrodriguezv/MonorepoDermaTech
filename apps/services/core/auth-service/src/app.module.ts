@@ -1,9 +1,33 @@
 import { Module } from '@nestjs/common';
-import { HealthController } from './api/http/controllers/health.controller';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { AuthModule } from './infrastructure/auth.module';
 
 @Module({
-  imports: [], 
-  controllers: [HealthController],
-  providers: [],
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: '.env', 
+    }),
+
+    // DATABASE CONNECTION
+    TypeOrmModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        type: 'postgres',
+       
+        host: configService.get<string>('DATABASE_HOST'),     
+        port: configService.get<number>('DATABASE_PORT'),      
+        username: configService.get<string>('DATABASE_USER'), 
+        password: configService.get<string>('DATABASE_PASSWORD'), 
+        database: configService.get<string>('DATABASE_NAME'), 
+        autoLoadEntities: true,
+        synchronize: true,
+      }),
+    }),
+    
+    AuthModule,
+  ],
 })
 export class AppModule {}
