@@ -6,6 +6,7 @@ import { AppModule } from './app.module'; // Ensure this points to your root App
 async function bootstrap() {
   const logger = new Logger('AuthService');
   const app = await NestFactory.create(AppModule);
+  const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:3000';
 
   // Mandatory R10: Global Validation Pipe (DTO Validation)
   app.useGlobalPipes(new ValidationPipe({
@@ -16,7 +17,7 @@ async function bootstrap() {
 
   // Mandatory R5: CORS Configuration
   app.enableCors({
-    origin: '*', // In production, replace with specific domain
+    origin: corsOrigin.split(','), // In production, replace with specific domain
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });

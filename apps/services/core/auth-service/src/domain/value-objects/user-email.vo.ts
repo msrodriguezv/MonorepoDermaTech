@@ -5,7 +5,7 @@ export class UserEmail {
 
   constructor(email: string) {
     if (!this.validate(email)) {
-      throw new Error(`Invalid email format: ${email}`);
+      throw new Error('Invalid email format');
     }
     this.email = email;
   }

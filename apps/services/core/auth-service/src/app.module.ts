@@ -23,7 +23,7 @@ import { AuthModule } from './infrastructure/auth.module';
         password: configService.get<string>('DATABASE_PASSWORD'), 
         database: configService.get<string>('DATABASE_NAME'), 
         autoLoadEntities: true,
-        synchronize: true,
+        synchronize: configService.get<string>('NODE_ENV') !== 'production',
       }),
     }),
     

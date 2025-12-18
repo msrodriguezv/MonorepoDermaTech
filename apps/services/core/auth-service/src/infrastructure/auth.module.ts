@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CqrsModule } from '@nestjs/cqrs';
-import { JwtModule } from '@nestjs/jwt';
+import { JwtModule, JwtModuleOptions } from '@nestjs/jwt';
 
 // Controllers
 import { AuthController } from '../api/http/controllers/auth.controller'; // (Lo crearemos en el sig paso)
@@ -13,6 +13,7 @@ import { RegisterUserCommandHandler } from '../application/commands/register-use
 import { UserSchema } from './persistence/typeorm/entities/user.schema';
 import { TypeOrmUserRepository } from './persistence/typeorm/repositories/typeorm-user.repository';
 import { BcryptService } from './security/bcrypt.service';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 
 @Module({
   imports: [
@@ -20,15 +21,35 @@ import { BcryptService } from './security/bcrypt.service';
     // Register the Schema in TypeORM for this module
     TypeOrmModule.forFeature([UserSchema]),
     // JWT Configuration (R5 Security)
-    JwtModule.register({
-      secret: process.env.JWT_SECRET || 'dev_secret_key_change_in_prod',
-      signOptions: { expiresIn: '1h' },
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      // FIX: Return type explicit
+      useFactory: (configService: ConfigService): JwtModuleOptions => {
+        const secret = configService.get<string>('JWT_SECRET');
+        const expiresIn = configService.get<string>('JWT_EXPIRES_IN');
+
+        if (!secret) {
+          throw new Error('JWT_SECRET is not defined in environment variables');
+        }
+
+        return {
+          secret: secret,
+          signOptions: {
+            // FIX: We deliberately use 'any' here because the 'ms' library types 
+            // used by jsonwebtoken are incompatible with generic strings in strict mode.
+            // We disable the linter rule just for this line to keep the rest of the code strict.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            expiresIn: (expiresIn || '1h') as any,
+          },
+        };
+      },
     }),
   ],
   controllers: [
     AuthController,
     // We will register the controller here in a moment
-    // AuthController 
+    // AuthController
   ],
   providers: [
     // Command Handlers

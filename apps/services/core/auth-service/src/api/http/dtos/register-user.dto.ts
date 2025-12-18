@@ -1,4 +1,10 @@
-import { IsEmail, IsEnum, IsNotEmpty, MinLength, Matches } from 'class-validator';
+import {
+  IsEmail,
+  IsEnum,
+  IsNotEmpty,
+  MinLength,
+  Matches,
+} from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { UserRole } from '@dermatech/shared-dtos';
 
@@ -17,13 +23,14 @@ export class RegisterUserDto {
   email: string;
 
   @ApiProperty({
-    example: 'StrongP@ssw0rd!',
-    description: 'The user password. Must contain at least 8 characters, one uppercase, one number, and one special character.',
-    minLength: 8,
+    example: 'StrongP@ssw0rd1',
+    description: 'Min 8 chars, 1 upper, 1 lower, 1 number, 1 special char',
   })
   @MinLength(8)
-  @Matches(/((?=.*\d)|(?=.*\W+))(?![.\n])(?=.*[A-Z])(?=.*[a-z]).*$/, {
-    message: 'Password must contain uppercase, lowercase, number and special character',
+  // FIX: Estrict mode regex
+  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[\W_]).{8,}$/, {
+    message:
+      'Password must contain at least: 1 uppercase, 1 lowercase, 1 number, and 1 special character',
   })
   password: string;
 

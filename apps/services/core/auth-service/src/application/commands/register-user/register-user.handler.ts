@@ -1,5 +1,6 @@
 import { CommandHandler, ICommandHandler } from '@nestjs/cqrs';
-import { Inject, Logger, BadRequestException, ConflictException } from '@nestjs/common';
+import { Inject, Logger, BadRequestException } from '@nestjs/common';
+import * as crypto from 'node:crypto';
 
 import { RegisterUserCommand } from './register-user.command';
 import { User } from '../../../domain/entities/user.entity';
@@ -43,8 +44,9 @@ export class RegisterUserCommandHandler implements ICommandHandler<RegisterUserC
     // 1. Check if user already exists
     const existingUser = await this.userRepository.findByEmail(command.email);
     if (existingUser) {
-      this.logger.warn(`Registration failed. Email ${command.email} already exists.`);
-      throw new ConflictException('The provided email is already registered.');
+      this.logger.warn('Registration attempt failed: User already exists.');
+      this.logger.debug(`Email conflict: ${command.email}`); 
+      throw new BadRequestException('User already exists');
     }
 
     // 2. Hash the password
@@ -54,12 +56,13 @@ export class RegisterUserCommandHandler implements ICommandHandler<RegisterUserC
     // Note: UserEmail constructor throws an error if format is invalid
     let emailVO: UserEmail;
     try {
-      emailVO = new UserEmail(command.email);
-    } catch (error) {
-      throw new BadRequestException(error.message);
-    }
+      new UserEmail(command.email);
+    } catch {
+      this.logger.error(`Invalid email format attempt`); 
+      throw new BadRequestException('Invalid email format provided');
+  }
 
-    // TODO: Mandatory R5 - If Role is STUDENT, we must validate against "Mock IDP UCE" here.
+    // ALL: Mandatory R5 - If Role is STUDENT, we must validate against "Mock IDP UCE" here.
     // We will implement the IdentityProviderPort later to fulfill this requirement.
 
     const newUser = new User(
