@@ -28,7 +28,7 @@ export class RegisterUserDto {
   })
   @MinLength(8)
   // FIX: Estrict mode regex
-  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[\W_]).{8,}$/, {
+  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>_-]).{8,}$/, {
     message:
       'Password must contain at least: 1 uppercase, 1 lowercase, 1 number, and 1 special character',
   })

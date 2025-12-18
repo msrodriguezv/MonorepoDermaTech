@@ -1,5 +1,5 @@
 import { CommandHandler, ICommandHandler } from '@nestjs/cqrs';
-import { Inject, Logger, BadRequestException } from '@nestjs/common';
+import { Inject, Logger, BadRequestException, ConflictException } from '@nestjs/common';
 import * as crypto from 'node:crypto';
 
 import { RegisterUserCommand } from './register-user.command';
@@ -46,28 +46,28 @@ export class RegisterUserCommandHandler implements ICommandHandler<RegisterUserC
     if (existingUser) {
       this.logger.warn('Registration attempt failed: User already exists.');
       this.logger.debug(`Email conflict: ${command.email}`); 
-      throw new BadRequestException('User already exists');
+      throw new ConflictException('User already exists');
     }
 
-    // 2. Hash the password
-    const passwordHash = await this.cryptoService.hash(command.password);
-
-    // 3. Create Value Objects and Domain Entity
+    // 2. Create Value Objects and Domain Entity
     // Note: UserEmail constructor throws an error if format is invalid
     let emailVO: UserEmail;
-    try {
-      new UserEmail(command.email);
-    } catch {
-      this.logger.error(`Invalid email format attempt`); 
-      throw new BadRequestException('Invalid email format provided');
-  }
+      try {
+        emailVO = new UserEmail(command.email);
+      } catch {
+        this.logger.error(`Invalid email format attempt`); 
+        throw new BadRequestException('Invalid email format provided');
+    }
+
+    // 3. Hash the password
+    const passwordHash = await this.cryptoService.hash(command.password);
 
     // ALL: Mandatory R5 - If Role is STUDENT, we must validate against "Mock IDP UCE" here.
     // We will implement the IdentityProviderPort later to fulfill this requirement.
 
     const newUser = new User(
       crypto.randomUUID(), // Ensure you have crypto available or use a UUID lib
-      emailVO,
+      emailVO, 
       passwordHash,
       command.role,
     );
