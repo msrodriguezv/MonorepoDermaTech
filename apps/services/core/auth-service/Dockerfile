@@ -22,6 +22,8 @@ WORKDIR /app
 COPY --from=builder /app/dist/apps/services/core/auth-service ./dist
 COPY --from=builder /app/node_modules ./node_modules
 
-EXPOSE 3000
+ARG PORT=3000
+ENV PORT=$AUTH_SERVICE_PORT
+EXPOSE $AUTH_SERVICE_PORT
 
 CMD ["node", "dist/main"]

@@ -5,7 +5,25 @@ import { AppModule } from './app.module'; // Ensure this points to your root App
 
 async function bootstrap() {
   const logger = new Logger('AuthService');
+
+   const requiredEnvs = [
+    'JWT_SECRET',
+    'DATABASE_HOST',
+    'DATABASE_PORT',
+    'DATABASE_USER',
+    'DATABASE_PASSWORD',
+    'DATABASE_NAME'
+  ];
+
+  const missingEnvs = requiredEnvs.filter(key => !process.env[key]);
+
+  if (missingEnvs.length > 0) {
+    logger.error(`Missing required environment variables: ${missingEnvs.join(', ')}`);
+    process.exit(1); // kill process with error code
+  }
+
   const app = await NestFactory.create(AppModule);
+  app.setGlobalPrefix('api');
   const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:4200';
 
   // Good Practice: Log the allowed origins to debug connection issues easily

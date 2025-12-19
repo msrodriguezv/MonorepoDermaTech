@@ -4,7 +4,7 @@ describe('UserEmail Value Object', () => {
   it('should create a valid email instance', () => {
     const validEmail = 'student@uce.edu.ec';
     const userEmail = new UserEmail(validEmail);
-    expect(userEmail.value).toBe(validEmail);
+    expect(userEmail.email).toBe(validEmail);
   });
 
   it('should throw InvalidUserEmailError for invalid email format', () => {

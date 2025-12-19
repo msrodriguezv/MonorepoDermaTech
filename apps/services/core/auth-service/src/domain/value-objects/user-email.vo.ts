@@ -1,14 +1,13 @@
 // apps/services/core/auth-service/src/domain/value-objects/user-email.vo.ts
 export class InvalidUserEmailError extends Error {
   constructor() {
-    super('Invalid email format'); // generic message secure
+    super('Invalid email format. Expected standard format like "user@domain.com"'); // generic message secure
     this.name = 'InvalidUserEmailError';
   }
 }
 
 export class UserEmail {
-  private readonly email: string;
-  public readonly value: string;
+  public readonly email: string;
 
   constructor(email: string) {
     if (!this.validate(email)) {
@@ -18,14 +17,10 @@ export class UserEmail {
   }
 
   private validate(email: string): boolean {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);;
-  }
-
-  public getValue(): string {
-    return this.email;
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   }
 
   public equals(other: UserEmail): boolean {
-    return this.email === other.getValue();
+    return this.email === other.email;
   }
 }
