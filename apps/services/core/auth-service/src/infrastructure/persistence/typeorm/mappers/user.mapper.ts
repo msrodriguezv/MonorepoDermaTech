@@ -31,7 +31,7 @@ export class UserMapper {
   static toPersistence(domain: User): UserSchema {
     const schema = new UserSchema();
     schema.id = domain.getId();
-    schema.email = domain.getEmail();
+    schema.email = domain.getEmail().email;
     schema.passwordHash = domain.getPasswordHash();
     schema.role = domain.getRole();
     schema.isActive = domain.getIsActive();
