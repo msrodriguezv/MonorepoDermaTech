@@ -32,7 +32,7 @@ export class User {
 
   // --- Getters ---
   public getId(): string { return this.id; }
-  public getEmail(): string { return this.email.getValue(); }
+  public getEmail(): UserEmail { return this.email; }
   public getPasswordHash(): string { return this.passwordHash; }
   public getRole(): UserRole { return this.role; }
   public getIsActive(): boolean { return this.isActive; }
