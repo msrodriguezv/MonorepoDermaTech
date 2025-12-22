@@ -25,7 +25,7 @@ export class ApiResponse<T> {
 
   @ApiProperty({
     description: 'ISO 8601 timestamp of the response generation.',
-    example: '2024-12-18T10:00:00.000Z',
+    example: '2025-12-31T23:59:59.000Z',
   })
   timestamp: string;
 

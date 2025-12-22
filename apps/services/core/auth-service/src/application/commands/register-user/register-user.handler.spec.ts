@@ -5,17 +5,8 @@ import { RegisterUserCommand } from './register-user.command';
 import { UserRole } from '@dermatech/shared-dtos';
 import { User } from '../../../domain/entities/user.entity';
 import { UserEmail } from '../../../domain/value-objects/user-email.vo';
-
-// FIX 1: Export interfaces so Linter treats them as public API
-export interface UserRepositoryPort {
-  save(user: User): Promise<User>;
-  findByEmail(email: string): Promise<User | null>;
-}
-
-export interface CryptoServicePort {
-  hash(text: string): Promise<string>;
-  compare(text: string, hash: string): Promise<boolean>;
-}
+import { UserRepositoryPort } from '../../ports/user.repository.port'; 
+import { CryptoServicePort } from '../../ports/crypto.service.port';
 
 describe('RegisterUserCommandHandler', () => {
   let handler: RegisterUserCommandHandler;
@@ -31,6 +22,7 @@ describe('RegisterUserCommandHandler', () => {
   const mockUserRepository: UserRepositoryPort = {
     findByEmail: jest.fn(),
     save: jest.fn(),
+    findById: jest.fn(),
   };
 
   const mockCryptoService: CryptoServicePort = {

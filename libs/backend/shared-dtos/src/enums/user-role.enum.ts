@@ -3,8 +3,8 @@
  * Used for RBAC (Role-Based Access Control) across microservices.
  */
 export enum UserRole {
-  STUDENT = 'STUDENT', // Patient context
-  DOCTOR = 'DOCTOR',   // Medical context
-  NURSE = 'NURSE',     // Triage context
-  ADMIN = 'ADMIN',     // Management context
+  STUDENT = 'STUDENT',
+  DOCTOR = 'DOCTOR',   
+  NURSE = 'NURSE',    
+  ADMIN = 'ADMIN',    
 }

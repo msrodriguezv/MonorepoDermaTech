@@ -67,5 +67,6 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
       useClass: BcryptService,
     },
   ],
+  exports: ['UserRepositoryPort', 'CryptoServicePort'],
 })
 export class AuthModule {}

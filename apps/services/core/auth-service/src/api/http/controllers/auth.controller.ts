@@ -32,7 +32,7 @@ export class AuthController {
     // CHANGE 2: Map the Domain Entity to the Response DTO
     const responseData: UserResponseDto = {
       id: user.getId(),
-      email: user.getEmail(),
+      email: user.getEmail().email,
       role: user.getRole(),
       isActive: user.getIsActive(),
     };

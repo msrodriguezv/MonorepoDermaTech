@@ -22,8 +22,9 @@ WORKDIR /app
 COPY --from=builder /app/dist/apps/services/core/auth-service ./dist
 COPY --from=builder /app/node_modules ./node_modules
 
-ARG PORT=3000
-ENV PORT=${AUTH_SERVICE_PORT:-${PORT}}
-EXPOSE $AUTH_SERVICE_PORT
+# We define variable with backup. 
+# If AUTH_SERVICE_PORT exists, use it. If not, use PORT If not, 3000.
+ENV PORT=${AUTH_SERVICE_PORT:-${PORT:-3000}}
+EXPOSE $PORT
 
 CMD ["node", "dist/main"]

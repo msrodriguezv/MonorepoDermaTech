@@ -9,11 +9,15 @@ import { CryptoServicePort } from '../../application/ports/crypto.service.port';
  */
 @Injectable()
 export class BcryptService implements CryptoServicePort {
-  private readonly SALT_ROUNDS = 10;
+  private readonly SALT_ROUNDS: number; 
 
-  /**
-   * Hashes a plain text password.
-   */
+  constructor() {
+   //Read from ENV or use 10 by default if it fails
+    const envRounds = process.env.BCRYPT_SALT_ROUNDS;
+    const parsed = envRounds ? parseInt(envRounds, 10) : NaN;
+    this.SALT_ROUNDS = Number.isInteger(parsed) && parsed > 0 ? parsed : 10;
+  }
+
   async hash(plainText: string): Promise<string> {
     return bcrypt.hash(plainText, this.SALT_ROUNDS);
   }

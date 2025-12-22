@@ -48,13 +48,19 @@ export class RegisterUserCommandHandler
    * @returns The newly created User entity (without sensitive data ideally).
    */
   async execute(command: RegisterUserCommand): Promise<User> {
-    this.logger.log(
-      `Processing new user registration request`
-    );
+    // SECURITY: Avoid logging PII (command.email)
+    this.logger.log('Processing new user registration request');
 
     // 1. Check if user already exists
+    // Usamos command.email porque es el string crudo que viene de la petición
     const existingUser = await this.userRepository.findByEmail(command.email);
+
     if (existingUser) {
+      // SECURITY FIX: Timing Attack Mitigation.
+      // We simulate a hashing operation so the response time is similar 
+      // regardless of whether the user exists or not.
+      await this.cryptoService.hash('dummy_password_to_simulate_workload');
+      
       this.logger.warn('Registration attempt failed: User already exists.');
       throw new ConflictException('User already exists');
     }
@@ -64,8 +70,13 @@ export class RegisterUserCommandHandler
     let emailVO: UserEmail;
     try {
       emailVO = new UserEmail(command.email);
-    } catch {
-      this.logger.error(`Invalid email format attempt`);
+    } catch (error) {
+      // FIX: Log the specific error stack or message for debugging
+      // without exposing sensitive data if possible, or just the format error.
+      this.logger.error(
+        `Invalid email format attempt`, 
+        error instanceof Error ? error.stack : String(error)
+      );
       throw new BadRequestException('Invalid email format provided');
     }
 
@@ -76,7 +87,7 @@ export class RegisterUserCommandHandler
     // We will implement the IdentityProviderPort later to fulfill this requirement.
 
     const newUser = new User(
-      crypto.randomUUID(), // Ensure you have crypto available or use a UUID lib
+      crypto.randomUUID(), 
       emailVO,
       passwordHash,
       command.role
