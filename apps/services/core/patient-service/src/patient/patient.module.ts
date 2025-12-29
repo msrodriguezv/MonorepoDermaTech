@@ -1,18 +1,17 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { PatientService } from './patient.service';
-import { PatientController } from './patient.controller';
+// Servicio en SINGULAR (PatientService)
+import { PatientService } from './patient.service'; 
+// Controlador en PLURAL (PatientsController)
+import { PatientsController } from './patient.controller';
 import { Patient } from './entities/patient.entity';
-// CAMBIO: Usamos S3Service en lugar de SupabaseService
-import { S3Service } from '../common/services/s3.service'; 
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Patient])],
-  controllers: [PatientController],
-  providers: [
-    PatientService, 
-    S3Service // <--- Inyectamos el servicio de S3
+  imports: [
+    TypeOrmModule.forFeature([Patient]) 
   ],
-  exports: [PatientService],
+  controllers: [PatientsController], // <--- PLURAL
+  providers: [PatientService],       // <--- SINGULAR
+  exports: [PatientService]          // <--- SINGULAR
 })
-export class PatientModule {}
+export class PatientsModule {}       // <--- PLURAL

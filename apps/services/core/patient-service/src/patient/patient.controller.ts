@@ -1,38 +1,35 @@
-import { Controller, Get, Body, Patch, UseGuards, Req } from '@nestjs/common';
-import { PatientService } from './patient.service';
+import { Controller, Get, Post, Body, Patch, Param, Delete, ParseUUIDPipe } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { PatientService } from './patient.service'; // Importar SINGULAR
+import { CreatePatientDto } from './dto/create-patient.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
-import { AuthGuard } from '@nestjs/passport';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
-import { EventPattern, Payload } from '@nestjs/microservices';
 
 @ApiTags('Patients')
-@Controller('patient')
-export class PatientController {
-  constructor(private readonly patientService: PatientService) {}
+@Controller()
+export class PatientsController { // <--- Clase en PLURAL
+  constructor(private readonly patientService: PatientService) {} // Inyectar SINGULAR
 
-  // --- KAFKA CONSUMER (Lineamiento Event Driven) ---
-  // Escucha cuando Auth dice "Usuario Registrado"
-  @EventPattern('user.registered')
-  async handleUserRegistered(@Payload() data: { userId: string; email: string }) {
-    await this.patientService.createInitialProfile(data.userId, data.email);
+  // ... (resto de tus métodos)
+  @Post()
+  @ApiOperation({ summary: 'Crear perfil de paciente' })
+  @ApiResponse({ status: 201, description: 'Perfil creado exitosamente.' })
+  create(@Body() createPatientDto: CreatePatientDto) {
+    return this.patientService.create(createPatientDto);
   }
-
-  // --- REST API (Protegido con JWT) ---
   
-  @Get('me')
-  @UseGuards(AuthGuard('jwt'))
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Obtener mi perfil médico' })
-  getProfile(@Req() req) {
-    // req.user viene de JwtStrategy
-    return this.patientService.findOne(req.user.userId);
-  }
+  // ... Asegúrate de tener findAll, findOne, etc. aquí abajo
+  @Get()
+  findAll() { return this.patientService.findAll(); }
 
-  @Patch('me')
-  @UseGuards(AuthGuard('jwt'))
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Actualizar mis datos' })
-  updateProfile(@Req() req, @Body() dto: UpdatePatientDto) {
-    return this.patientService.update(req.user.userId, dto);
-  }
+  @Get(':id')
+  findOne(@Param('id', ParseUUIDPipe) id: string) { return this.patientService.findOne(id); }
+
+  @Get('by-user/:userId')
+  findOneByUser(@Param('userId', ParseUUIDPipe) userId: string) { return this.patientService.findOneByUserId(userId); }
+
+  @Patch(':id')
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() updateDto: UpdatePatientDto) { return this.patientService.update(id, updateDto); }
+
+  @Delete(':id')
+  remove(@Param('id', ParseUUIDPipe) id: string) { return this.patientService.remove(id); }
 }

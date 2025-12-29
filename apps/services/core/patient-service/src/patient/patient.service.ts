@@ -1,50 +1,74 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, NotFoundException, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Patient } from './entities/patient.entity';
+import { CreatePatientDto } from './dto/create-patient.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
 
 @Injectable()
-export class PatientService {
+export class PatientService { // <--- SINGULAR (Sin la S al final)
   private readonly logger = new Logger(PatientService.name);
 
   constructor(
     @InjectRepository(Patient)
-    private patientRepo: Repository<Patient>,
+    private readonly patientRepository: Repository<Patient>,
   ) {}
 
-  // 1. EVENT DRIVEN: Se ejecuta automáticamente cuando Auth crea un usuario
-  async createInitialProfile(userId: string, email: string) {
-    const exists = await this.patientRepo.findOneBy({ userId });
-    if (exists) return;
-
-    this.logger.log(`Creating profile for user ${userId}`);
-    const patient = this.patientRepo.create({
-      userId,
-      email,
-      firstName: 'Usuario',
-      lastName: 'Nuevo',
+  // --- CREAR ---
+  async create(createPatientDto: CreatePatientDto) {
+    const existing = await this.patientRepository.findOne({
+      where: { userId: createPatientDto.userId }
     });
-    return this.patientRepo.save(patient);
+
+    if (existing) {
+      throw new BadRequestException('El usuario ya tiene un perfil de paciente creado.');
+    }
+
+    try {
+      const patient = this.patientRepository.create(createPatientDto);
+      return await this.patientRepository.save(patient);
+    } catch (error) {
+      this.handleDBExceptions(error);
+    }
   }
 
-  // 2. Obtener mi propio perfil
-  async findOne(userId: string) {
-    const patient = await this.patientRepo.findOneBy({ userId });
-    if (!patient) throw new NotFoundException('Perfil de paciente no encontrado');
+  // --- LEER TODOS ---
+  async findAll() {
+    return await this.patientRepository.find();
+  }
+
+  // --- LEER UNO ---
+  async findOne(id: string) {
+    const patient = await this.patientRepository.findOne({ where: { id } });
+    if (!patient) throw new NotFoundException(`Paciente con ID ${id} no encontrado`);
     return patient;
   }
 
-  // 3. Actualizar datos
-  async update(userId: string, dto: UpdatePatientDto) {
-    const patient = await this.findOne(userId);
-    
-    // Fusionamos los datos nuevos con los existentes
-    const updated = this.patientRepo.merge(patient, {
-      ...dto,
-      // Tratamiento especial para objetos anidados si fuera necesario
-    });
-    
-    return this.patientRepo.save(updated);
+  // --- BUSCAR POR USER ID ---
+  async findOneByUserId(userId: string) {
+    const patient = await this.patientRepository.findOne({ where: { userId } });
+    if (!patient) {
+      throw new NotFoundException(`No se encontró perfil para el usuario ${userId}`);
+    }
+    return patient;
+  }
+
+  // --- ACTUALIZAR ---
+  async update(id: string, updatePatientDto: UpdatePatientDto) {
+    const patient = await this.findOne(id);
+    this.patientRepository.merge(patient, updatePatientDto);
+    return await this.patientRepository.save(patient);
+  }
+
+  // --- ELIMINAR ---
+  async remove(id: string) {
+    const patient = await this.findOne(id);
+    await this.patientRepository.remove(patient);
+    return { message: 'Paciente eliminado correctamente' };
+  }
+
+  private handleDBExceptions(error: any) {
+    this.logger.error(error);
+    throw new InternalServerErrorException('Error inesperado en base de datos');
   }
 }

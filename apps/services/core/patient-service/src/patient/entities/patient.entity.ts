@@ -1,11 +1,18 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 
+// Definimos la interfaz para el JSONB para tener tipado fuerte en TypeScript
+export interface MedicalInfo {
+  bloodType: string;
+  allergies: string[];
+  chronicConditions: string[];
+}
+
 @Entity('patients')
 export class Patient {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  // Enlace lógico con Auth-Service (Indexado para búsquedas rápidas)
+  // Enlace con Auth
   @Index({ unique: true })
   @Column()
   userId: string;
@@ -13,27 +20,24 @@ export class Patient {
   @Column()
   email: string;
 
-  @Column({ nullable: true })
+  // CORRECCIÓN: Quitamos nullable. Un perfil DEBE tener nombres.
+  @Column({ length: 100 }) 
   firstName: string;
 
-  @Column({ nullable: true })
+  @Column({ length: 100 })
   lastName: string;
 
-  @Column({ type: 'date', nullable: true })
+  @Column({ type: 'date' })
   birthDate: Date;
 
   @Column({ nullable: true })
   phone: string;
 
-  // ESTRATEGIA JSONB (Ahorro de tablas + Flexibilidad médica)
+  // TU ESTRATEGIA JSONB (Conservada y Tipada)
   @Column({ type: 'jsonb', nullable: true, default: {} })
-  medicalInfo: {
-    bloodType: string;
-    allergies: string[];
-    chronicConditions: string[];
-  };
+  medicalInfo: MedicalInfo;
 
-  // INTEGRACIÓN PAAS (Supabase URL)
+  // TU INTEGRACIÓN PAAS
   @Column({ nullable: true })
   avatarUrl: string;
 
