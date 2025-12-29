@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  # --- INFRAESTRUCTURA (Ya la tenías) ---
+  postgres-core:
+    image: postgres:15
+    container_name: dermatech-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: patient_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./infrastructure/local-data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio
+    container_name: dermatech-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: root
+      MINIO_ROOT_PASSWORD: password123
+    command: server /data --console-address ":9001"
+    volumes:
+      - ./infrastructure/local-data/minio:/data
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: dermatech-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: dermatech-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  # --- TU MICROSERVICIO (Lo nuevo) ---
+  patient-service:
+    # Construye usando el Dockerfile que creamos
+    build:
+      context: .
+      dockerfile: apps/services/core/patient-service/Dockerfile
+    container_name: dermatech-patient-service
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres-core:
+        condition: service_healthy # Espera a que la BD esté lista
+      kafka:
+        condition: service_started
+    environment:
+      # VARIABLES PARA DOCKER (Red interna)
+      NODE_ENV: production
+      PORT: 3001
+      
+      # Conexión BD (Nombre del servicio, NO localhost)
+      DB_HOST: postgres-core
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASS: admin
+      DB_NAME: patient_db
+
+      JWT_SECRET: secret
+      
+      # Conexión S3 (MinIO)
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: root
+      AWS_SECRET_ACCESS_KEY: password123
+      AWS_BUCKET_NAME: patient-documents
+      AWS_ENDPOINT: http://minio:9000  # Nombre del servicio MinIO
+      
+      # Conexión Kafka
+      KAFKA_BROKERS: kafka:29092

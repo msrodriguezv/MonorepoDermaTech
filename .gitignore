@@ -48,3 +48,9 @@ Thumbs.db
 *.tfstate
 *.tfstate.backup
 .terraform/
+
+
+docker-compose.yml
+package-lock.json
+package.json
+infrastructure/
