@@ -11,6 +11,7 @@ import { AuthController } from '../api/http/controllers/auth.controller';
 // --- Command Handlers ---
 import { RegisterUserCommandHandler } from '../application/commands/register-user/register-user.handler';
 import { LoginHandler } from '../application/commands/login/login.handler';
+import { MockUceAdapter } from './adapters/mock-uce.adapter';
 
 // --- Domain & Infrastructure (Persistence) ---
 import { UserSchema } from '../infrastructure/persistence/typeorm/entities/user.schema';
@@ -63,6 +64,10 @@ import { JwtAuthGuard } from '../infrastructure/security/guards/jwt-auth.guard';
     {
       provide: 'UserRepositoryPort',
       useClass: TypeOrmUserRepository,
+    },
+    {
+      provide: 'ExternalSystemPort',
+      useClass: MockUceAdapter,
     },
     {
       provide: 'CryptoServicePort',

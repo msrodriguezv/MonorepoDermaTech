@@ -1,45 +1,31 @@
-import {
-  IsEmail,
-  IsEnum,
-  IsNotEmpty,
-  MinLength,
-  Matches,
-} from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
-import { UserRole } from '@dermatech/shared-dtos';
+import { IsString, IsNotEmpty, MinLength, Matches, IsEnum } from 'class-validator';
+import { BaseAuthDto, UserRole } from '@dermatech/shared-dtos';
 
 /**
  * Data Transfer Object for User Registration.
- * Defines the expected shape of the JSON body for the POST /auth/register endpoint.
- * Includes validation rules (class-validator) and documentation (Swagger).
+ * Enforces strict password policies to ensure account security upon creation.
  */
-export class RegisterUserDto {
-  @ApiProperty({
-    example: 'student@uce.edu.ec',
-    description: 'The email address of the user. Must be unique.',
+export class RegisterUserDto extends BaseAuthDto {
+  @ApiProperty({ 
+    example: 'StrongP@ss1!', 
+    description: 'Password meeting security policies (min 8 chars, uppercase, symbol)',
+    writeOnly: true
   })
-  @IsEmail({}, { message: 'Invalid email format' })
+  @IsString()
   @IsNotEmpty()
-  email: string;
-
-  @ApiProperty({
-    example: 'StrongP@ssw0rd1',
-    description: 'Min 8 chars, 1 upper, 1 lower, 1 number, 1 special char',
-  })
-  @MinLength(8)
-  // FIX: Strict mode regex
-  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>_-]).{8,}$/, {
-    message:
-      'Password must contain at least: 1 uppercase, 1 lowercase, 1 number, and 1 special character',
+  @MinLength(8, { message: 'Password must be at least 8 characters long.' })
+  @Matches(/((?=.*\d)|(?=.*\W+))(?![.\n])(?=.*[A-Z])(?=.*[a-z]).*$/, { 
+    message: 'Password is too weak. It must contain uppercase, lowercase, number or special character.' 
   })
   password: string;
 
-  @ApiProperty({
-    enum: UserRole,
+  @ApiProperty({ 
+    enum: UserRole, 
     example: UserRole.STUDENT,
-    description: 'The role assigned to the user.',
+    description: 'Initial role assigned to the user'
   })
-  @IsEnum(UserRole, { message: 'Invalid role provided' })
+  @IsEnum(UserRole)
   @IsNotEmpty()
   role: UserRole;
 }

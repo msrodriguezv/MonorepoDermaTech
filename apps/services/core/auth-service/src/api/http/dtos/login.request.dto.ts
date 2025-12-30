@@ -1,15 +1,19 @@
-import { IsEmail, IsNotEmpty, IsString, MinLength } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import { IsString, IsNotEmpty } from 'class-validator';
+import { BaseAuthDto } from '@dermatech/shared-dtos'; 
 
-export class LoginRequestDto {
-  @ApiProperty({ example: 'doctor@dermatech.com', description: 'User email address' })
-  @IsEmail()
-  @IsNotEmpty()
-  email: string;
-
-  @ApiProperty({ example: 'SecureP@ssw0rd!', description: 'User password' })
+/**
+ * Data Transfer Object for the Login request.
+ * Extends BaseAuthDto to inherit strict email validation.
+ * Password validation is intentionally minimal to avoid leaking security policies during authentication.
+ */
+export class LoginRequestDto extends BaseAuthDto {
+  @ApiProperty({ 
+    example: 'AnyP@ssw0rd!', 
+    description: 'User password provided during registration',
+    writeOnly: true
+  })
   @IsString()
-  @MinLength(6)
   @IsNotEmpty()
   password: string;
 }

@@ -15,7 +15,8 @@
     "skipDefaultLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@dermatech/shared-dtos": ["libs/backend/shared-dtos/src/index.ts"]
+      "@dermatech/shared-dtos": ["libs/backend/shared-dtos/src/index.ts"],
+      "@dermatech/event-contracts": ["libs/backend/event-contracts/src/index.ts"]
     }
   },
   "exclude": ["node_modules", "tmp"]
