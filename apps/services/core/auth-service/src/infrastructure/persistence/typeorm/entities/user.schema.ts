@@ -22,14 +22,17 @@ export class UserSchema {
     enum: UserRole,
     default: UserRole.STUDENT
   })
-  role: UserRole;
+  role: UserRole;                                                                                                                                                                                 
 
   @Column({ name: 'is_active', default: true })
   isActive: boolean;
 
-  @CreateDateColumn({ name: 'created_at' })
-  createdAt: Date;
+  @Column({ name: 'current_refresh_token', type: 'varchar', nullable: true })
+  currentRefreshTokenHash: string | null;
 
-  @UpdateDateColumn({ name: 'updated_at' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  createdAt: Date;
+  
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' }) 
   updatedAt: Date;
 }

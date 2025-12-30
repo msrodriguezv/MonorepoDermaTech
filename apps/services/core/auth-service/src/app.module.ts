@@ -50,6 +50,9 @@ import { AuthModule } from './infrastructure/auth.module';
           database,
           autoLoadEntities: true,
           synchronize,
+          ssl: {
+            rejectUnauthorized: false,
+          },
         };
       },
     }),
