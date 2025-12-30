@@ -1,10 +1,7 @@
 version: '3.8'
 
 services:
-  # --- INFRAESTRUCTURA LOCAL (MinIO y Kafka se quedan) ---
   
-  # ELIMINADO: postgres-core (Ahora usas Supabase)
-
   minio:
     image: minio/minio
     container_name: dermatech-minio
@@ -58,29 +55,21 @@ services:
       PORT: 3001
       
    
-      # HOST: Este no cambia (depende de tu región, suele ser aws-0-us-east-1...)
       DB_HOST: aws-1-us-east-2.pooler.supabase.com
       
-      # PUERTO: El pooler usa 6543
       DB_PORT: 5432
       
-      # USUARIO: Aquí es donde estaba el error. Debe ser postgres + punto + tu ID
       DB_USER: postgres.umgypxpjonnerjaqvlcx
       
-      # CONTRASEÑA: La que reseteaste hace un rato
       DB_PASSWORD: "DermaTechTesis2025"
       
-      # NOMBRE BD: En Supabase es 'postgres' por defecto
       DB_NAME: postgres
       JWT_SECRET: secret
       
-      # --- MINIO (LOCAL) ---
-      # Seguimos usando MinIO localmente para archivos (o puedes cambiarlo a Supabase Storage también)
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: root
       AWS_SECRET_ACCESS_KEY: password123
       AWS_BUCKET_NAME: patient-documents
       AWS_ENDPOINT: http://minio:9000
       
-      # --- KAFKA (LOCAL) ---
       KAFKA_BROKERS: kafka:29092

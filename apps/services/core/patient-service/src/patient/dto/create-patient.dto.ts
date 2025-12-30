@@ -1,69 +1,61 @@
-import { IsString, IsDateString, IsOptional, Length, IsUUID, IsEmail, ValidateNested, IsArray } from 'class-validator';
-import { Type } from 'class-transformer'; // Necesario para validar objetos anidados
+import { 
+  IsEmail, 
+  IsString, 
+  Length, 
+  Matches, 
+  IsMobilePhone, 
+  IsOptional, 
+  IsArray, 
+  IsUUID 
+} from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
-// Sub-clase para validar el JSON interno
-class MedicalInfoDto {
-  @ApiProperty({ example: 'O+' })
-  @IsString()
-  @IsOptional()
-  bloodType?: string;
-
-  @ApiProperty({ example: ['Penicilina', 'Polvo'] })
-  @IsArray()
-  @IsString({ each: true }) // Valida que cada item del array sea string
-  @IsOptional()
-  allergies?: string[];
-
-  @ApiProperty({ example: ['Asma'] })
-  @IsArray()
-  @IsString({ each: true })
-  @IsOptional()
-  chronicConditions?: string[];
-}
-
 export class CreatePatientDto {
-  @ApiProperty({ example: 'uuid-del-auth-service' })
+  @ApiProperty({ example: '550e8400-e29b-41d4-a716-446655440000' })
   @IsUUID()
   userId: string;
 
-  @ApiProperty({ example: 'usuario@email.com' })
-  @IsEmail()
+  
+
+  @ApiProperty({ example: 'juan.perez@uce.edu.ec' })
+  @IsEmail({}, { message: 'El formato del correo es inválido' })
+  @Matches(/@uce\.edu\.ec$/, { 
+    message: 'Solo se permiten correos institucionales (@uce.edu.ec)' 
+  })
   email: string;
 
+ 
+
+
+  
   @ApiProperty({ example: 'Juan' })
   @IsString()
-  @Length(2, 100)
   firstName: string;
 
   @ApiProperty({ example: 'Perez' })
   @IsString()
-  @Length(2, 100)
   lastName: string;
 
   @ApiProperty({ example: '1990-01-01' })
-  @IsDateString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { 
+    message: 'La fecha de nacimiento debe tener el formato AAAA-MM-DD' 
+  })
   birthDate: string;
 
-  @ApiProperty({ required: false })
-  @IsOptional()
+  @ApiProperty({ example: '0987654321' })
   @IsString()
-  phone?: string;
+  @Matches(/^09[0-9]{8}$/, { 
+    message: 'El celular debe empezar con 09 y tener 10 números' 
+  })
+  phone: string;
 
-  // VALIDACIÓN DEL JSONB
-  @ApiProperty({ type: MedicalInfoDto, required: false })
-  @IsOptional()
-  @ValidateNested() // Valida el objeto por dentro
-  @Type(() => MedicalInfoDto) // Convierte el JSON plano a la clase MedicalInfoDto
-  medicalInfo?: MedicalInfoDto;
+@ApiProperty({ example: 'O+' })
+  @IsString({ message: 'La información médica debe ser un texto' })
+  medicalInfo: any; 
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ example: ['Penicilina'], isArray: true })
+  @IsArray()
+  @IsString({ each: true })
   @IsOptional()
-  @IsString()
-  insuranceProvider?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  avatarUrl?: string;
+  allergies: string[];
 }

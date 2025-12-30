@@ -6,7 +6,7 @@ import { CreatePatientDto } from './dto/create-patient.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
 
 @Injectable()
-export class PatientService { // <--- SINGULAR (Sin la S al final)
+export class PatientService { 
   private readonly logger = new Logger(PatientService.name);
 
   constructor(
@@ -14,61 +14,67 @@ export class PatientService { // <--- SINGULAR (Sin la S al final)
     private readonly patientRepository: Repository<Patient>,
   ) {}
 
-  // --- CREAR ---
+  // --- CREATE ---
   async create(createPatientDto: CreatePatientDto) {
+    // Check if a profile already exists for this user
     const existing = await this.patientRepository.findOne({
       where: { userId: createPatientDto.userId }
     });
 
     if (existing) {
-      throw new BadRequestException('El usuario ya tiene un perfil de paciente creado.');
+      throw new BadRequestException('The user already has a patient profile created.');
     }
 
     try {
-      const patient = this.patientRepository.create(createPatientDto);
+      // Using 'as any' to bypass strict type checking for medicalInfo JSON structure
+      const patient = this.patientRepository.create(createPatientDto as any);
       return await this.patientRepository.save(patient);
     } catch (error) {
       this.handleDBExceptions(error);
     }
   }
 
-  // --- LEER TODOS ---
+  // --- READ ALL ---
   async findAll() {
     return await this.patientRepository.find();
   }
 
-  // --- LEER UNO ---
+  // --- READ ONE BY UUID ---
   async findOne(id: string) {
     const patient = await this.patientRepository.findOne({ where: { id } });
-    if (!patient) throw new NotFoundException(`Paciente con ID ${id} no encontrado`);
+    if (!patient) throw new NotFoundException(`Patient with ID ${id} not found`);
     return patient;
   }
 
-  // --- BUSCAR POR USER ID ---
-  async findOneByUserId(userId: string) {
-    const patient = await this.patientRepository.findOne({ where: { userId } });
-    if (!patient) {
-      throw new NotFoundException(`No se encontró perfil para el usuario ${userId}`);
-    }
-    return patient;
+  // --- FIND BY USER ID (Doctor List) ---
+  // CORRECTION: Renamed to match Controller and changed to .find() to return a list
+  async findByUser(userId: string) {
+    const patients = await this.patientRepository.find({ where: { userId } });
+    // Returns an empty array [] if no patients are found, which is correct for a list
+    return patients;
   }
 
-  // --- ACTUALIZAR ---
+  // --- UPDATE ---
   async update(id: string, updatePatientDto: UpdatePatientDto) {
     const patient = await this.findOne(id);
-    this.patientRepository.merge(patient, updatePatientDto);
+    // Using 'as any' to allow partial updates including JSON fields
+    this.patientRepository.merge(patient, updatePatientDto as any);
     return await this.patientRepository.save(patient);
   }
 
-  // --- ELIMINAR ---
+  // --- DELETE ---
   async remove(id: string) {
     const patient = await this.findOne(id);
     await this.patientRepository.remove(patient);
-    return { message: 'Paciente eliminado correctamente' };
+    return { message: 'Patient deleted successfully' };
   }
 
+  // --- ERROR HANDLING ---
   private handleDBExceptions(error: any) {
+    if (error.code === '23505') { // Postgres unique violation code
+       throw new BadRequestException('A record with these details already exists.');
+    }
     this.logger.error(error);
-    throw new InternalServerErrorException('Error inesperado en base de datos');
+    throw new InternalServerErrorException('Unexpected database error');
   }
 }
