@@ -10,11 +10,14 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
 
   // --- CONFIGURACIÓN DE SWAGGER (ESTO ES LO QUE TE FALTA) ---
-  const config = new DocumentBuilder()
-    .setTitle('DermaTech Patient Service')
-    .setDescription('API de gestión de pacientes con validaciones institucionales')
+ const config = new DocumentBuilder()
+    .setTitle('Patient Service')
+    .setDescription('The Patient Service API')
     .setVersion('1.0')
+    
+    .addBearerAuth() // <--- AGREGA ESTA LÍNEA EXACTAMENTE AQUÍ
     .build();
+    
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document); 
 

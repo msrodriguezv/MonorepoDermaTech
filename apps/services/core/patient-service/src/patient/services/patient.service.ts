@@ -1,9 +1,10 @@
-import { Injectable, Logger, BadRequestException, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { Inject, Injectable, Logger, BadRequestException, NotFoundException, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Patient } from './entities/patient.entity';
-import { CreatePatientDto } from './dto/create-patient.dto';
-import { UpdatePatientDto } from './dto/update-patient.dto';
+import { ClientKafka } from '@nestjs/microservices';
+import { Patient } from '../entities/patient.entity';
+import { CreatePatientDto } from '../dto/create-patient.dto';
+import { UpdatePatientDto } from '../dto/update-patient.dto';
 
 @Injectable()
 export class PatientService { 
@@ -12,11 +13,13 @@ export class PatientService {
   constructor(
     @InjectRepository(Patient)
     private readonly patientRepository: Repository<Patient>,
+    
+    @Inject('PATIENT_KAFKA_CLIENT') 
+    private readonly kafkaClient: ClientKafka,
   ) {}
 
   // --- CREATE ---
   async create(createPatientDto: CreatePatientDto) {
-    // Check if a profile already exists for this user
     const existing = await this.patientRepository.findOne({
       where: { userId: createPatientDto.userId }
     });
@@ -26,9 +29,39 @@ export class PatientService {
     }
 
     try {
-      // Using 'as any' to bypass strict type checking for medicalInfo JSON structure
-      const patient = this.patientRepository.create(createPatientDto as any);
-      return await this.patientRepository.save(patient);
+      // Preparamos los datos con la estructura JSON correcta
+      const dataToSave = {
+        ...createPatientDto,
+        medicalInfo: {
+          bloodType: createPatientDto.medicalInfo,
+          allergies: createPatientDto.allergies
+        }
+      };
+
+      // Guardamos en la BD
+      const patient = this.patientRepository.create(dataToSave as unknown as Patient);
+      const savedPatient = await this.patientRepository.save(patient);
+
+      // --- KAFKA (FAIL-SAFE) ---
+      // Intentamos enviar el evento, pero si falla no rompemos la app
+      this.kafkaClient
+        .emit('patient.created', {
+          id: savedPatient.id,
+          userId: savedPatient.userId,
+          email: savedPatient.email,
+          fullName: `${savedPatient.firstName} ${savedPatient.lastName}`,
+          timestamp: new Date().toISOString(),
+        })
+        .toPromise()
+        .then(() => {
+          this.logger.log(`✅ Event 'patient.created' sent successfully to Kafka`);
+        })
+        .catch((err) => {
+          this.logger.warn(`⚠️ Kafka is offline. Event saved in DB but not emitted.`);
+        });
+
+      return savedPatient;
+
     } catch (error) {
       this.handleDBExceptions(error);
     }
@@ -39,25 +72,21 @@ export class PatientService {
     return await this.patientRepository.find();
   }
 
-  // --- READ ONE BY UUID ---
+  // --- READ ONE ---
   async findOne(id: string) {
     const patient = await this.patientRepository.findOne({ where: { id } });
     if (!patient) throw new NotFoundException(`Patient with ID ${id} not found`);
     return patient;
   }
 
-  // --- FIND BY USER ID (Doctor List) ---
-  // CORRECTION: Renamed to match Controller and changed to .find() to return a list
+  // --- FIND BY USER ---
   async findByUser(userId: string) {
-    const patients = await this.patientRepository.find({ where: { userId } });
-    // Returns an empty array [] if no patients are found, which is correct for a list
-    return patients;
+    return await this.patientRepository.find({ where: { userId } });
   }
 
   // --- UPDATE ---
   async update(id: string, updatePatientDto: UpdatePatientDto) {
     const patient = await this.findOne(id);
-    // Using 'as any' to allow partial updates including JSON fields
     this.patientRepository.merge(patient, updatePatientDto as any);
     return await this.patientRepository.save(patient);
   }
@@ -69,9 +98,8 @@ export class PatientService {
     return { message: 'Patient deleted successfully' };
   }
 
-  // --- ERROR HANDLING ---
   private handleDBExceptions(error: any) {
-    if (error.code === '23505') { // Postgres unique violation code
+    if (error.code === '23505') { 
        throw new BadRequestException('A record with these details already exists.');
     }
     this.logger.error(error);

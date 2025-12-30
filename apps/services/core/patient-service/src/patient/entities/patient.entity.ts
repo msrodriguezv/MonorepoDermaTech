@@ -1,6 +1,7 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index, OneToMany } from 'typeorm';
+import { MedicalRecord } from './medical-record.entity';
 
-// Definimos la interfaz para el JSONB para tener tipado fuerte en TypeScript
+// Interfaz para el JSONB
 export interface MedicalInfo {
   bloodType: string;
   allergies: string[];
@@ -8,11 +9,10 @@ export interface MedicalInfo {
 }
 
 @Entity('patients')
-export class Patient {
+export class Patient { // <--- ASEGÚRATE QUE DIGA 'export class'
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  // Enlace con Auth
   @Index({ unique: true })
   @Column()
   userId: string;
@@ -20,7 +20,6 @@ export class Patient {
   @Column()
   email: string;
 
-  // CORRECCIÓN: Quitamos nullable. Un perfil DEBE tener nombres.
   @Column({ length: 100 }) 
   firstName: string;
 
@@ -33,11 +32,9 @@ export class Patient {
   @Column({ nullable: true })
   phone: string;
 
-  // TU ESTRATEGIA JSONB (Conservada y Tipada)
   @Column({ type: 'jsonb', nullable: true, default: {} })
   medicalInfo: MedicalInfo;
 
-  // TU INTEGRACIÓN PAAS
   @Column({ nullable: true })
   avatarUrl: string;
 
@@ -49,4 +46,9 @@ export class Patient {
 
   @UpdateDateColumn()
   updatedAt: Date;
-}
+
+  // RELACIÓN 1 a N
+  @OneToMany(() => MedicalRecord, (record) => record.patient)
+  medicalRecords: MedicalRecord[];
+} 
+// <--- ¡IMPORTANTE! VERIFICA QUE ESTA ÚLTIMA LLAVE ESTÉ PRESENTE

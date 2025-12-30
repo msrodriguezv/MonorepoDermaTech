@@ -1,13 +1,4 @@
-import { 
-  IsEmail, 
-  IsString, 
-  Length, 
-  Matches, 
-  IsMobilePhone, 
-  IsOptional, 
-  IsArray, 
-  IsUUID 
-} from 'class-validator';
+import { IsString, IsEmail, IsUUID, IsArray, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CreatePatientDto {
@@ -15,19 +6,10 @@ export class CreatePatientDto {
   @IsUUID()
   userId: string;
 
-  
-
   @ApiProperty({ example: 'juan.perez@uce.edu.ec' })
-  @IsEmail({}, { message: 'El formato del correo es inválido' })
-  @Matches(/@uce\.edu\.ec$/, { 
-    message: 'Solo se permiten correos institucionales (@uce.edu.ec)' 
-  })
+  @IsEmail()
   email: string;
 
- 
-
-
-  
   @ApiProperty({ example: 'Juan' })
   @IsString()
   firstName: string;
@@ -37,25 +19,25 @@ export class CreatePatientDto {
   lastName: string;
 
   @ApiProperty({ example: '1990-01-01' })
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { 
-    message: 'La fecha de nacimiento debe tener el formato AAAA-MM-DD' 
-  })
+  @IsString()
   birthDate: string;
 
   @ApiProperty({ example: '0987654321' })
   @IsString()
-  @Matches(/^09[0-9]{8}$/, { 
-    message: 'El celular debe empezar con 09 y tener 10 números' 
-  })
   phone: string;
 
-@ApiProperty({ example: 'O+' })
-  @IsString({ message: 'La información médica debe ser un texto' })
-  medicalInfo: any; 
+  @ApiProperty({ example: 'O+' })
+  @IsString()
+  medicalInfo: string;
 
-  @ApiProperty({ example: ['Penicilina'], isArray: true })
+  @ApiProperty({ example: ['Penicilina'] })
   @IsArray()
   @IsString({ each: true })
-  @IsOptional()
   allergies: string[];
+    
+  // --- ESTO ES LO QUE TE FALTA ---
+  @ApiProperty({ example: 'IESS', required: false })
+  @IsString()
+  @IsOptional() // Importante: Permite que sea opcional si no lo envían
+  insuranceProvider?: string;
 }
