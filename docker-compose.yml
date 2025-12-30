@@ -1,23 +1,9 @@
 version: '3.8'
 
 services:
-  # --- INFRAESTRUCTURA (Ya la tenías) ---
-  postgres-core:
-    image: postgres:15
-    container_name: dermatech-postgres
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: admin
-      POSTGRES_DB: patient_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - ./infrastructure/local-data/postgres:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+  # --- INFRAESTRUCTURA LOCAL (MinIO y Kafka se quedan) ---
+  
+  # ELIMINADO: postgres-core (Ahora usas Supabase)
 
   minio:
     image: minio/minio
@@ -54,9 +40,8 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 
-  # --- TU MICROSERVICIO (Lo nuevo) ---
+  # --- TU MICROSERVICIO ---
   patient-service:
-    # Construye usando el Dockerfile que creamos
     build:
       context: .
       dockerfile: apps/services/core/patient-service/Dockerfile
@@ -64,30 +49,38 @@ services:
     ports:
       - "3001:3001"
     depends_on:
-      postgres-core:
-        condition: service_healthy # Espera a que la BD esté lista
+      # YA NO ESPERAMOS A POSTGRES-CORE
       kafka:
         condition: service_started
     environment:
-      # VARIABLES PARA DOCKER (Red interna)
+      # VARIABLES GENERALES
       NODE_ENV: production
       PORT: 3001
       
-      # Conexión BD (Nombre del servicio, NO localhost)
-      DB_HOST: postgres-core
+   
+      # HOST: Este no cambia (depende de tu región, suele ser aws-0-us-east-1...)
+      DB_HOST: aws-1-us-east-2.pooler.supabase.com
+      
+      # PUERTO: El pooler usa 6543
       DB_PORT: 5432
-      DB_USER: postgres
-      DB_PASS: admin
-      DB_NAME: patient_db
-
+      
+      # USUARIO: Aquí es donde estaba el error. Debe ser postgres + punto + tu ID
+      DB_USER: postgres.umgypxpjonnerjaqvlcx
+      
+      # CONTRASEÑA: La que reseteaste hace un rato
+      DB_PASSWORD: "DermaTechTesis2025"
+      
+      # NOMBRE BD: En Supabase es 'postgres' por defecto
+      DB_NAME: postgres
       JWT_SECRET: secret
       
-      # Conexión S3 (MinIO)
+      # --- MINIO (LOCAL) ---
+      # Seguimos usando MinIO localmente para archivos (o puedes cambiarlo a Supabase Storage también)
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: root
       AWS_SECRET_ACCESS_KEY: password123
       AWS_BUCKET_NAME: patient-documents
-      AWS_ENDPOINT: http://minio:9000  # Nombre del servicio MinIO
+      AWS_ENDPOINT: http://minio:9000
       
-      # Conexión Kafka
+      # --- KAFKA (LOCAL) ---
       KAFKA_BROKERS: kafka:29092

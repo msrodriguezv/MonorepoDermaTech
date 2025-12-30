@@ -24,4 +24,6 @@ import { PatientsModule } from './patient/patient.module';
     PatientsModule, // <--- CORRECCIÓN: Plural aquí también
   ],
 })
+
+
 export class AppModule {}

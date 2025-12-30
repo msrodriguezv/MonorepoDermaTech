@@ -4,6 +4,8 @@ import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 async function bootstrap() {
+  console.log('REVISIÓN DE HOST:', `"${process.env.DB_HOST}"`);
+ console.log('PUERTO QUE LEO:', `"${process.env.DB_PORT}"`);
   const app = await NestFactory.create(AppModule);
 
 
