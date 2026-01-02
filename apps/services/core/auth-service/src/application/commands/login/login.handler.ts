@@ -1,20 +1,23 @@
 import { CommandHandler, ICommandHandler } from '@nestjs/cqrs';
 import { Inject, UnauthorizedException, Logger } from '@nestjs/common';
 
-// Shared Library Import (Crucial for Type Safety)
-import { JwtPayload } from '@dermatech/shared-dtos';
+// --- SHARED DTOs ---
+import { 
+  JwtPayload, 
+  TokenResponseDto, 
+  UserRole 
+} from '@dermatech/shared-dtos';
 
 import { LoginCommand } from './login.command';
-import { TokenResponseDto } from '../../../api/http/dtos/token-response.dto';
 
-// Ports (Hexagonal Architecture Interfaces)
+// --- PORTS ---
 import { UserRepositoryPort } from '../../ports/user.repository.port';
 import { CryptoServicePort } from '../../ports/crypto.service.port';
 import { TokenServicePort } from '../../ports/token.service.port';
 
 /**
  * Application Service (Handler) responsible for User Authentication.
- * Implements the logic for validating credentials and issuing JWTs.
+ * Implements the logic for validating credentials, issuing JWTs, and enforcing Token Rotation.
  */
 @CommandHandler(LoginCommand)
 export class LoginHandler implements ICommandHandler<LoginCommand> {
@@ -23,8 +26,10 @@ export class LoginHandler implements ICommandHandler<LoginCommand> {
   constructor(
     @Inject('UserRepositoryPort') 
     private readonly userRepository: UserRepositoryPort,
+    
     @Inject('CryptoServicePort') 
     private readonly cryptoService: CryptoServicePort,
+    
     @Inject('TokenServicePort') 
     private readonly tokenService: TokenServicePort,
   ) {}
@@ -50,6 +55,7 @@ export class LoginHandler implements ICommandHandler<LoginCommand> {
     }
 
     // 2. Validate Password
+    // Compare provided plain password with the stored hash using the Crypto Port
     const isPasswordValid = await this.cryptoService.compare(password, user.getPasswordHash());
     if (!isPasswordValid) {
       this.logger.warn(`Login failed: Invalid password for user ID ${user.getId()}`);
@@ -62,31 +68,45 @@ export class LoginHandler implements ICommandHandler<LoginCommand> {
       throw new UnauthorizedException('User account is inactive');
     }
 
-    // 4. Generate Tokens
-    // We strictly type the payload to match the shared contract expected by other microservices.
+    // 4. Prepare Payload
+    // We strictly type the payload to match the shared contract expected by Guards/Strategies.
     const payload: JwtPayload = { 
       sub: user.getId(), 
-      email: user.getEmail().email, // Ensure your UserEmail VO has getValue()
-      role: user.getRole() 
+      email: user.getEmail().email, 
+      role: user.getRole() as UserRole 
     };
 
+    // 5. Generate Tokens
     const accessToken = await this.tokenService.generateAccessToken(payload);
     const refreshToken = await this.tokenService.generateRefreshToken(payload);
 
-    // 5. Security: Store Refresh Token Hash (Token Rotation)
-    // This requires the 'setRefreshTokenHash' method to exist in your User Entity.
+    // 6. Security: Store Refresh Token Hash (Token Rotation)
+    // We NEVER store the plain refresh token. We store its hash.
     const refreshTokenHash = await this.cryptoService.hash(refreshToken);
+    
+    // Update the entity state
     user.setRefreshTokenHash(refreshTokenHash);
     
-    // 6. Update User in DB (Persist the new hash)
+    // 7. Persist changes to DB
     await this.userRepository.save(user);
 
     this.logger.log(`User logged in successfully: ${user.getId()}`);
 
+    // Ideally, fetch this from ConfigService. For now, we hardcode 1 hour (in ms)
+    // to match the standard JWT expiration and satisfy the DTO contract.
+    const expiresIn = 3600 * 1000; // 1 hour in milliseconds
+
+    // 8. Return Response matching the Shared DTO
+    // Frontend needs the user info immediately to update the UI state.
     return {
       accessToken,
       refreshToken,
-      expiresIn: 900, // 15 minutes (should match your JWT config)
+      expiresIn,
+      user: {
+        id: user.getId(),
+        email: user.getEmail().email,
+        role: user.getRole(),
+      }
     };
   }
 }

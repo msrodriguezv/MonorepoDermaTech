@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { UserRole } from '@dermatech/shared-dtos';
+import { UserRole } from '../../enums/user-role.enum';
 
 /**
  * Data Transfer Object for User Response.
@@ -8,14 +8,14 @@ import { UserRole } from '@dermatech/shared-dtos';
  */
 export class UserResponseDto {
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174000' })
-  id: string;
+  id!: string;
 
   @ApiProperty({ example: 'student@uce.edu.ec' })
-  email: string;
+  email!: string;
 
   @ApiProperty({ enum: UserRole, example: UserRole.STUDENT })
-  role: UserRole;
+  role!: UserRole;
 
   @ApiProperty({ example: true })
-  isActive: boolean;
+  isActive!: boolean;
 }

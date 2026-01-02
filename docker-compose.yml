@@ -2,10 +2,8 @@ version: '3.8'
 
 services:
   # ----------------------------------------------------------------
-  # INFRASTRUCTURE
+  # INFRASTRUCTURE (CACHE & DB)
   # ----------------------------------------------------------------
-  
-  
   redis_db:
     image: redis:alpine
     container_name: dermatech_redis
@@ -20,9 +18,48 @@ services:
       retries: 5
 
   # ----------------------------------------------------------------
+  # INFRASTRUCTURE (MESSAGING - KAFKA)
+  # ----------------------------------------------------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: dermatech_zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - dermatech_network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: dermatech_kafka
+    depends_on:
+      - zookeeper
+    ports:
+      # Expose port 9094 for external tools (Host machine access)
+      # Port 9092 is reserved for internal Docker communication
+      - "9094:9094"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Network Configuration:
+      # - PLAINTEXT: Internal communication between containers (kafka:9092)
+      # - PLAINTEXT_HOST: External communication from Host (localhost:9094)
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - dermatech_network
+    healthcheck:
+      # Verify Kafka is ready before starting dependent services
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # ----------------------------------------------------------------
   # MICROSERVICES
   # ----------------------------------------------------------------
-
   auth_service:
     container_name: dermatech_auth_service
     build:
@@ -34,8 +71,14 @@ services:
       - "${AUTH_SERVICE_PORT}:${AUTH_SERVICE_PORT}"
     env_file:
       - .env
+    environment:
+      # CRITICAL: Override .env variable for Docker networking.
+      # Inside the Docker network, the host is the service name 'kafka', not 'localhost'.
+      - KAFKA_BROKERS=kafka:9092 
     depends_on:
       redis_db:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     networks:
       - dermatech_network

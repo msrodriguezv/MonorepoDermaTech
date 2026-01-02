@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { PassportModule } from '@nestjs/passport';
+import { ClientsModule, Transport } from '@nestjs/microservices';
 
 // --- Controllers ---
 import { AuthController } from '../api/http/controllers/auth.controller';
@@ -11,56 +12,75 @@ import { AuthController } from '../api/http/controllers/auth.controller';
 // --- Command Handlers ---
 import { RegisterUserCommandHandler } from '../application/commands/register-user/register-user.handler';
 import { LoginHandler } from '../application/commands/login/login.handler';
-import { MockUceAdapter } from './adapters/mock-uce.adapter';
 
 // --- Domain & Infrastructure (Persistence) ---
 import { UserSchema } from '../infrastructure/persistence/typeorm/entities/user.schema';
 import { TypeOrmUserRepository } from '../infrastructure/persistence/typeorm/repositories/typeorm-user.repository';
 
 // --- Security Adapters & Strategies ---
-import { BcryptService } from '../infrastructure/security/bcrypt.service';
-import { JwtTokenService } from '../infrastructure/security/jwt-token.service';
-import { JwtStrategy } from '../infrastructure/security/strategies/jwt.strategy';
-import { JwtAuthGuard } from '../infrastructure/security/guards/jwt-auth.guard';
+import { BcryptAdapter } from './adapters/bcrypt.adapter';
+import { JwtTokenAdapter } from './adapters/jwt-token.adapter';
+import { MockUceAdapter } from './adapters/mock-uce.adapter';
+import { KafkaEventPublisher } from '../infrastructure/messaging/kafka/publishers/kafka-event.publisher';
+import { JwtStrategy, JwtAuthGuard } from '@dermatech/shared-guards';
 
 @Module({
   imports: [
-    // 1. Configuration (Access to .env variables)
+    // Configuration Module
     ConfigModule,
 
-    // 2. CQRS (Command/Query Bus)
+    // Command Query Responsibility Segregation
     CqrsModule,
 
-    // 3. Database (TypeORM Feature for User Entity)
+    // TypeORM Feature for User Entity
     TypeOrmModule.forFeature([UserSchema]),
 
-    // 4. Passport (Authentication Middleware)
+    // Passport Middleware
     PassportModule.register({ defaultStrategy: 'jwt' }),
 
-    // 5. JWT Configuration (Async to read from ConfigService)
+    // JWT Configuration (Async)
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET'),
-        signOptions: { 
-          expiresIn: '15m', // Access Token default expiration
-        },
+        signOptions: { expiresIn: '15m' },
       }),
     }),
+
+    // Kafka Client Registration
+    // Registers the 'AUTH_KAFKA_CLIENT' token required by KafkaEventPublisher
+    ClientsModule.registerAsync([
+      {
+        name: 'AUTH_KAFKA_CLIENT',
+        imports: [ConfigModule],
+        inject: [ConfigService],
+        useFactory: (configService: ConfigService) => ({
+          transport: Transport.KAFKA,
+          options: {
+            client: {
+              clientId: 'auth',
+              brokers: [configService.get<string>('KAFKA_BROKERS') || 'localhost:9092'],
+            },
+            consumer: {
+              groupId: 'auth-consumer',
+            },
+          },
+        }),
+      },
+    ]),
   ],
   controllers: [AuthController],
   providers: [
-    // --- Application Handlers (Business Logic) ---
+    // --- Application Handlers ---
     RegisterUserCommandHandler,
     LoginHandler,
 
-    // --- Security Strategies & Guards ---
+    // --- Security Strategies ---
     JwtStrategy,
     JwtAuthGuard,
 
     // --- Dependency Injection (Hexagonal Ports -> Adapters) ---
-    // Binding abstract Ports to concrete Infrastructure implementations
     {
       provide: 'UserRepositoryPort',
       useClass: TypeOrmUserRepository,
@@ -71,17 +91,17 @@ import { JwtAuthGuard } from '../infrastructure/security/guards/jwt-auth.guard';
     },
     {
       provide: 'CryptoServicePort',
-      useClass: BcryptService,
+      useClass: BcryptAdapter,
     },
     {
       provide: 'TokenServicePort',
-      useClass: JwtTokenService, 
+      useClass: JwtTokenAdapter,
+    },
+    {
+      provide: 'EventPublisherPort',
+      useClass: KafkaEventPublisher,
     },
   ],
-  exports: [
-    JwtAuthGuard, 
-    JwtModule, 
-    PassportModule
-  ],
+  exports: [JwtAuthGuard, JwtModule, PassportModule],
 })
 export class AuthModule {}

@@ -1,13 +1,12 @@
 /**
- * Port definition for External Systems verification.
- * Follows the Dependency Inversion Principle (DIP).
- * The Application layer depends on this abstraction, not on the concrete implementation.
+ * Port definition for External System interactions.
+ * Hexagonal Architecture: This defines the contract that adapters must implement.
  */
-export interface ExternalSystemPort {
+export abstract class ExternalSystemPort {
   /**
-   * Verifies if the user is enrolled and active in the External University System.
-   * @param email - The user's email to verify.
-   * @throws ForbiddenException if the user is not valid.
+   * Verifies if a student is enrolled in the external system.
+   * @param email The email to validate.
+   * @returns Promise<boolean> - true if enrolled, false otherwise.
    */
-  validateStudentEnrollment(email: string): Promise<void>;
+  abstract checkStudentEnrollment(email: string): Promise<boolean>;
 }

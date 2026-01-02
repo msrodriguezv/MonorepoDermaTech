@@ -17,13 +17,13 @@ import { User } from '../../../domain/entities/user.entity';
 
 // --- Register Feature Imports ---
 import { RegisterUserCommand } from '../../../application/commands/register-user/register-user.command';
-import { RegisterUserDto } from '../dtos/register-user.dto';
-import { UserResponseDto } from '../dtos/user-response.dto';
+import { RegisterUserDto } from '@dermatech/shared-dtos';
+import { UserResponseDto } from '@dermatech/shared-dtos';
 
 // --- Login Feature Imports ---
 import { LoginCommand } from '../../../application/commands/login/login.command';
-import { LoginRequestDto } from '../dtos/login.request.dto';
-import { TokenResponseDto } from '../dtos/token-response.dto'; // Ensure this file exists as discussed
+import { LoginRequestDto } from '@dermatech/shared-dtos';
+import { TokenResponseDto } from '@dermatech/shared-dtos';
 
 @ApiTags('auth')
 @Controller('auth')

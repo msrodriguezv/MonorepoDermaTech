@@ -1,11 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { JwtPayload } from '@dermatech/shared-dtos'; // Import compartido
+import { JwtPayload } from '@dermatech/shared-dtos';
 import { TokenServicePort } from '../../application/ports/token.service.port';
 
 @Injectable()
-export class JwtTokenService implements TokenServicePort {
+export class JwtTokenAdapter implements TokenServicePort {
   constructor(
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,

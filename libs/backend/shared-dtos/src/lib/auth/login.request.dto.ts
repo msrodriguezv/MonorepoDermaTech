@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsNotEmpty } from 'class-validator';
-import { BaseAuthDto } from '@dermatech/shared-dtos'; 
+import { BaseAuthDto } from '../../common/base-auth.dto'; 
 
 /**
  * Data Transfer Object for the Login request.
@@ -15,5 +15,5 @@ export class LoginRequestDto extends BaseAuthDto {
   })
   @IsString()
   @IsNotEmpty()
-  password: string;
+  password!: string;
 }

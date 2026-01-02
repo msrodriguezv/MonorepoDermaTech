@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, MinLength, Matches, IsEnum } from 'class-validator';
-import { BaseAuthDto, UserRole } from '@dermatech/shared-dtos';
+import { UserRole } from '../../enums/user-role.enum';
+import { BaseAuthDto } from '../../common/base-auth.dto'
 
 /**
  * Data Transfer Object for User Registration.
@@ -18,7 +19,7 @@ export class RegisterUserDto extends BaseAuthDto {
   @Matches(/((?=.*\d)|(?=.*\W+))(?![.\n])(?=.*[A-Z])(?=.*[a-z]).*$/, { 
     message: 'Password is too weak. It must contain uppercase, lowercase, number or special character.' 
   })
-  password: string;
+  password!: string;
 
   @ApiProperty({ 
     enum: UserRole, 
@@ -27,5 +28,5 @@ export class RegisterUserDto extends BaseAuthDto {
   })
   @IsEnum(UserRole)
   @IsNotEmpty()
-  role: UserRole;
+  role!: UserRole;
 }

@@ -8,7 +8,7 @@ import { CryptoServicePort } from '../../application/ports/crypto.service.port';
  * Complies with Mandatory R5 (Security/JWT/Hashing).
  */
 @Injectable()
-export class BcryptService implements CryptoServicePort {
+export class BcryptAdapter implements CryptoServicePort {
   private readonly SALT_ROUNDS: number; 
 
   constructor() {
