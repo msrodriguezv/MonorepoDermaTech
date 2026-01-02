@@ -1,7 +1,7 @@
-import { Module } from '@nestjs/common';
+import { Module,Logger } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { PatientsModule } from './patient/patient.module'; 
+import { PatientModule } from './patient/patient.module'; 
 
 @Module({
   imports: [
@@ -12,29 +12,26 @@ import { PatientsModule } from './patient/patient.module';
       useFactory: (configService: ConfigService) => {
         const host = configService.get('DB_HOST');
         const port = configService.get('DB_PORT');
-
-        console.log(`--- INTENTO DE CONEXIÓN ---`);
-        console.log(`HOST: ${host}`);
-        console.log(`PUERTO: ${port}`);
-        console.log(`---------------------------`);
-
+        Logger.log('--- CONNECTION ATTEMPT ---', 'AppModule');
+        Logger.log(`HOST: ${host}`, 'AppModule');
+        Logger.log(`PORT: ${port}`, 'AppModule');
+        Logger.log('---------------------------', 'AppModule');
         return {
-          type: 'postgres',
+         type: 'postgres',
           host: host,
-          port: parseInt(port, 10), 
-          username: configService.get('DB_USER'),
-          password: configService.get('DB_PASSWORD'),
-          database: configService.get('DB_NAME'),
+          port: port,
+          username: configService.get<string>('DB_USER'),
+          password: configService.get<string>('DB_PASSWORD'),
+          database: configService.get<string>('DB_NAME'),
           autoLoadEntities: true,
-          synchronize: true,
-          
+          synchronize: configService.get<string>('NODE_ENV') !== 'production',
           ssl: {
             rejectUnauthorized: false, 
           },
         };
       },
     }),
-    PatientsModule, 
+    PatientModule, 
   ],
 })
 export class AppModule {}

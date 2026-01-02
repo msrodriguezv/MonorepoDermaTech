@@ -29,21 +29,27 @@ export class PatientService {
     }
 
     try {
-      // Preparamos los datos con la estructura JSON correcta
+      // Preparamos los datos correctamente para cumplir con el esquema JSON de la entidad
       const dataToSave = {
         ...createPatientDto,
         medicalInfo: {
-          bloodType: createPatientDto.medicalInfo,
-          allergies: createPatientDto.allergies
+          // 1. Si medicalInfo ya es un objeto, lo usamos; si no, objeto vacío
+          ...(typeof createPatientDto.medicalInfo === 'object' ? createPatientDto.medicalInfo : {}),
+          
+          // 2. Integramos las alergias al objeto médico
+          allergies: createPatientDto.allergies || [],
+
+          // 3. Aseguramos que existan condiciones crónicas (o array vacío)
+          chronicConditions: (createPatientDto.medicalInfo as any)?.chronicConditions || []
         }
       };
 
-      // Guardamos en la BD
-      const patient = this.patientRepository.create(dataToSave as unknown as Patient);
+      // CORRECCIÓN: Creamos la entidad directamente (ya corregimos el DTO y dataToSave)
+      const patient = this.patientRepository.create(dataToSave);
+      
       const savedPatient = await this.patientRepository.save(patient);
 
       // --- KAFKA (FAIL-SAFE) ---
-      // Intentamos enviar el evento, pero si falla no rompemos la app
       this.kafkaClient
         .emit('patient.created', {
           id: savedPatient.id,
@@ -57,7 +63,9 @@ export class PatientService {
           this.logger.log(`✅ Event 'patient.created' sent successfully to Kafka`);
         })
         .catch((err) => {
+          // FIX (Copilot): Logueamos el error real para poder depurar si falla
           this.logger.warn(`⚠️ Kafka is offline. Event saved in DB but not emitted.`);
+          this.logger.error(`Kafka Error Details: ${err?.message || err}`, err?.stack);
         });
 
       return savedPatient;
@@ -87,8 +95,8 @@ export class PatientService {
   // --- UPDATE ---
   async update(id: string, updatePatientDto: UpdatePatientDto) {
     const patient = await this.findOne(id);
-    this.patientRepository.merge(patient, updatePatientDto as any);
-    return await this.patientRepository.save(patient);
+    this.patientRepository.merge(patient, updatePatientDto); 
+    return this.patientRepository.save(patient);
   }
 
   // --- DELETE ---

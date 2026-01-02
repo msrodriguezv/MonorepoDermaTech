@@ -1,62 +1,46 @@
 import { Module } from '@nestjs/common';
-import { CqrsModule } from '@nestjs/cqrs';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ClientsModule, Transport } from '@nestjs/microservices';
-import { PassportModule } from '@nestjs/passport';
-import { JwtModule } from '@nestjs/jwt';
+import { ConfigModule, ConfigService } from '@nestjs/config'; // <--- Importante
+import { CqrsModule } from '@nestjs/cqrs';
 
-import { PatientService } from './services/patient.service';
 import { PatientsController } from './controllers/patient.controller';
+import { PatientService } from './services/patient.service';
 import { Patient } from './entities/patient.entity';
-// --- 1. IMPORTAR LA NUEVA ENTIDAD ---
+import { S3Service } from '../common/services/s3.service';
 import { MedicalRecord } from './entities/medical-record.entity';
-
-// Ajusté las rutas relativas para que sean más limpias (./), verifica si tu carpeta auth está ahí
-import { JwtStrategy } from '../app/auth/jwt.strategy';
-import { CreatePatientHandler } from './cqrs/create-patient.handler';
-// --- 2. IMPORTAR EL NUEVO HANDLER ---
-import { AddMedicalRecordHandler } from './cqrs/add-medical-record.handler';
 
 @Module({
   imports: [
+    TypeOrmModule.forFeature([Patient, MedicalRecord]),
     CqrsModule,
-    
-    // --- 3. REGISTRAR AMBAS ENTIDADES AQUÍ ---
-    // Esto permite inyectar Repository<Patient> y Repository<MedicalRecord>
-    TypeOrmModule.forFeature([Patient, MedicalRecord]), 
 
-    // --- SEGURITY JWT ---
-    PassportModule.register({ defaultStrategy: 'jwt' }),
-    JwtModule.register({
-      secret: 'SUPER_SECRET_KEY_TESIS_2025',
-      signOptions: { expiresIn: '1h' },
-    }),
-
-    // --- KAFKA (FAIL-SAFE) ---
-    ClientsModule.register([
+    ClientsModule.registerAsync([
       {
         name: 'PATIENT_KAFKA_CLIENT',
-        transport: Transport.KAFKA,
-        options: {
-          client: {
-            clientId: 'patient-service',
-            brokers: ['localhost:9092'],
-            connectionTimeout: 3000,
-            retry: { retries: 1 },
+        imports: [ConfigModule],
+        inject: [ConfigService],
+        useFactory: (configService: ConfigService) => ({
+          transport: Transport.KAFKA,
+          options: {
+            client: {
+              clientId: 'patient-service',
+              // FIX: Read brokers dynamically from environment variables
+              // This supports both local ('localhost:9092') and Docker ('kafka:29092')
+              brokers: (configService.get<string>('KAFKA_BROKERS') || 'localhost:9092')
+                .split(',')
+                .map((broker) => broker.trim()),
+            },
+            consumer: {
+              groupId: 'patient-consumer',
+            },
           },
-          consumer: { groupId: 'patient-consumer-group' },
-        },
+        }),
       },
     ]),
   ],
   controllers: [PatientsController],
-
-  // --- 4. AGREGAR EL NUEVO HANDLER A LOS PROVIDERS ---
-  providers: [
-    PatientService,
-    JwtStrategy,
-    CreatePatientHandler,
-    AddMedicalRecordHandler // <--- ESENCIAL: Sin esto, el CommandBus fallará
-  ],
+  providers: [PatientService, S3Service],
+  exports: [PatientService],
 })
-export class PatientsModule {}
+export class PatientModule {}

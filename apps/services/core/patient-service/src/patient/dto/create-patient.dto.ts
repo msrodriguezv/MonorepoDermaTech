@@ -1,4 +1,4 @@
-import { IsString, IsEmail, IsUUID, IsArray, IsOptional } from 'class-validator';
+import { IsString, IsEmail, IsUUID, IsArray, IsOptional, IsObject } from 'class-validator'; // <--- Importamos IsObject
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CreatePatientDto {
@@ -26,18 +26,21 @@ export class CreatePatientDto {
   @IsString()
   phone: string;
 
-  @ApiProperty({ example: 'O+' })
-  @IsString()
-  medicalInfo: string;
+  @ApiProperty({ 
+    example: { bloodType: 'O+', chronicConditions: ['Diabetes'] },
+    description: 'Medical details as a JSON object (blood type, etc.)'
+  })
+  @IsObject()   
+  @IsOptional() 
+  medicalInfo: Record<string, any>; 
 
   @ApiProperty({ example: ['Penicilina'] })
   @IsArray()
   @IsString({ each: true })
   allergies: string[];
     
-  // --- ESTO ES LO QUE TE FALTA ---
   @ApiProperty({ example: 'IESS', required: false })
   @IsString()
-  @IsOptional() // Importante: Permite que sea opcional si no lo envían
+  @IsOptional()
   insuranceProvider?: string;
 }

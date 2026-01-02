@@ -1,24 +1,28 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { PatientService } from './services/patient.service';
+// 1. Servicio: Está en la misma carpeta, usamos ./
+import { PatientService } from './patient.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Patient } from './entities/patient.entity';
-import { CreatePatientDto } from './dto/create-patient.dto';
+// 2. Entidad: Salimos un nivel (../) a entities
+import { Patient } from '../entities/patient.entity';
+// 3. DTO: Salimos un nivel (../) a dto (ESTA ES LA CORRECCIÓN DE COPILOT)
+import { CreatePatientDto } from '../dto/create-patient.dto';
 
-// 1. MOCK DE LA BASE DE DATOS (Simulamos TypeORM)
+// --- MOCKS ---
 const mockPatientRepository = {
   create: jest.fn().mockImplementation((dto) => dto),
   save: jest.fn().mockImplementation((patient) => Promise.resolve({ 
     id: 'uuid-test-123', 
     ...patient 
   })),
-  findOne: jest.fn().mockResolvedValue(null), // Simulamos que no existe duplicado
+  findOne: jest.fn().mockResolvedValue(null),
   find: jest.fn().mockResolvedValue([]),
+  merge: jest.fn(),
+  remove: jest.fn(),
 };
 
-// 2. MOCK DE KAFKA (Simulamos el cliente de mensajes)
 const mockKafkaClient = {
   emit: jest.fn(() => ({
-    toPromise: jest.fn().mockResolvedValue('event_sent'), // Simulamos éxito
+    toPromise: jest.fn().mockResolvedValue('event_sent'),
     subscribe: jest.fn(),
   })),
 };
@@ -30,7 +34,6 @@ describe('PatientService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PatientService,
-        // Inyectamos los mocks en lugar de las conexiones reales
         {
           provide: getRepositoryToken(Patient),
           useValue: mockPatientRepository,
@@ -49,7 +52,6 @@ describe('PatientService', () => {
     expect(service).toBeDefined();
   });
 
-  // --- PRUEBA DEL REQUISITO DE TESIS ---
   it('should create a patient and try to emit a kafka event', async () => {
     const dto: CreatePatientDto = {
       userId: 'test-user-id',
@@ -58,17 +60,16 @@ describe('PatientService', () => {
       lastName: 'User',
       birthDate: '2000-01-01',
       phone: '0999999999',
-      medicalInfo: 'O+',
+      medicalInfo: { bloodType: 'O+' },
       allergies: ['None']
     };
 
     const result = await service.create(dto);
 
-    // Verificamos que guardó en "Base de Datos"
+    expect(result).toBeDefined();
     expect(result).toHaveProperty('id');
-    expect(result.email).toEqual('test@test.com');
+    expect(result?.email).toEqual('test@test.com'); // Uso de ?. seguro
     
-    // Verificamos que intentó llamar a Kafka (Requisito Event Driven)
     expect(mockKafkaClient.emit).toHaveBeenCalled();
   });
 });

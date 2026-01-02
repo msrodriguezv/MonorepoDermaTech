@@ -2,25 +2,24 @@ version: '3.8'
 
 services:
   
-  minio:
+ minio:
     image: minio/minio
     container_name: dermatech-minio
     ports:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: root
-      MINIO_ROOT_PASSWORD: password123
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER not set in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD not set in .env}
     command: server /data --console-address ":9001"
     volumes:
       - ./infrastructure/local-data/minio:/data
-
-  zookeeper:
-    image: confluentinc/cp-zookeeper:latest
-    container_name: dermatech-zookeeper
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
+zookeeper:
+  image: confluentinc/cp-zookeeper:latest
+  container_name: dermatech-zookeeper
+  environment:
+    ZOOKEEPER_CLIENT_PORT: 2181
+    ZOOKEEPER_TICK_TIME: 2000
 
   kafka:
     image: confluentinc/cp-kafka:latest
@@ -37,7 +36,6 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 
-  # --- TU MICROSERVICIO ---
   patient-service:
     build:
       context: .
@@ -46,30 +44,25 @@ services:
     ports:
       - "3001:3001"
     depends_on:
-      # YA NO ESPERAMOS A POSTGRES-CORE
       kafka:
         condition: service_started
     environment:
-      # VARIABLES GENERALES
       NODE_ENV: production
       PORT: 3001
       
-   
-      DB_HOST: aws-1-us-east-2.pooler.supabase.com
+      # --- CORRECCIÓN DE SEGURIDAD (FIX COPILOT) ---
+      # Cambiamos los valores fijos por variables que leen tu .env
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
       
-      DB_PORT: 5432
-      
-      DB_USER: postgres.umgypxpjonnerjaqvlcx
-      
-      DB_PASSWORD: "DermaTechTesis2025"
-      
-      DB_NAME: postgres
-      JWT_SECRET: secret
-      
+      # Variables de seguridad y AWS
+      JWT_SECRET: ${JWT_SECRET}
       AWS_REGION: us-east-1
-      AWS_ACCESS_KEY_ID: root
-      AWS_SECRET_ACCESS_KEY: password123
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
       AWS_BUCKET_NAME: patient-documents
       AWS_ENDPOINT: http://minio:9000
-      
       KAFKA_BROKERS: kafka:29092

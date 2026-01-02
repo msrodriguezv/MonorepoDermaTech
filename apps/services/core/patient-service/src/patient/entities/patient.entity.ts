@@ -1,7 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index, OneToMany } from 'typeorm';
 import { MedicalRecord } from './medical-record.entity';
 
-// Interfaz para el JSONB
+
 export interface MedicalInfo {
   bloodType: string;
   allergies: string[];
@@ -9,7 +9,7 @@ export interface MedicalInfo {
 }
 
 @Entity('patients')
-export class Patient { // <--- ASEGÚRATE QUE DIGA 'export class'
+export class Patient { 
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
@@ -47,8 +47,7 @@ export class Patient { // <--- ASEGÚRATE QUE DIGA 'export class'
   @UpdateDateColumn()
   updatedAt: Date;
 
-  // RELACIÓN 1 a N
-  @OneToMany(() => MedicalRecord, (record) => record.patient)
+  
+  @OneToMany(() => MedicalRecord, (MedicalRecord) => MedicalRecord.patient)
   medicalRecords: MedicalRecord[];
 } 
-// <--- ¡IMPORTANTE! VERIFICA QUE ESTA ÚLTIMA LLAVE ESTÉ PRESENTE

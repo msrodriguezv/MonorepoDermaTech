@@ -15,7 +15,6 @@ export class MedicalRecord {
   @CreateDateColumn()
   createdAt: Date;
 
-  // RELACIÓN: Muchas historias pertenecen a un Paciente
   @ManyToOne(() => Patient, (patient) => patient.medicalRecords, { onDelete: 'CASCADE' })
   patient: Patient;
 }

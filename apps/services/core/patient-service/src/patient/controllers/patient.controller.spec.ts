@@ -1,38 +1,35 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { PatientsController } from './controllers/patient.controller';
-import { PatientService } from './services/patient.service';
+import { PatientsController } from './patient.controller';
+import { PatientService } from '../services/patient.service';
+import { CommandBus, QueryBus } from '@nestjs/cqrs';
+import { CreatePatientDto } from '../dto/create-patient.dto';
 
-describe('PatientController', () => {
+describe('PatientsController', () => {
   let controller: PatientsController;
-  let service: PatientService;
+  let commandBus: CommandBus;
 
-  const mockPatient = {
-    id: 'uuid-test-1',
-    firstName: 'Gio',
-    email: 'gio@test.com',
-    userId: 'user-123',
-    birthDate: '1995-05-15',
-  };
-
-  // Simulamos el Servicio completo
+  // Mock  CommandBus 
+  const mockCommandBus = { execute: jest.fn() };
+  const mockQueryBus = { execute: jest.fn() };
+  
+  // Mock service
   const mockPatientService = {
-    create: jest.fn().mockResolvedValue(mockPatient),
-    findAll: jest.fn().mockResolvedValue([mockPatient]),
+    findAll: jest.fn(),
+    findOne: jest.fn(),
   };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [PatientsController],
       providers: [
-        {
-          provide: PatientService,
-          useValue: mockPatientService,
-        },
+        { provide: CommandBus, useValue: mockCommandBus },
+        { provide: QueryBus, useValue: mockQueryBus },
+        { provide: PatientService, useValue: mockPatientService },
       ],
     }).compile();
 
     controller = module.get<PatientsController>(PatientsController);
-    service = module.get<PatientService>(PatientService);
+    commandBus = module.get<CommandBus>(CommandBus);
   });
 
   it('should be defined', () => {
@@ -40,20 +37,26 @@ describe('PatientController', () => {
   });
 
   describe('create', () => {
-    it('debería llamar al servicio para crear un paciente', async () => {
-      const dto = {
+    it('debería ejecutar un Command a través del CommandBus', async () => {
+      const dto: CreatePatientDto = {
+        userId: 'user-123',
+        email: 'gio@test.com',
         firstName: 'Gio',
         lastName: 'Rodriguez',
-        email: 'gio@test.com',
-        userId: 'user-123',
         birthDate: '1995-05-15',
         phone: '0991234567',
+        medicalInfo: { bloodType: 'O+' },
+        allergies: ['None'],
+        insuranceProvider: 'IESS'
       };
 
-      const result = await controller.create(dto as any);
-      
-      expect(result).toEqual(mockPatient);
-      expect(service.create).toHaveBeenCalledWith(dto);
+      const expectedResult = { id: 'uuid-123', ...dto };
+      mockCommandBus.execute.mockResolvedValue(expectedResult);
+
+      const result = await controller.create(dto);
+
+      expect(result).toEqual(expectedResult);
+      expect(mockCommandBus.execute).toHaveBeenCalled(); 
     });
   });
 });
