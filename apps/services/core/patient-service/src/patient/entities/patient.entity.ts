@@ -1,18 +1,28 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index, OneToMany } from 'typeorm';
-import { MedicalRecord } from './medical-record.entity';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 
-
+/**
+ * Interface defining the structure of the JSONB column.
+ * Kept here for type safety within the entity.
+ * Note: This stores static medical traits (Allergies/Blood Type), 
+ * NOT the clinical history/records which belong to the Medical History Microservice.
+ */
 export interface MedicalInfo {
-  bloodType: string;
-  allergies: string[];
-  chronicConditions: string[];
+  bloodType?: string;
+  allergies?: string[];
+  chronicConditions?: string[];
 }
 
 @Entity('patients')
-export class Patient { 
+export class Patient {
+  /**
+   * Primary Key for the Patient Service.
+   */
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  /**
+   * LOGICAL REFERENCE to the Auth Service.
+   */
   @Index({ unique: true })
   @Column()
   userId: string;
@@ -20,18 +30,29 @@ export class Patient {
   @Column()
   email: string;
 
-  @Column({ length: 100 }) 
+  @Column({ length: 100, nullable: true })
   firstName: string;
 
-  @Column({ length: 100 })
+  @Column({ length: 100, nullable: true })
   lastName: string;
 
-  @Column({ type: 'date' })
+  @Column({ type: 'date', nullable: true })
   birthDate: Date;
 
   @Column({ nullable: true })
   phone: string;
 
+  /**
+   * Profile Status Flag.
+   */
+  @Column({ default: false })
+  isProfileComplete: boolean;
+
+  /**
+   * Basic Medical Traits (JSONB).
+   * Stores 'Static' medical data needed for quick identification (e.g., Blood Type).
+   * Full clinical history is stored in the separate 'Medical History' Microservice (MongoDB).
+   */
   @Column({ type: 'jsonb', nullable: true, default: {} })
   medicalInfo: MedicalInfo;
 
@@ -46,8 +67,4 @@ export class Patient {
 
   @UpdateDateColumn()
   updatedAt: Date;
-
-  
-  @OneToMany(() => MedicalRecord, (MedicalRecord) => MedicalRecord.patient)
-  medicalRecords: MedicalRecord[];
-} 
+}

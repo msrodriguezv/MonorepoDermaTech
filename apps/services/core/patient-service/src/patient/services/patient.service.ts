@@ -1,116 +1,157 @@
-import { Inject, Injectable, Logger, BadRequestException, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ClientKafka } from '@nestjs/microservices';
-import { Patient } from '../entities/patient.entity';
-import { CreatePatientDto } from '../dto/create-patient.dto';
-import { UpdatePatientDto } from '../dto/update-patient.dto';
+import { Patient, MedicalInfo } from '../entities/patient.entity';
+import { UpdateProfileDto } from '../dto/update-profile.dto.';
 
+/**
+ * PatientService (Final Strict Version)
+ * * Domain Service encompassing all business logic for the Patient Context.
+ * * Scope:
+ * 1. System Actions: Idempotent creation of root records via Kafka events.
+ * 2. Student Actions: Self-management of profile data.
+ * 3. Admin Actions: Full CRUD capabilities.
+ */
 @Injectable()
-export class PatientService { 
+export class PatientService {
   private readonly logger = new Logger(PatientService.name);
 
   constructor(
     @InjectRepository(Patient)
     private readonly patientRepository: Repository<Patient>,
-    
-    @Inject('PATIENT_KAFKA_CLIENT') 
-    private readonly kafkaClient: ClientKafka,
   ) {}
 
-  // --- CREATE ---
-  async create(createPatientDto: CreatePatientDto) {
-    const existing = await this.patientRepository.findOne({
-      where: { userId: createPatientDto.userId }
-    });
+  // ===========================================================================
+  // 1. SYSTEM / EVENT DRIVEN LOGIC (Kafka Triggered)
+  // ===========================================================================
 
+  /**
+   * Creates a root patient record. Called by the CQRS Handler when 'user.registered' occurs.
+   * Ensures idempotency to handle potential duplicate events from the broker.
+   */
+  async createRootPatient(userId: string, email: string): Promise<void> {
+    const existing = await this.patientRepository.findOne({ where: { userId } });
     if (existing) {
-      throw new BadRequestException('The user already has a patient profile created.');
+      this.logger.warn(`Idempotency check: Record already exists for UserID: ${userId}`);
+      return;
     }
 
     try {
-      // Preparamos los datos correctamente para cumplir con el esquema JSON de la entidad
-      const dataToSave = {
-        ...createPatientDto,
-        medicalInfo: {
-          // 1. Si medicalInfo ya es un objeto, lo usamos; si no, objeto vacío
-          ...(typeof createPatientDto.medicalInfo === 'object' ? createPatientDto.medicalInfo : {}),
-          
-          // 2. Integramos las alergias al objeto médico
-          allergies: createPatientDto.allergies || [],
-
-          // 3. Aseguramos que existan condiciones crónicas (o array vacío)
-          chronicConditions: (createPatientDto.medicalInfo as any)?.chronicConditions || []
-        }
-      };
-
-      // CORRECCIÓN: Creamos la entidad directamente (ya corregimos el DTO y dataToSave)
-      const patient = this.patientRepository.create(dataToSave);
-      
-      const savedPatient = await this.patientRepository.save(patient);
-
-      // --- KAFKA (FAIL-SAFE) ---
-      this.kafkaClient
-        .emit('patient.created', {
-          id: savedPatient.id,
-          userId: savedPatient.userId,
-          email: savedPatient.email,
-          fullName: `${savedPatient.firstName} ${savedPatient.lastName}`,
-          timestamp: new Date().toISOString(),
-        })
-        .toPromise()
-        .then(() => {
-          this.logger.log(`✅ Event 'patient.created' sent successfully to Kafka`);
-        })
-        .catch((err) => {
-          // FIX (Copilot): Logueamos el error real para poder depurar si falla
-          this.logger.warn(`⚠️ Kafka is offline. Event saved in DB but not emitted.`);
-          this.logger.error(`Kafka Error Details: ${err?.message || err}`, err?.stack);
-        });
-
-      return savedPatient;
-
+      const newPatient = this.patientRepository.create({
+        userId,
+        email,
+        isProfileComplete: false,
+        medicalInfo: {} // Initialize as empty JSON object
+      });
+      await this.patientRepository.save(newPatient);
+      this.logger.log(`✅ Root patient created via Event for: ${email}`);
     } catch (error) {
       this.handleDBExceptions(error);
     }
   }
 
-  // --- READ ALL ---
-  async findAll() {
-    return await this.patientRepository.find();
+  // ===========================================================================
+  // 2. STUDENT LOGIC (Mobile App / Self-Service)
+  // ===========================================================================
+
+  /**
+   * Updates the authenticated user's profile.
+   * Performs strict mapping from DTO to Entity/JSONB fields.
+   */
+  async updateProfile(userId: string, dto: UpdateProfileDto): Promise<Patient> {
+    const patient = await this.findByUserId(userId); // Reuses helper method
+
+    // Map Standard Fields
+    patient.firstName = dto.firstName;
+    patient.lastName = dto.lastName;
+    patient.phone = dto.phone;
+    patient.birthDate = new Date(dto.birthDate); // String -> Date conversion
+
+    if (dto.avatarUrl) patient.avatarUrl = dto.avatarUrl;
+    if (dto.insuranceProvider) patient.insuranceProvider = dto.insuranceProvider;
+
+    // Map JSONB Fields (Medical Info) with strict typing
+    // We use the 'MedicalInfo' interface to prevent 'any' usage here
+    const currentInfo = patient.medicalInfo || {};
+    const updatedMedicalInfo: MedicalInfo = {
+      ...currentInfo,
+      bloodType: dto.bloodType,
+      allergies: dto.allergies ?? [], // Nullish coalescing to ensure array type
+      chronicConditions: dto.chronicConditions ?? []
+    };
+    patient.medicalInfo = updatedMedicalInfo;
+
+    // Set Flag
+    patient.isProfileComplete = true;
+
+    return await this.patientRepository.save(patient);
   }
 
-  // --- READ ONE ---
-  async findOne(id: string) {
-    const patient = await this.patientRepository.findOne({ where: { id } });
+  /**
+   * Helper to find a patient by their Auth User ID.
+   */
+  async findByUserId(userId: string): Promise<Patient> {
+    const patient = await this.patientRepository.findOne({ 
+      where: { userId },
+    });
+    if (!patient) throw new NotFoundException(`Patient profile not found for UserID: ${userId}`);
+    return patient;
+  }
+
+  // ===========================================================================
+  // 3. ADMIN LOGIC (Web Dashboard / CRUD)
+  // ===========================================================================
+
+  /**
+   * ADMIN ONLY: Retrieve all patients.
+   */
+  async findAll(): Promise<Patient[]> {
+    return await this.patientRepository.find({
+      order: { createdAt: 'DESC' }
+    });
+  }
+
+  /**
+   * ADMIN ONLY: Retrieve a single patient by their Database Primary Key (UUID).
+   */
+  async findOne(id: string): Promise<Patient> {
+    const patient = await this.patientRepository.findOne({ 
+      where: { id },
+    });
     if (!patient) throw new NotFoundException(`Patient with ID ${id} not found`);
     return patient;
   }
 
-  // --- FIND BY USER ---
-  async findByUser(userId: string) {
-    return await this.patientRepository.find({ where: { userId } });
-  }
-
-  // --- UPDATE ---
-  async update(id: string, updatePatientDto: UpdatePatientDto) {
-    const patient = await this.findOne(id);
-    this.patientRepository.merge(patient, updatePatientDto); 
-    return this.patientRepository.save(patient);
-  }
-
-  // --- DELETE ---
-  async remove(id: string) {
-    const patient = await this.findOne(id);
+  /**
+   * ADMIN ONLY: Hard delete a patient record.
+   */
+  async remove(id: string): Promise<{ message: string }> {
+    const patient = await this.findOne(id); // Ensure existence first
     await this.patientRepository.remove(patient);
+    this.logger.warn(`Patient ID ${id} deleted by Admin`);
     return { message: 'Patient deleted successfully' };
   }
 
-  private handleDBExceptions(error: any) {
-    if (error.code === '23505') { 
-       throw new BadRequestException('A record with these details already exists.');
+  // ===========================================================================
+  // 4. HELPERS
+  // ===========================================================================
+
+  /**
+   * Standardized error handling for Database operations.
+   * FIXED: Replaced 'any' with 'unknown' to comply with linting rules.
+   * Performs type assertion to safely access the error code.
+   */
+  private handleDBExceptions(error: unknown): never {
+    this.logger.error('Database Error', error);
+    
+    // Safe type casting: We assume the error *might* be an object with a code property
+    const dbError = error as { code?: string; message?: string };
+
+    // Postgres Error Code 23505: Unique Violation
+    if (dbError?.code === '23505') {
+      throw new BadRequestException('A record with these unique details already exists.');
     }
-    this.logger.error(error);
-    throw new InternalServerErrorException('Unexpected database error');
+    
+    throw new InternalServerErrorException('Unexpected error in Patient Service');
   }
 }

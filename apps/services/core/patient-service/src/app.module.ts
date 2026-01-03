@@ -1,7 +1,7 @@
 import { Module,Logger } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { PatientModule } from './patient/patient.module'; 
+import { PatientModule } from './patient.module'; 
 
 @Module({
   imports: [
