@@ -7,14 +7,14 @@ import { AuthModule } from './infrastructure/auth.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: '.env', 
+      envFilePath: 'apps/services/core/auth-service/.env', 
     }),
 
     // DATABASE CONNECTION
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      // FIX: Combined fixes for Safety Logging and Configuration Validation
+      // Combined fixes for Safety Logging and Configuration Validation
       useFactory: (configService: ConfigService) => {
         // 1. Safety Check for Synchronization
         const nodeEnv = configService.get<string>('NODE_ENV');
