@@ -7,7 +7,7 @@
     "emitDecoratorMetadata": true,     
     "experimentalDecorators": true,    
     "skipLibCheck": true,
-    "baseUrl": "."
+    "baseUrl": "../../../"
   },
   "include": [
     "src/**/*.spec.ts",

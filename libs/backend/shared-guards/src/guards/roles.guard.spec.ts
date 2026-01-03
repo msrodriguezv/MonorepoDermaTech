@@ -1,7 +1,7 @@
 import { RolesGuard } from './roles.guard';
 import { Reflector } from '@nestjs/core';
 import { ExecutionContext } from '@nestjs/common';
-import { UserRole } from '../../../shared-dtos/src/enums/user-role.enum';
+import { UserRole } from '@dermatech/shared-dtos';
 import { Test, TestingModule } from '@nestjs/testing';
 
 /**

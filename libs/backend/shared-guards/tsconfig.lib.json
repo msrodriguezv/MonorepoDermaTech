@@ -9,7 +9,7 @@
     "target": "es2021",
     "sourceMap": true,
     "outDir": "../../../dist/libs/backend/shared-guards",
-    "baseUrl": "."
+    "baseUrl": "../../../"
   },
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.spec.ts", "test/**/*"]

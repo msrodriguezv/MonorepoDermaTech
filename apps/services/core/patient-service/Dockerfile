@@ -1,51 +1,29 @@
 # STAGE 1: Builder
+# CORRECCIÓN 1: Unificamos a Node 20 (igual que Auth)
 FROM node:20-alpine AS builder
 
-# Install compatibility dependencies (required for C++ libraries like Kafka or Sharp)
-RUN apk add --no-cache libc6-compat python3 make g++
-
 WORKDIR /app
 
-# Copy monorepo configuration files
 COPY package*.json ./
-COPY nx.json ./
-COPY tsconfig*.json ./
 
-# Install ALL dependencies (including devDependencies to allow compilation)
-RUN npm install --legacy-peer-deps
+RUN npm ci
 
-# Copy full source code
 COPY . .
 
-# Build ONLY the patient-service
-# This generates the output at dist/apps/services/core/patient-service
-RUN npx nx build patient-service --configuration=production
+# CORRECCIÓN 2: Argumento por defecto apunta a patient-service
+ARG PROJECT_NAME=patient-service
+RUN npx nx build ${PROJECT_NAME} --prod
 
+# STAGE 2: Runner
+FROM node:20-alpine
 
-# STAGE 2: Runner (Lightweight final image)
-FROM node:20-alpine AS runner
 WORKDIR /app
 
-# Create system user for security (Best Practices)
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nestjs
+# CORRECCIÓN 3: Copiamos la carpeta correcta (patient-service)
+COPY --from=builder /app/dist/apps/services/core/patient-service ./dist
+COPY --from=builder /app/node_modules ./node_modules
 
-# Copy root package.json to install production dependencies
-COPY package*.json ./
+ENV PORT=${PATIENT_SERVICE_PORT:-${PORT:-3001}}
+EXPOSE $PORT
 
-# Install only production dependencies (saves space)
-RUN npm install --only=production --legacy-peer-deps
-
-# Copy the build generated in the previous stage
-COPY --from=builder --chown=nestjs:nodejs /app/dist/apps/services/core/patient-service ./dist
-
-# Environment variables
-ENV NODE_ENV production
-ENV PORT 3001
-
-# Switch to non-privileged user
-USER nestjs
-
-EXPOSE 3001
-
-CMD ["node", "dist/main.js"]
+CMD ["node", "dist/main"]
