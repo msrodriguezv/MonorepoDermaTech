@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
-import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger'; // <-- IMPORTANTE
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger'; 
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -9,13 +9,13 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api');
 
-  // --- CONFIGURACIÓN DE SWAGGER (ESTO ES LO QUE TE FALTA) ---
+  // --- SWAGGER CONFIGURATION ---
  const config = new DocumentBuilder()
     .setTitle('Patient Service')
     .setDescription('The Patient Service API')
     .setVersion('1.0')
     
-    .addBearerAuth() // <--- AGREGA ESTA LÍNEA EXACTAMENTE AQUÍ
+    .addBearerAuth()
     .build();
     
   const document = SwaggerModule.createDocument(app, config);
@@ -33,7 +33,7 @@ async function bootstrap() {
   const port = process.env.PORT || 3002;
   await app.listen(port);
   
-  // URL exacta para entrar
+  // Service URL for access
   logger.log(`Patient Service is running on: http://localhost:${port}/api/docs`);
 }
 

@@ -27,10 +27,23 @@ export class StorageService {
     // If undefined, AWS SDK defaults to real AWS S3 URLs.
     const endpoint = this.configService.get<string>('AWS_ENDPOINT'); 
 
+    // --- SECURITY CHECK (Copilot Fix) ---
+    // Identify the environment
+    const nodeEnv = this.configService.get<string>('NODE_ENV') || 'development';
+    const isProd = nodeEnv === 'production' || nodeEnv === 'prod';
+
+    // In Production, strict validation is required. Never fallback to 'minioadmin'.
+    if (isProd && (!accessKeyId || !secretAccessKey)) {
+      const errorMsg = 'FATAL ERROR: AWS Credentials (ACCESS_KEY_ID or SECRET_ACCESS_KEY) are missing in Production.';
+      this.logger.error(errorMsg);
+      throw new Error(errorMsg); // This stops the app from booting insecurely
+    }
+
     this.s3Client = new S3Client({
       region,
       credentials: {
-        accessKeyId: accessKeyId || 'minioadmin', // Fallback for local dev
+        // Fallback to 'minioadmin' is now safe because we verified we are NOT in prod above
+        accessKeyId: accessKeyId || 'minioadmin', 
         secretAccessKey: secretAccessKey || 'minioadmin',
       },
       endpoint: endpoint, 

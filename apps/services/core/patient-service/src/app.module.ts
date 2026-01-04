@@ -28,7 +28,9 @@ import { PatientModule } from './patient.module';
           password: configService.get<string>('DB_PASSWORD'),
           database: configService.get<string>('DB_NAME'),
           autoLoadEntities: true,
-          synchronize: configService.get<string>('NODE_ENV') !== 'production',
+          // Only enable synchronize in development mode to prevent data loss in other environments
+          synchronize: configService.get<string>('NODE_ENV') === 'development',
+          
           ssl: {
             rejectUnauthorized: false, 
           },
