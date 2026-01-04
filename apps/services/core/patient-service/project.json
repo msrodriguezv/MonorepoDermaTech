@@ -1,0 +1,68 @@
+{
+  "name": "patient-service",
+  "$schema": "../../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/services/core/patient-service/src",
+  "projectType": "application",
+  "tags": ["scope:services", "type:app"],
+  "targets": {
+    "build": {
+      "executor": "@nx/webpack:webpack",
+      "outputs": ["{options.outputPath}"],
+      "defaultConfiguration": "production",
+      "options": {
+        "target": "node",
+        "compiler": "tsc",
+        "outputPath": "dist/apps/services/core/patient-service",
+        "webpackConfig": "apps/services/core/patient-service/webpack.config.js",
+        "main": "apps/services/core/patient-service/src/main.ts",
+        "tsConfig": "apps/services/core/patient-service/tsconfig.app.json",
+        "assets": [
+          {
+            "glob": "**/*",
+            "input": "apps/services/core/patient-service/src/assets",
+            "output": "assets"
+          }
+        ]
+      },
+      "configurations": {
+        "development": {
+          "minimize": false
+        },
+        "production": {
+          "minimize": true,
+          "extractLicenses": true,
+          "inspect": false
+        }
+      }
+    },
+    "serve": {
+      "executor": "@nx/js:node",
+      "defaultConfiguration": "development",
+      "options": {
+        "buildTarget": "patient-service:build"
+      },
+      "configurations": {
+        "development": {
+          "buildTarget": "patient-service:build:development"
+        },
+        "production": {
+          "buildTarget": "patient-service:build:production"
+        }
+      }
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/apps/services/core/patient-service"],
+      "options": {
+        "jestConfig": "apps/services/core/patient-service/jest.config.ts",
+        "passWithNoTests": true
+      },
+      "configurations": {
+        "ci": {
+          "ci": true,
+          "codeCoverage": true
+        }
+      }
+    }
+  }
+}
