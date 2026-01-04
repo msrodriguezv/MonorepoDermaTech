@@ -25,7 +25,7 @@ export class PatientEventController {
    * * Logic: Based on the shared UserRole enum.
    * * @param event - The deserialized JSON object matching UserRegisteredEvent structure.
    */
-  @EventPattern('user.registered')
+  @EventPattern('auth.user.registered')
   async handleUserRegistered(@Payload() event: UserRegisteredEvent) {
     // [DEBUG LOG] Detailed logging to verify payload integrity during development
     this.logger.log(`[Kafka Consumer] Payload received: ${JSON.stringify(event)}`);

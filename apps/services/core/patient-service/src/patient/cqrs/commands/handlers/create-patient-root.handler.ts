@@ -20,7 +20,7 @@ export class CreatePatientRootHandler implements ICommandHandler<CreatePatientRo
    * 2. Delegates the atomic creation to the Domain Service.
    */
   async execute(command: CreatePatientRootCommand): Promise<void> {
-    this.logger.log(`CQRS: Processing CreatePatientRootCommand for UserID: ${command.userId}`);
+    this.logger.log(`[CQRS] Processing CreatePatientRootCommand for UserID: ${command.userId}`);
     
     // We await the service to ensure any DB errors are caught/logged properly
     await this.patientService.createRootPatient(command.userId, command.email);

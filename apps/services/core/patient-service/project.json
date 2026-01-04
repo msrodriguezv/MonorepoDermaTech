@@ -39,7 +39,8 @@
       "executor": "@nx/js:node",
       "defaultConfiguration": "development",
       "options": {
-        "buildTarget": "patient-service:build"
+        "buildTarget": "patient-service:build",
+        "inspect": false
       },
       "configurations": {
         "development": {
