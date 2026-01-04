@@ -60,7 +60,7 @@
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.3",
-    "ioredis": "^5.3.0", 
+    "ioredis": "^5.3.0",
     "kafkajs": "^2.2.4",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",

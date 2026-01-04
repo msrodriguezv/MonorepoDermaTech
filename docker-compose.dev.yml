@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # --- REDIS (Requerido por Auth) ---
+  # --- REDIS (Required by Auth) ---
   redis:
     image: redis:alpine
     container_name: dermatech_redis
@@ -10,7 +10,7 @@ services:
     networks:
       - dev_network
 
-  # --- KAFKA & ZOOKEEPER (Requerido por AMBOS) ---
+  # --- KAFKA & ZOOKEEPER (Required by BOTH) ---
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: dermatech_zookeeper
@@ -29,7 +29,7 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      # Configuración perfecta para que funcione con NX SERVE
+      # Perfect configuration to work with NX SERVE
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
@@ -37,15 +37,15 @@ services:
     networks:
       - dev_network
 
-  # --- MINIO (Requerido por Patient) ---
+  # --- MINIO (Required by Patient) ---
   minio:
     image: minio/minio:latest
     container_name: dermatech_minio
     ports:
-      # OJO AQUI: Mapeamos el puerto externo 9001 al interno 9000 (API)
-      # Esto coincide con tu .env AWS_ENDPOINT=http://localhost:9001
+      # NOTE: We map external port 9001 to internal 9000 (API)
+      # This matches your .env AWS_ENDPOINT=http://localhost:9001
       - "9001:9000"
-      - "9002:9001" # Consola en el 9002
+      - "9002:9001" # Console on 9002
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -53,7 +53,7 @@ services:
     networks:
       - dev_network
 
-  # Script para crear bucket automático
+  # Script to create bucket automatically
   createbuckets:
     image: minio/mc:latest
     depends_on:

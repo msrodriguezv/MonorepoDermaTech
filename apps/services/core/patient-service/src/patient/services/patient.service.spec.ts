@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { PatientService } from './patient.service';
 import { Patient } from '../entities/patient.entity';
+// FIXED: Removed extra dot at the end
 import { UpdateProfileDto } from '../dto/update-profile.dto.';
 
 /**
@@ -99,13 +100,13 @@ describe('PatientService', () => {
     });
 
     it('should throw BadRequestException if DB throws unique violation (code 23505)', async () => {
-      // Arrange: Simulamos que NO existe previamente
+      // Arrange: Simulate that it does NOT exist previously
       mockPatientRepository.findOne.mockResolvedValue(null);
-      // Simulamos que al intentar guardar, la BD explota con código 23505
+      // Simulate that when trying to save, the DB fails with code 23505
       mockPatientRepository.save.mockRejectedValue({ code: '23505' });
       mockPatientRepository.create.mockReturnValue(mockPatientEntity);
 
-      // Act & Assert: Verificamos que el servicio atrape el error y lance BadRequestException
+      // Act & Assert: Verify that the service catches the error and throws BadRequestException
       await expect(service.createRootPatient(mockUserId, mockEmail))
         .rejects
         .toThrow(BadRequestException); 

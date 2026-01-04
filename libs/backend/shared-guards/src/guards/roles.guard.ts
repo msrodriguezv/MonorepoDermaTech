@@ -1,7 +1,7 @@
 import { Injectable, CanActivate, ExecutionContext, Logger } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { UserRole } from '../../../shared-dtos/src/enums/user-role.enum';
-import { ROLES_KEY } from '../decorators/roles.decorator'; // Importamos la clave del decorador que creamos antes
+import { ROLES_KEY } from '../decorators/roles.decorator'; 
 
 /**
  * RolesGuard

@@ -1,7 +1,6 @@
-# (Simplificado para referencia)
 FROM node:18-alpine AS builder
 WORKDIR /app
-# Copia todo el monorepo (necesario por Nx)
+# Copia all monorepo (necesary for Nx)
 COPY . .
 RUN npm ci
 RUN npx nx build auth-service --prod

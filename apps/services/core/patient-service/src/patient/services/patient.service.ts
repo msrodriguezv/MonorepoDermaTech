@@ -3,7 +3,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Patient, MedicalInfo } from '../entities/patient.entity';
 import { UpdateProfileDto } from '../dto/update-profile.dto.';
-
 /**
  * PatientService (Final Strict Version)
  * * Domain Service encompassing all business logic for the Patient Context.
