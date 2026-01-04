@@ -1,6 +1,6 @@
 import { Injectable, CanActivate, ExecutionContext, Logger } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { UserRole } from '../../../shared-dtos/src/enums/user-role.enum';
+import { UserRole } from '@dermatech/shared-dtos';
 import { ROLES_KEY } from '../decorators/roles.decorator'; 
 
 /**
