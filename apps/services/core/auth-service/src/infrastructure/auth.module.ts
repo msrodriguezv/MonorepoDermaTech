@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { CqrsModule } from '@nestjs/cqrs';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { JwtModule } from '@nestjs/jwt';
+import { JwtModule, JwtModuleOptions } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { PassportModule } from '@nestjs/passport';
 import { ClientsModule, Transport } from '@nestjs/microservices';
@@ -38,14 +38,19 @@ import { JwtStrategy, JwtAuthGuard } from '@dermatech/shared-guards';
     // Passport Middleware
     PassportModule.register({ defaultStrategy: 'jwt' }),
 
-    // JWT Configuration (Async)
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET'),
-        signOptions: { expiresIn: '15m' },
-      }),
+      useFactory: async (configService: ConfigService): Promise<JwtModuleOptions> => {
+        return {
+          secret: configService.get<string>('JWT_SECRET'),
+          signOptions: {
+            // We use configService.get() without explicit generic typing here 
+            // to allow TypeScript to accept the value as compatible with the JWT library.
+            expiresIn: configService.get('JWT_EXPIRES_IN') || '15m', 
+          },
+        };
+      },
     }),
 
     // Kafka Client Registration
