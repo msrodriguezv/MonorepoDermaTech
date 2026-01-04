@@ -44,6 +44,8 @@ Thumbs.db
 .github/instructions/nx.instructions.md
 
 *.env
+.env.local
+.env.*
 *.tfvars
 *.tfstate
 *.tfstate.backup
