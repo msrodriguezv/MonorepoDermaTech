@@ -22,4 +22,11 @@ export class RedisCacheAdapter implements CacheServicePort {
     
     this.logger.log(`[Cache] Key added to blacklist: ${key.substring(0, 15)}... (TTL: ${ttl}s)`);
   }
+
+  async isBlacklisted(key: string): Promise<boolean> {
+    // We check if the key exists in Redis.
+    // ioredis .get() returns null if the key does not exist.
+    const result = await this.redisClient.get(key);
+    return result !== null;
+  }
 }
