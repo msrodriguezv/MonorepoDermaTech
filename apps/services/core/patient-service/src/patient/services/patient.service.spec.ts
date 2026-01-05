@@ -4,13 +4,12 @@ import { Repository } from 'typeorm';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { PatientService } from './patient.service';
 import { Patient } from '../entities/patient.entity';
-// FIXED: Removed extra dot at the end
 import { UpdateProfileDto } from '../dto/update-profile.dto.';
 
 /**
  * Unit Tests for PatientService
  * * Requirement #8: Unit Testing.
- * * Goal: Validate business logic in isolation without connecting to the real DB.
+ * * Goal: Validate business logic in isolation using mocked TypeORM methods.
  */
 describe('PatientService', () => {
   let service: PatientService;
@@ -31,9 +30,10 @@ describe('PatientService', () => {
   } as Patient;
 
   // Mock Repository Factory
-  // We mock only the TypeORM methods used in the Service
+  // Added 'findOneBy' which is used in the service implementation
   const mockPatientRepository = {
     findOne: jest.fn(),
+    findOneBy: jest.fn(), // <--- ESTO FALTABA
     create: jest.fn(),
     save: jest.fn(),
     find: jest.fn(),
@@ -68,8 +68,9 @@ describe('PatientService', () => {
   // ===========================================================================
   describe('createRootPatient', () => {
     it('should create a new patient if one does not exist', async () => {
-      // Arrange: Repo cannot find existing user
-      mockPatientRepository.findOne.mockResolvedValue(null);
+      // Arrange: Repo cannot find existing user via findOneBy
+      // Mocking findOneBy instead of findOne
+      mockPatientRepository.findOneBy.mockResolvedValue(null);
       mockPatientRepository.create.mockReturnValue(mockPatientEntity);
       mockPatientRepository.save.mockResolvedValue(mockPatientEntity);
 
@@ -77,7 +78,8 @@ describe('PatientService', () => {
       await service.createRootPatient(mockUserId, mockEmail);
 
       // Assert
-      expect(repository.findOne).toHaveBeenCalledWith({ where: { userId: mockUserId } });
+      // Checking findOneBy
+      expect(repository.findOneBy).toHaveBeenCalledWith({ userId: mockUserId });
       expect(repository.create).toHaveBeenCalledWith({
         userId: mockUserId,
         email: mockEmail,
@@ -89,7 +91,8 @@ describe('PatientService', () => {
 
     it('should NOT create a patient if one already exists (Idempotency)', async () => {
       // Arrange: Repo finds an existing user
-      mockPatientRepository.findOne.mockResolvedValue(mockPatientEntity);
+      // Mocking findOneBy
+      mockPatientRepository.findOneBy.mockResolvedValue(mockPatientEntity);
 
       // Act
       await service.createRootPatient(mockUserId, mockEmail);
@@ -100,13 +103,14 @@ describe('PatientService', () => {
     });
 
     it('should throw BadRequestException if DB throws unique violation (code 23505)', async () => {
-      // Arrange: Simulate that it does NOT exist previously
-      mockPatientRepository.findOne.mockResolvedValue(null);
+      // Arrange
+      // Mocking findOneBy
+      mockPatientRepository.findOneBy.mockResolvedValue(null);
+      mockPatientRepository.create.mockReturnValue(mockPatientEntity);
       // Simulate that when trying to save, the DB fails with code 23505
       mockPatientRepository.save.mockRejectedValue({ code: '23505' });
-      mockPatientRepository.create.mockReturnValue(mockPatientEntity);
 
-      // Act & Assert: Verify that the service catches the error and throws BadRequestException
+      // Act & Assert
       await expect(service.createRootPatient(mockUserId, mockEmail))
         .rejects
         .toThrow(BadRequestException); 
@@ -128,15 +132,15 @@ describe('PatientService', () => {
 
     it('should update and return the patient when found', async () => {
       // Arrange
-      // First call (findByUserId) returns the entity
-      mockPatientRepository.findOne.mockResolvedValue({ ...mockPatientEntity, medicalInfo: {} });
-      // Second call (save) returns the updated entity
+      // findByUserId uses findOneBy internally
+      mockPatientRepository.findOneBy.mockResolvedValue({ ...mockPatientEntity, medicalInfo: {} });
       mockPatientRepository.save.mockImplementation((patient) => Promise.resolve(patient));
 
       // Act
       const result = await service.updateProfile(mockUserId, updateDto);
 
       // Assert
+      expect(repository.findOneBy).toHaveBeenCalledWith({ userId: mockUserId });
       expect(result.firstName).toBe(updateDto.firstName);
       expect(result.isProfileComplete).toBe(true);
       expect(result.medicalInfo.bloodType).toBe('O+');
@@ -145,7 +149,8 @@ describe('PatientService', () => {
 
     it('should throw NotFoundException if patient does not exist', async () => {
       // Arrange
-      mockPatientRepository.findOne.mockResolvedValue(null);
+      // Mocking findOneBy
+      mockPatientRepository.findOneBy.mockResolvedValue(null);
 
       // Act & Assert
       await expect(service.updateProfile(mockUserId, updateDto)).rejects.toThrow(NotFoundException);
@@ -168,17 +173,21 @@ describe('PatientService', () => {
 
   describe('remove', () => {
     it('should delete a patient if found', async () => {
-      mockPatientRepository.findOne.mockResolvedValue(mockPatientEntity);
+      // findOne usually implies finding by ID, verify if your service uses findOneBy({ id })
+      // Based on logs, it uses findOneBy
+      mockPatientRepository.findOneBy.mockResolvedValue(mockPatientEntity);
       mockPatientRepository.remove.mockResolvedValue(mockPatientEntity);
 
       const result = await service.remove(mockPatientEntity.id);
       
+      expect(repository.findOneBy).toHaveBeenCalledWith({ id: mockPatientEntity.id });
       expect(repository.remove).toHaveBeenCalledWith(mockPatientEntity);
       expect(result).toEqual({ message: 'Patient deleted successfully' });
     });
 
     it('should throw NotFoundException if trying to delete non-existent patient', async () => {
-      mockPatientRepository.findOne.mockResolvedValue(null);
+      //  Mocking findOneBy
+      mockPatientRepository.findOneBy.mockResolvedValue(null);
 
       await expect(service.remove('bad-id')).rejects.toThrow(NotFoundException);
     });
