@@ -3,7 +3,7 @@
 # AWS Provider Configuration
 provider "aws" {
   region  = "us-east-1"
-  profile = "qa-dermatech" # MUST match your local AWS credentials profile
+  profile = "qa-dermatech" # PERFIL REAL: NO CAMBIAR
 }
 
 # Local variables for this environment
@@ -16,26 +16,36 @@ locals {
 
 # --- Module Calls ---
 
-# 1. Create Networking for QA
+# 1. Create Networking for QA (Ahora con Zona B)
 module "networking" {
   source = "../../modules/aws-networking"
 
-  region             = "us-east-1"
+  region             = "us-east-1"         # Mantenemos la región base
   project_name       = local.project_name
   environment        = local.environment
-  vpc_cidr           = "10.0.0.0/16" # Specific CIDR for QA
+  
+  # Zona A (EXISTENTE - NO TOCAR EL CIDR)
+  vpc_cidr           = "10.0.0.0/16" 
   public_subnet_cidr = "10.0.1.0/24"
+
+  # Zona B (NUEVA - Agregamos un rango nuevo dentro de la VPC)
+  public_subnet_cidr_b = "10.0.2.0/24"
 }
 
-# 2. Create Gateway and Static IP for QA
+# 2. Create Gateway and Nodes for QA
 module "gateway" {
   source = "../../modules/aws-load-balancer"
 
-  project_name     = local.project_name
-  environment      = local.environment
-  vpc_id           = module.networking.vpc_id
-  public_subnet_id = module.networking.public_subnet_id
-  ami_id           = local.ami_id_us_east_1
+  project_name       = local.project_name
+  environment        = local.environment
+  vpc_id             = module.networking.vpc_id
+  ami_id             = local.ami_id_us_east_1
+  
+  # Zona A (EXISTENTE - Aquí vive la Elastic IP)
+  public_subnet_id   = module.networking.public_subnet_id
+
+  # Zona B (NUEVA - Aquí vivirá el nodo de respaldo sin IP fija)
+  public_subnet_id_b = module.networking.public_subnet_id_b
 }
 
 # --- Final Output ---

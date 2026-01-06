@@ -1,7 +1,8 @@
 version: '3.8'
 
 services:
-  # --- REDIS (Required by Auth) ---
+  # --- REDIS ---
+  # Estimated consumption: Very low (~50MB idle)
   redis:
     image: redis:alpine
     container_name: dermatech_redis
@@ -9,16 +10,46 @@ services:
       - "6379:6379"
     networks:
       - dev_network
+    # --- RESOURCE OPTIMIZATION ---
+    deploy:
+      resources:
+        limits:
+          memory: 128M  # Enough for sessions and simple caching
+        reservations:
+          memory: 64M
+    # Log rotation to prevent disk filling
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  # --- KAFKA & ZOOKEEPER (Required by BOTH) ---
+  # --- ZOOKEEPER ---
+  # Estimated consumption: Moderate (Java based)
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: dermatech_zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      # CRITICAL: Limit internal Java Heap memory
+      KAFKA_OPTS: "-Xmx256M -Xms256M"
     networks:
       - dev_network
+    deploy:
+      resources:
+        limits:
+          memory: 350M # Slightly more than Heap for OS overhead
+        reservations:
+          memory: 200M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+  # --- KAFKA ---
+  # Estimated consumption: HIGH (The heaviest service)
   kafka:
     image: confluentinc/cp-kafka:7.5.0
     container_name: dermatech_kafka
@@ -29,31 +60,58 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      # Perfect configuration to work with NX SERVE
+      # Hybrid Network Configuration (Internal & External access)
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # --- CRITICAL JAVA OPTIMIZATION ---
+      # Forces Kafka to use only 400MB of RAM for the Heap.
+      # Without this, it will try to grab 1GB+ and crash the t3.medium instance.
+      KAFKA_HEAP_OPTS: "-Xmx400M -Xms400M"
     networks:
       - dev_network
+    deploy:
+      resources:
+        limits:
+          memory: 768M  # Strict limit to protect the server
+        reservations:
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  # --- MINIO (Required by Patient) ---
+  # --- MINIO ---
+  # Estimated consumption: Medium (Go based)
   minio:
     image: minio/minio:latest
     container_name: dermatech_minio
     ports:
       # NOTE: We map external port 9001 to internal 9000 (API)
-      # This matches your .env AWS_ENDPOINT=http://localhost:9001
       - "9001:9000"
-      - "9002:9001" # Console on 9002
+      - "9002:9001" # Console Web UI
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     command: server /data --console-address ":9001"
     networks:
       - dev_network
+    deploy:
+      resources:
+        limits:
+          memory: 512M  # Generous for file operations
+        reservations:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  # Script to create bucket automatically
+  # --- CREATE BUCKETS SCRIPT ---
+  # Ephemeral container (Runs and dies)
   createbuckets:
     image: minio/mc:latest
     depends_on:
@@ -67,6 +125,14 @@ services:
       "
     networks:
       - dev_network
+    deploy:
+      resources:
+        limits:
+          memory: 64M # Minimal requirement
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
 
 networks:
   dev_network:
