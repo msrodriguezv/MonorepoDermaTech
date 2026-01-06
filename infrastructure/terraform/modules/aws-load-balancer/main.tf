@@ -40,7 +40,7 @@ resource "aws_security_group" "gateway_sg" {
 # We use t3.micro (cost-effective for Academy accounts)
 resource "aws_instance" "gateway" {
   ami                    = var.ami_id
-  instance_type          = "t3.micro"
+  instance_type          = "t3.medium"
   subnet_id              = var.public_subnet_id
   vpc_security_group_ids = [aws_security_group.gateway_sg.id]
 
@@ -75,6 +75,28 @@ resource "aws_eip_association" "eip_assoc" {
   allocation_id = aws_eip.gateway_eip.id
 }
 
+# 5. EC2 Instance B (Worker Node - NEW)
+# Use Dinamic IP public
+resource "aws_instance" "node_b" {
+  ami                    = var.ami_id
+  instance_type          = "t3.medium"
+  subnet_id              = var.public_subnet_id_b 
+  vpc_security_group_ids = [aws_security_group.gateway_sg.id]
+
+  user_data = <<-EOF
+              #!/bin/bash
+              dnf update -y
+              dnf install -y docker
+              systemctl start docker
+              systemctl enable docker
+              usermod -aG docker ec2-user
+              EOF
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-node-b"
+  }
+}
+
 # --- OUTPUTS ---
 output "final_public_ip" {
   value       = aws_eip.gateway_eip.public_ip
@@ -84,4 +106,10 @@ output "final_public_ip" {
 output "final_public_dns" {
   value       = aws_instance.gateway.public_dns
   description = "The Public DNS name assigned to the instance (standard AWS DNS)"
+}
+
+# Agrega el DNS del nodo B por si acaso
+output "node_b_dns" {
+  value = aws_instance.node_b.public_dns
+   description = "The Public DNS name assigned to the instance (standard AWS DNS)"
 }

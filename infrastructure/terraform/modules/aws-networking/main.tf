@@ -53,6 +53,24 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
+# 6. Public Subnet Zone B (NEW)
+resource "aws_subnet" "public_b" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = var.public_subnet_cidr_b
+  map_public_ip_on_launch = true
+  availability_zone       = "${var.region}b" # <--- ZONA B (us-east-1b)
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-public-subnet-b"
+  }
+}
+
+# 7. Route Table Association for Zone B
+resource "aws_route_table_association" "public_b" {
+  subnet_id      = aws_subnet.public_b.id
+  route_table_id = aws_route_table.public.id # Usamos la misma tabla de rutas
+}
+
 # --- OUTPUTS ---
 output "vpc_id" {
   value       = aws_vpc.main.id
@@ -62,4 +80,9 @@ output "vpc_id" {
 output "public_subnet_id" {
   value       = aws_subnet.public.id
   description = "The ID of the public subnet"
+}
+
+output "public_subnet_id_b" {
+  value = aws_subnet.public_b.id
+  description = "The ID of the public subnet B"
 }

@@ -24,3 +24,9 @@ variable "public_subnet_cidr" {
   description = "CIDR block for the public subnet"
   type        = string
 }
+
+variable "public_subnet_cidr_b" {
+  description = "CIDR block for the public subnet in Zone B"
+  type        = string
+  default     = "" # Lo dejaremos vacío por defecto y lo llenaremos en el environment
+}

@@ -24,3 +24,8 @@ variable "ami_id" {
   description = "AMI ID for the EC2 instance"
   type        = string
 }
+
+variable "public_subnet_id_b" {
+  description = "Public Subnet ID for the Node B"
+  type        = string
+}
