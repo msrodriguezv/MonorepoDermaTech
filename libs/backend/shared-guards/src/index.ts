@@ -5,3 +5,4 @@ export * from './modules/shared-auth.module';
 export * from './guards/roles.guard';
 export * from './decorators/roles.decorator';
 export * from './decorators/user.decorator';
+export * from './ports/cache-service.port';
