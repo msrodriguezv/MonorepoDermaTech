@@ -31,6 +31,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         throw new UnauthorizedException('Invalid token: Subject (sub) is missing.');
     }
 
+    this.logger.log(`🔍 JWT Payload Decoded: ${JSON.stringify(payload)}`);
+
     return { 
         sub: payload.sub,      
         userId: payload.sub,   
