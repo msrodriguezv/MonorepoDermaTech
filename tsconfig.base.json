@@ -17,7 +17,8 @@
     "paths": {
       "@dermatech/shared-dtos": ["libs/backend/shared-dtos/src/index.ts"],
       "@dermatech/event-contracts": ["libs/backend/event-contracts/src/index.ts"],
-      "@dermatech/shared-guards": ["libs/backend/shared-guards/src/index.ts"]
+      "@dermatech/shared-guards": ["libs/backend/shared-guards/src/index.ts"],
+      "@dermatech/shared-infras": ["libs/backend/shared-infras/src/index.ts"]
     }
   },
   "exclude": ["node_modules", "tmp"]

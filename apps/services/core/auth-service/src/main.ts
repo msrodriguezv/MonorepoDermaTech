@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { AppModule } from './app.module'; // Ensure this points to your root App module
+import { AppModule } from './app.module';
 
 async function bootstrap() {
   const logger = new Logger('AuthService');
@@ -52,6 +52,7 @@ async function bootstrap() {
     .setDescription('Microservice responsible for Authentication, Authorization and Identity Management.')
     .setVersion('1.0')
     .addTag('auth')
+    .addBearerAuth()
     .build();
   
   const document = SwaggerModule.createDocument(app, config);

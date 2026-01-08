@@ -7,7 +7,7 @@ import { UserRole } from '@dermatech/shared-dtos';
 // Import Commands and Queries used in the controller
 import { UpdateProfileCommand } from '../cqrs/commands/impl/update-profile.command';
 import { GetPatientProfileQuery } from '../cqrs/queries/impl/get-patient-profile.query';
-import { UpdateProfileDto } from '../dto/update-profile.dto.'; // Adjust path if necessary (removed extra dot if typo)
+import { UpdateProfileDto } from '../dto/update-profile.dto'; // Adjust path if necessary (removed extra dot if typo)
 
 describe('PatientController', () => {
   let controller: PatientController;

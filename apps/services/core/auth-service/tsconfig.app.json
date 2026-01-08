@@ -9,7 +9,7 @@
     "target": "es2021",
     "moduleResolution": "node"
   },
-  "include": ["src/**/*.ts", "../../../../libs/backend/shared-dtos/src/lib/auth/token-response.dto.ts", "../../../../libs/backend/shared-dtos/src/lib/auth/login.request.dto.ts", "../../../../libs/backend/shared-dtos/src/lib/auth/user-response.dto.ts", "../../../../libs/backend/shared-dtos/src/lib/auth/register-user.dto.ts"],
+  "include": ["src/**/*.ts", "../../../../libs/backend/shared-dtos/src/lib/auth/token-response.dto.ts", "../../../../libs/backend/shared-dtos/src/lib/auth/login.request.dto.ts", "../../../../libs/backend/shared-dtos/src/lib/auth/user-response.dto.ts", "../../../../libs/backend/shared-dtos/src/lib/auth/register-user.dto.ts", "../../../../libs/backend/shared-infra/src/adapters/redis-cache.adapter.ts"],
   "exclude": [
     "jest.config.ts",
     "jest.config.cts",

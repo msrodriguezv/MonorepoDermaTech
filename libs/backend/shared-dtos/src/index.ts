@@ -7,3 +7,4 @@ export * from './lib/auth/token-response.dto';
 export * from './lib/auth/login.request.dto';
 export * from './lib/auth/register-user.dto';
 export * from './lib/auth/user-response.dto';
+export * from './lib/auth/request/refresh-token.dto';

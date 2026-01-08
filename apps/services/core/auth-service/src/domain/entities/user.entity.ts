@@ -53,7 +53,8 @@ export class User {
 
   public getUpdatedAt(): Date { return this.updatedAt; }
 
-  // Getter for persistence usage only (Infrastructure layer)
+  public getRefreshTokenHash(): string | null | undefined { return this.currentRefreshTokenHash; }
+
   public getCurrentRefreshTokenHash(): string | null | undefined {
     return this.currentRefreshTokenHash;
   }

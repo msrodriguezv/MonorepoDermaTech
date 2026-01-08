@@ -1,13 +1,15 @@
-// apps/services/core/auth-service/src/application/ports/user.repository.port.ts
-
 import { User } from '../../domain/entities/user.entity';
 
-/**
- * Output Port: Defines the interface for user persistence.
- * Implemented by the Infrastructure layer.
- */
 export interface UserRepositoryPort {
   save(user: User): Promise<User>;
   findByEmail(email: string): Promise<User | null>;
   findById(id: string): Promise<User | null>;
+  
+  /**
+   * Updates the refresh token for a specific user.
+   * Used for Token Rotation and Logout processes.
+   * @param id The User ID (UUID).
+   * @param refreshToken The new hashed token or null to revoke access.
+   */
+  updateRefreshToken(id: string, refreshToken: string | null): Promise<void>;
 }

@@ -17,7 +17,8 @@ import { TokenServicePort } from '../../ports/token.service.port';
 
 /**
  * Application Service (Handler) responsible for User Authentication.
- * Implements the logic for validating credentials, issuing JWTs, and enforcing Token Rotation.
+ * Implements the logic for validatin
+ * g credentials, issuing JWTs, and enforcing Token Rotation.
  */
 @CommandHandler(LoginCommand)
 export class LoginHandler implements ICommandHandler<LoginCommand> {
