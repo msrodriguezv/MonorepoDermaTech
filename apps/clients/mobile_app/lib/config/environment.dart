@@ -1,6 +1,7 @@
 class Environment {
-  static const String apiUrl = String.fromEnvironment(
-    'API_URL',
-    defaultValue: 'http://localhost:3000',
-  );
+  /// Base URL for the API Gateway.
+  /// 
+  /// FOR LOCAL DOCKER TESTING ON ANDROID EMULATOR:
+  /// use 'http://10.0.2.2:YOUR_PORT'
+  static const String apiUrl = 'http://10.0.2.2:3000'; 
 }
