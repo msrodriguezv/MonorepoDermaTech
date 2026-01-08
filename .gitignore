@@ -50,3 +50,4 @@ Thumbs.db
 *.tfstate
 *.tfstate.backup
 .terraform/
+redis_data/

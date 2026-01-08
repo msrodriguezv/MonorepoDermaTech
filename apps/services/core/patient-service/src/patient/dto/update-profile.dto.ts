@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsArray, IsDateString, IsUrl } from 'class-validator';
+import { IsInt, Min, IsString, IsNotEmpty, IsOptional, IsArray, IsDateString, IsUrl } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 /**
@@ -42,6 +42,22 @@ export class UpdateProfileDto {
   @IsString()
   @IsNotEmpty()
   phone: string;
+
+  @ApiProperty({ description: 'Faculty name', example: 'Facultad de Ingeniería' })
+  @IsString()
+  @IsOptional()
+  faculty?: string;
+
+  @ApiProperty({ description: 'Career/Major', example: 'Ingeniería de Software' })
+  @IsString()
+  @IsOptional()
+  career?: string;
+
+  @ApiProperty({ description: 'Current Semester', example: 5 })
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  current_semester?: number;
 
   @ApiProperty({ 
     example: 'https://my-bucket.s3.amazonaws.com/avatar.jpg', 

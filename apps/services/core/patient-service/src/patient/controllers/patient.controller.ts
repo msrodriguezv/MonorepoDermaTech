@@ -11,7 +11,7 @@ import { Roles, User } from '@dermatech/shared-guards';
 import { UserRole, JwtPayload } from '@dermatech/shared-dtos';
 
 // Local Domain Imports
-import { UpdateProfileDto } from '../dto/update-profile.dto.';
+import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { UpdateProfileCommand } from '../cqrs/commands/impl/update-profile.command';
 import { GetPatientProfileQuery } from '../cqrs/queries/impl/get-patient-profile.query';
 import { Patient } from '../entities/patient.entity';

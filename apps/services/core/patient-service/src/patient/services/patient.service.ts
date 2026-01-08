@@ -2,7 +2,7 @@ import { Injectable, Logger, NotFoundException, BadRequestException, InternalSer
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Patient, MedicalInfo } from '../entities/patient.entity';
-import { UpdateProfileDto } from '../dto/update-profile.dto.'; // FIXED: Removed trailing dot
+import { UpdateProfileDto } from '../dto/update-profile.dto'; 
 
 /**
  * PatientService (Production Ready)
@@ -31,7 +31,6 @@ export class PatientService {
    */
   async createRootPatient(userId: string, email: string): Promise<void> {
     // 1. Idempotency Check: Prevent duplicate profiles
-    // We use 'userId' assuming it is mapped as a column in your Entity.
     const existing = await this.patientRepository.findOneBy({ userId });
     
     if (existing) {
@@ -42,7 +41,7 @@ export class PatientService {
     try {
       // 2. Entity Creation
       const newPatient = this.patientRepository.create({
-        userId, // Mapping Auth ID to Patient Record
+        userId, 
         email,
         isProfileComplete: false,
         medicalInfo: {} // Initialize as empty JSON object (Postgres JSONB)
@@ -52,7 +51,7 @@ export class PatientService {
       await this.patientRepository.save(newPatient);
 
       // 4. Success Log (Audit)
-      this.logger.log(`✅ Root patient created via Event for: ${email} (ID: ${userId})`);
+      this.logger.log(`Root patient created via Event for: ${email} (ID: ${userId})`);
       
     } catch (error) {
       this.handleDBExceptions(error);
@@ -68,27 +67,37 @@ export class PatientService {
    * Performs strict mapping from DTO to Entity/JSONB fields to prevent over-posting.
    */
   async updateProfile(userId: string, dto: UpdateProfileDto): Promise<Patient> {
-    const patient = await this.findByUserId(userId); // Reuses helper method
+    const patient = await this.findByUserId(userId); 
 
-    // Map Standard Fields
-    patient.firstName = dto.firstName;
-    patient.lastName = dto.lastName;
-    patient.phone = dto.phone;
-    patient.birthDate = new Date(dto.birthDate); // String -> Date conversion
+    // --- 1. Map Standard Personal Fields ---
+    // We use '??' to keep existing data if the DTO field is undefined (partial update)
+    patient.firstName = dto.firstName ?? patient.firstName;
+    patient.lastName = dto.lastName ?? patient.lastName;
+    patient.phone = dto.phone ?? patient.phone;
+    
+    if (dto.birthDate) {
+        patient.birthDate = new Date(dto.birthDate); 
+    }
 
-    // Optional Fields
-    if (dto.avatarUrl) patient.avatarUrl = dto.avatarUrl;
-    if (dto.insuranceProvider) patient.insuranceProvider = dto.insuranceProvider;
+    // --- 2. Map Academic Fields (NEW) ---
+    patient.faculty = dto.faculty ?? patient.faculty;
+    patient.career = dto.career ?? patient.career;
+    patient.current_semester = dto.current_semester ?? patient.current_semester;
+    // Note: student_code excluded as per requirements.
 
-    // Map JSONB Fields (Medical Info) with strict typing
+    // --- 3. Optional Fields ---
+    patient.avatarUrl = dto.avatarUrl ?? patient.avatarUrl;
+    patient.insuranceProvider = dto.insuranceProvider ?? patient.insuranceProvider;
+
+    // --- 4. Map JSONB Fields (Medical Info) ---
     // We merge current info with new info to avoid data loss
     const currentInfo = patient.medicalInfo || {};
     
     const updatedMedicalInfo: MedicalInfo = {
       ...currentInfo,
-      bloodType: dto.bloodType,
-      allergies: dto.allergies ?? [], // Nullish coalescing to ensure array type
-      chronicConditions: dto.chronicConditions ?? []
+      bloodType: dto.bloodType ?? currentInfo.bloodType, // Update or keep existing
+      allergies: dto.allergies ?? currentInfo.allergies ?? [], 
+      chronicConditions: dto.chronicConditions ?? currentInfo.chronicConditions ?? []
     };
     
     patient.medicalInfo = updatedMedicalInfo;
@@ -159,7 +168,6 @@ export class PatientService {
   private handleDBExceptions(error: unknown): never {
     this.logger.error('Database Error', error);
     
-    // Type assertion to access Postgres error code safely
     const dbError = error as { code?: string; message?: string };
 
     // Postgres Error Code 23505: Unique Violation
