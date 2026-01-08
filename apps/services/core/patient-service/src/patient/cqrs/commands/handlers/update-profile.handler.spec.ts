@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { UpdateProfileHandler } from './update-profile.handler';
 import { PatientService } from '../../../services/patient.service';
 import { UpdateProfileCommand } from '../impl/update-profile.command';
-import { UpdateProfileDto } from '../../../dto/update-profile.dto.';
+import { UpdateProfileDto } from '../../../dto/update-profile.dto';
 
 /**
  * Unit Test: UpdateProfileHandler

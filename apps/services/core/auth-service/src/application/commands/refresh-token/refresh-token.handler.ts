@@ -1,15 +1,12 @@
 import { CommandHandler, ICommandHandler } from '@nestjs/cqrs';
-import { JwtService } from '@nestjs/jwt';
-import { UnauthorizedException, Logger } from '@nestjs/common';
+import { JwtService, JwtSignOptions } from '@nestjs/jwt';
+import { UnauthorizedException, Logger, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TokenResponseDto, JwtPayload } from '@dermatech/shared-dtos';
 import { RefreshTokenCommand } from './refresh-token.command';
+import { UserRepositoryPort } from '../../ports/user.repository.port';
+import { CryptoServicePort } from '../../ports/crypto.service.port';
 
-/**
- * Handler: RefreshTokenHandler
- * Responsibility: Validates a Refresh Token and issues a new Access Token.
- * Security: Verifies signature and ensures strict type safety.
- */
 @CommandHandler(RefreshTokenCommand)
 export class RefreshTokenHandler implements ICommandHandler<RefreshTokenCommand> {
   private readonly logger = new Logger(RefreshTokenHandler.name);
@@ -17,71 +14,98 @@ export class RefreshTokenHandler implements ICommandHandler<RefreshTokenCommand>
   constructor(
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    @Inject('UserRepositoryPort') private readonly userRepository: UserRepositoryPort,
+    @Inject('CryptoServicePort') private readonly cryptoService: CryptoServicePort,
   ) {}
 
   async execute(command: RefreshTokenCommand): Promise<TokenResponseDto> {
     const { refreshToken } = command;
 
-    /**
-     * Retrieve JWT secret from environment configuration.
-     * Fail fast if secret is not configured to prevent runtime security issues.
-     */
     const refreshSecret = this.configService.get<string>('JWT_REFRESH_SECRET');
     const jwtSecret = this.configService.get<string>('JWT_SECRET');
-    if (!refreshSecret && !jwtSecret) {
-        throw new Error('FATAL: JWT_SECRET is not defined in environment variables.');
+    
+    if (!refreshSecret || !jwtSecret) {
+        throw new Error('Internal Configuration Error: JWT Secrets missing');
     }
 
-    const secretToVerify = refreshSecret || jwtSecret;
-
     try {
-      /**
-       * Verify the refresh token's cryptographic signature and expiration.
-       * This throws an error if the token is invalid, expired, or tampered with.
-       * The generic type <JwtPayload> ensures type safety for the decoded payload.
-       */
+      // 1. Verify incoming token
       const payload = await this.jwtService.verifyAsync<JwtPayload>(refreshToken, {
-        secret: secretToVerify,
+        secret: refreshSecret,
       });
 
-      /**
-       * Construct a new payload for the access token.
-       * We only include claims that are necessary for authorization.
-       * This follows the principle of least privilege for JWT claims.
-       */
-      const newPayload = {
+      // -----------------------------------------------------------------------
+      // CRITICAL: Stateful Database Check (Logout & Reuse Protection)
+      // -----------------------------------------------------------------------
+      
+      // A. Retrieve user from DB
+      const user = await this.userRepository.findById(payload.sub);
+      
+      // B. Check if user exists AND has a valid refresh token stored
+      // If 'currentRefreshTokenHash' is NULL, it means the user Logged Out.
+      if (!user || !user.getCurrentRefreshTokenHash()) {
+          this.logger.warn(`Refresh attempt blocked: User logged out or revoked. UserID: ${payload.sub}`);
+          throw new UnauthorizedException('Session expired or revoked. Please login again.');
+      }
+
+      // C. Validate Token Ownership (Hash Comparison)
+      // We check if the incoming token matches the one currently stored in DB.
+      // If they don't match, it means the token is old (Reuse Attempt) or stolen.
+      const isMatch = await this.cryptoService.compare(refreshToken, user.getRefreshTokenHash());
+      
+      if (!isMatch) {
+          this.logger.warn(`Token Reuse Detected! Possible theft attempt for UserID: ${payload.sub}`);
+          // In a high-security environment, you might want to revoke ALL tokens for this user here.
+          throw new UnauthorizedException('Invalid refresh token.');
+      }
+
+      // 2. Prepare payload (Plain Object)
+      const userPayload = {
         sub: payload.sub,
         email: payload.email,
         role: payload.role,
       };
 
-      /**
-       * Retrieve token expiration configuration with a safe default fallback.
-       * The nullish coalescing operator (??) ensures we always have a valid value.
-       */
-      const expiresInConfig = this.configService.get<string>('JWT_EXPIRES_IN') ?? '15m';
+      // 3. Get Expiration Config
+      const accessExpiresIn = this.configService.get<string>('JWT_EXPIRES_IN') ?? '1h';
+      const refreshExpiresIn = this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '7d';
 
-      /**
-       * Type assertion using Parameters utility type to resolve TypeScript's overload ambiguity.
-       * signAsync has multiple overloads; this forces the compiler to select the object-based signature.
-       * Parameters<JwtService['signAsync']>[1] extracts the type of the second parameter.
-       */
+      // 4. Generate NEW Access Token
+      // CLEAN CODE FIX: Use 'Record<string, unknown>' instead of 'any'.
+      // This explicitly tells TS that 'userPayload' is a valid object structure for JWT signing.
       const newAccessToken = await this.jwtService.signAsync(
-        newPayload as Record<string, unknown>,
+        userPayload as Record<string, unknown>, 
         {
           secret: jwtSecret,
-          expiresIn: expiresInConfig,
-        } as Parameters<JwtService['signAsync']>[1]
+          expiresIn: accessExpiresIn,
+        } as JwtSignOptions
       );
 
-      /**
-       * Return the new access token while preserving the original refresh token.
-       * The refresh token is reused until it expires or is explicitly revoked.
-       */
+      // 5. Generate NEW Refresh Token
+      const newRefreshToken = await this.jwtService.signAsync(
+        userPayload as Record<string, unknown>, 
+        {
+          secret: refreshSecret,
+          expiresIn: refreshExpiresIn,
+        } as JwtSignOptions
+      );
+
+      // 6. Hash & Save
+      const hashedRefreshToken = await this.cryptoService.hash(newRefreshToken);
+
+      if (payload.sub) {
+          await this.userRepository.updateRefreshToken(payload.sub, hashedRefreshToken);
+      } else {
+          throw new UnauthorizedException('Invalid token payload: missing subject');
+      }
+
+      // 7. Calculate response time
+      const expiresInMs = this.parseExpirationToMs(accessExpiresIn);
+
       return {
         accessToken: newAccessToken,
-        refreshToken: refreshToken,
-        expiresIn: 900,
+        refreshToken: newRefreshToken,
+        expiresIn: expiresInMs,
         user: {
           id: payload.sub,
           email: payload.email,
@@ -90,23 +114,21 @@ export class RefreshTokenHandler implements ICommandHandler<RefreshTokenCommand>
       };
 
     } catch (error: unknown) {
-      /**
-       * Type-safe error handling using type narrowing.
-       * We check if the error is an Error instance before accessing its message property.
-       */
-      const errorMessage = error instanceof Error ? error.message : 'Unknown signature error';
-      
-      /**
-       * Log the failure for security monitoring while avoiding logging the full token.
-       * Only the last 5 characters are logged to aid debugging without exposing secrets.
-       */
-      this.logger.warn(`Refresh token failed for token ending in ...${refreshToken.slice(-5)}: ${errorMessage}`);
-      
-      /**
-       * Throw a generic UnauthorizedException to avoid leaking implementation details.
-       * Specific error messages could be exploited by attackers to probe the system.
-       */
-      throw new UnauthorizedException('Invalid or expired refresh token. Please login again.');
+      const msg = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.warn(`Rotation failed: ${msg}`);
+      throw new UnauthorizedException('Invalid or expired refresh token');
     }
+  }
+
+  private parseExpirationToMs(timeString: string): number {
+    const value = parseInt(timeString.replace(/\D/g, ''), 10);
+    if (isNaN(value)) return 3600000; 
+
+    if (timeString.endsWith('s')) return value * 1000;
+    if (timeString.endsWith('m')) return value * 60 * 1000;
+    if (timeString.endsWith('h')) return value * 60 * 60 * 1000;
+    if (timeString.endsWith('d')) return value * 24 * 60 * 60 * 1000;
+
+    return value; 
   }
 }

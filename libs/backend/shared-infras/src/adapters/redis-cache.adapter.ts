@@ -1,11 +1,11 @@
+// apps/services/core/auth-service/src/infrastructure/adapters/redis-cache.adapter.ts
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { Redis } from 'ioredis';
-import { CacheServicePort } from '../../application/ports/cache-service.port';
+import { CacheServicePort } from '../ports/cache-service.port';
 
 /**
  * Adapter: RedisCacheAdapter
  * * Layer: Infrastructure
- * * Responsibility: Concrete implementation of CacheServicePort using Redis.
  */
 @Injectable()
 export class RedisCacheAdapter implements CacheServicePort {
@@ -17,16 +17,13 @@ export class RedisCacheAdapter implements CacheServicePort {
 
   async setBlacklist(key: string, ttl: number): Promise<void> {
     // Redis 'SET' command with 'EX' (Expiration in seconds)
-    // We store a simple string 'true' as the value, the importance is the Key existence.
     await this.redisClient.set(key, 'true', 'EX', ttl);
-    
     this.logger.log(`[Cache] Key added to blacklist: ${key.substring(0, 15)}... (TTL: ${ttl}s)`);
   }
 
   async isBlacklisted(key: string): Promise<boolean> {
-    // We check if the key exists in Redis.
-    // ioredis .get() returns null if the key does not exist.
-    const result = await this.redisClient.get(key);
-    return result !== null;
+    // Redis 'EXISTS' returns 1 if exists, 0 otherwise.
+    const exists = await this.redisClient.exists(key);
+    return exists === 1;
   }
 }

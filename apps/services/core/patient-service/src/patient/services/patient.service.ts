@@ -2,7 +2,7 @@ import { Injectable, Logger, NotFoundException, BadRequestException, InternalSer
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Patient, MedicalInfo } from '../entities/patient.entity';
-import { UpdateProfileDto } from '../dto/update-profile.dto.'; 
+import { UpdateProfileDto } from '../dto/update-profile.dto'; 
 
 /**
  * PatientService (Production Ready)

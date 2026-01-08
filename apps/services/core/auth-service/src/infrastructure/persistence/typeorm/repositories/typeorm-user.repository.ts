@@ -45,4 +45,17 @@ export class TypeOrmUserRepository implements UserRepositoryPort {
     if (!foundEntity) return null;
     return UserMapper.toDomain(foundEntity);
   }
+
+  /**
+   * Updates the 'current_refresh_token' column in the database.
+   * This method bypasses the Domain Entity for performance and simplicity
+   * during authentication flows (Rotation/Logout).
+   */
+  async updateRefreshToken(id: string, refreshToken: string | null): Promise<void> {
+    // We assume the UserSchema has a property mapped to 'current_refresh_token'.
+    // Usually defined as @Column({ name: 'current_refresh_token', nullable: true })
+    await this.repository.update(id, { 
+      currentRefreshTokenHash: refreshToken 
+    });
+  }
 }

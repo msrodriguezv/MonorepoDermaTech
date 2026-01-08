@@ -1,13 +1,24 @@
-import { Body, Controller, Post, HttpStatus, HttpCode } from '@nestjs/common';
+import { 
+  Controller, 
+  Post, 
+  Body,
+  Headers, 
+  UseGuards, 
+  HttpStatus, 
+  HttpCode 
+} from '@nestjs/common';
 import { CommandBus } from '@nestjs/cqrs';
 import { 
   ApiTags, 
-  ApiOperation, 
-  ApiResponse as SwaggerApiResponse, 
+  ApiOperation,
+  ApiBearerAuth,
+  ApiResponse as SwaggerApiResponse,
   ApiBadRequestResponse, 
   ApiConflictResponse, 
-  ApiUnauthorizedResponse 
+  ApiUnauthorizedResponse
 } from '@nestjs/swagger';
+import { JwtAuthGuard } from '@dermatech/shared-guards';
+import { LogoutCommand } from '../../../application/commands/logout/logout.command';
 
 // Shared Libs (Standardized Response Wrapper)
 import { ApiResponse } from '@dermatech/shared-dtos';
@@ -19,6 +30,10 @@ import { User } from '../../../domain/entities/user.entity';
 import { RegisterUserCommand } from '../../../application/commands/register-user/register-user.command';
 import { RegisterUserDto } from '@dermatech/shared-dtos';
 import { UserResponseDto } from '@dermatech/shared-dtos';
+
+// --- Refresh Feature Imports ---
+import { RefreshTokenCommand } from '../../../application/commands/refresh-token/refresh-token.command';
+import { RefreshTokenDto } from '@dermatech/shared-dtos';
 
 // --- Login Feature Imports ---
 import { LoginCommand } from '../../../application/commands/login/login.command';
@@ -46,22 +61,20 @@ export class AuthController {
   @ApiConflictResponse({ description: 'Email already exists.' })
   async register(@Body() dto: RegisterUserDto): Promise<ApiResponse<UserResponseDto>> {
     
-    // 1. Execute Command (CQRS)
-    // The CommandHandler returns the Domain Entity (User)
+    // Execute Command (CQRS)
     const user = await this.commandBus.execute<RegisterUserCommand, User>(
       new RegisterUserCommand(dto.email, dto.password, dto.role),
     );
 
-    // 2. Map Domain Entity to Response DTO
-    // We explicitly map fields to avoid exposing sensitive data (like password hashes)
+    // Map Domain Entity to Response DTO
     const responseData: UserResponseDto = {
       id: user.getId(),
-      email: user.getEmail().email, // Assuming UserEmail VO has a getValue() method
+      email: user.getEmail().email,
       role: user.getRole(),
       isActive: user.getIsActive(),
     };
 
-    // 3. Return Standardized Response
+    // Return Standardized Response
     return new ApiResponse(
       true,
       'User registered successfully',
@@ -85,16 +98,64 @@ export class AuthController {
   @ApiBadRequestResponse({ description: 'Invalid input data.' })
   async login(@Body() dto: LoginRequestDto): Promise<ApiResponse<TokenResponseDto>> {
     
-    // The LoginHandler returns the TokenResponseDto directly (as defined in previous steps)
+    // The LoginHandler returns the TokenResponseDto directly
     const tokens = await this.commandBus.execute<LoginCommand, TokenResponseDto>(
       new LoginCommand(dto.email, dto.password)
     );
 
-    // Return Standardized Response
     return new ApiResponse(
       true,
       'Login successful',
       tokens
     );
+  }
+
+  /**
+   * Endpoint to rotate/refresh access tokens.
+   * Used when the Access Token expires but the Refresh Token is still valid.
+   */
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Get a new Access Token using a Refresh Token' })
+  @SwaggerApiResponse({ 
+    status: 200, 
+    description: 'Token refreshed successfully.', 
+    type: TokenResponseDto 
+  })
+  @ApiUnauthorizedResponse({ description: 'Refresh token expired, invalid, or malformed.' })
+  async refresh(@Body() dto: RefreshTokenDto): Promise<ApiResponse<TokenResponseDto>> {
+    
+    // Dispatch Command to validate refresh token and generate new pair
+    const tokens = await this.commandBus.execute<RefreshTokenCommand, TokenResponseDto>(
+      new RefreshTokenCommand(dto.refreshToken)
+    );
+
+    return new ApiResponse(
+      true,
+      'Token refreshed successfully',
+      tokens
+    );
+  }
+
+  /**
+   * Endpoint to invalidate user session.
+   * Adds the current token to the Redis Blacklist.
+   */
+  @Post('logout')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Logout user (Invalidate Token via Redis Blacklist)' })
+  @SwaggerApiResponse({ status: 200, description: 'Logout successful' })
+  @HttpCode(HttpStatus.OK)
+  async logout(@Headers('authorization') authHeader: string) {
+    // Sanitize the token by removing "Bearer " prefix if present
+    const token = authHeader.replace('Bearer ', '').trim();
+
+    // Dispatch the CQRS Command to blacklist the token
+    await this.commandBus.execute(
+      new LogoutCommand(token)
+    );
+
+    return new ApiResponse(true, 'Logout successful');
   }
 }
