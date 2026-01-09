@@ -10,7 +10,7 @@ export class CreateDoctorDto {
     description: 'The User ID (Auth Service) to be promoted to Doctor', 
     example: 'd8139c6f-a928-4b71-aa84-a51da3fbae34' 
   })
-  @IsUUID()
+  @IsUUID('4') // Enforce UUID v4
   @IsNotEmpty()
   readonly userId: string;
 
@@ -32,10 +32,10 @@ export class CreateDoctorDto {
   @Length(2, 100)
   readonly specialization: string;
 
-  @ApiProperty({ description: 'Professional License Number', example: 'MED-555-EC' })
+  @ApiProperty({ description: 'Professional License Number (CMP)', example: 'MED-555-EC' })
   @IsString()
   @IsNotEmpty()
-  @Length(5, 50)
+  @Length(3, 50)
   readonly licenseNumber: string;
 
   @ApiProperty({ description: 'Physical Office Number', example: 'Box 101', required: false })

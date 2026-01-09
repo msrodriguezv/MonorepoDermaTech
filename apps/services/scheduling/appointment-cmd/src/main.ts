@@ -1,27 +1,42 @@
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { ConfigService } from '@nestjs/config';
 
 import { AppModule } from './app/app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   
+  // 0. Configuration Service Extraction
+  const configService = app.get(ConfigService);
+
   // 1. API Versioning & Prefix
   // URIs will look like: http://localhost:3002/api/v1/scheduling/appointments
   const globalPrefix = 'api/v1/scheduling'; 
   app.setGlobalPrefix(globalPrefix);
 
   // 2. Global Validation Pipe (Security Layer)
+  // Ensures data integrity before it reaches the Controllers
   app.useGlobalPipes(
     new ValidationPipe({
-      whitelist: true, // Strips unseen properties from DTOs
-      forbidNonWhitelisted: true, // Errors if extra properties are sent
-      transform: true, // Auto-convert types (e.g. query params numbers)
+      whitelist: true,            // Strips properties that are not in the DTO
+      forbidNonWhitelisted: true, // Throws an error if extra properties are sent (Strict Mode)
+      transform: true,            // Auto-converts primitive types (e.g., param id string -> number)
+      transformOptions: {
+        enableImplicitConversion: true,
+      },
     })
   );
 
-  // 3. Swagger Documentation Setup (Missing piece restored)
+  // 3. CORS Configuration (Mandatory for Flutter Web)
+  app.enableCors({
+    origin: '*', // In production, replace with specific domain
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    credentials: true,
+  });
+
+  // 4. Swagger Documentation Setup
   const config = new DocumentBuilder()
     .setTitle('Appointment Command Service')
     .setDescription('Microservice responsible for Scheduling and Doctor Management (Write Model)')
@@ -32,12 +47,13 @@ async function bootstrap() {
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
-  
-  // Swagger will be available at: http://localhost:3002/api/docs
   SwaggerModule.setup('api/docs', app, document);
 
-  // 4. Server Port Configuration
-  const port = process.env.PORT || 3002;
+  // 5. Graceful Shutdown (Docker Signal Handling)
+  app.enableShutdownHooks();
+
+  // 6. Server Port Configuration
+  const port = configService.get<number>('PORT') || 3002;
   
   await app.listen(port);
   

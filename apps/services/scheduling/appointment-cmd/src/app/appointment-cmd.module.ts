@@ -2,32 +2,71 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CqrsModule } from '@nestjs/cqrs';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ClientsModule, Transport } from '@nestjs/microservices';
 
-
-// Shared Library Import (Correct Name based on your library definition)
+// Shared Library Import (Security & Guards)
 import { SharedAuthModule } from '@dermatech/shared-guards';
 
-// Local Components
+// Local Entities
 import { Doctor } from './entities/doctor.entity';
+import { Appointment } from './entities/appointment.entity';
+
+// Controllers (Entry Points)
 import { DoctorController } from './controllers/doctor.controller';
-import { Appointment } from './entities/appointment.entity'
-import { BookAppointmentHandler } from './cqrs/commands/handlers/book-appointment.handler';
-import { CreateDoctorHandler } from './cqrs/commands/handlers/create-doctor.handler';
 import { AppointmentController } from './controllers/appointment.controller';
 
+// Command Handlers (Business Logic / Write Model)
+import { BookAppointmentHandler } from './cqrs/commands/handlers/book-appointment.handler';
+import { CreateDoctorHandler } from './cqrs/commands/handlers/create-doctor.handler';
+
+// Event Handlers (Infrastructure Bridge / Kafka Producer)
+import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish-appointment-created.handler';
+
+/**
+ * AppointmentCmdModule
+ * * Responsibility: 
+ * - Orchestrates the "Write Side" of the Scheduling Domain.
+ * - Configures Database persistence (Postgres).
+ * - Configures Message Broker connection (Kafka).
+ * - Registers CQRS Handlers (Commands & Events).
+ */
 @Module({
   imports: [
-    // 1. Configuration: Loads .env file globally
+    // 1. Global Configuration
+    // Loads environment variables from the specific service file
     ConfigModule.forRoot({ 
       isGlobal: true,
-      envFilePath: 'apps/services/scheduling/appointment-cmd/.env', // Ensures it looks for the file
+      envFilePath: 'apps/services/scheduling/appointment-cmd/.env',
     }),
 
-    // 2. Architecture & Security
-    CqrsModule,
-    SharedAuthModule, // CORRECTED: Matches the class name exported in your library
+    // 2. Architecture & Security Layers
+    CqrsModule,       // Enables Command/Event Bus
+    SharedAuthModule, // Imports JWT Strategies and Guards
 
-    // 3. Database Connection (Async to ensure Config is loaded first)
+    // 3. Kafka Configuration (Event Output)
+    // Registers the Kafka Client to emit Integration Events (e.g., to Availability Query Service)
+    ClientsModule.registerAsync([
+      {
+        name: 'KAFKA_SERVICE', // Injection Token used in PublishAppointmentCreatedHandler
+        imports: [ConfigModule],
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) => ({
+          transport: Transport.KAFKA,
+          options: {
+            client: {
+              clientId: 'booking-service',
+              brokers: [config.get<string>('KAFKA_BROKER', 'localhost:9092')],
+            },
+            producer: {
+              allowAutoTopicCreation: true, // Auto-create topics in Dev (Disable in Prod)
+            }
+          },
+        }),
+      },
+    ]),
+
+    // 4. Database Persistence Layer
+    // Asynchronous configuration ensures Env Vars are loaded before connection
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -39,13 +78,24 @@ import { AppointmentController } from './controllers/appointment.controller';
         password: config.get<string>('DB_PASSWORD', 'postgres'),
         database: config.get<string>('DB_NAME', 'postgres'),
         autoLoadEntities: true,
-        synchronize: true, // Only for development/prototyping
+        synchronize: true, // WARNING: Set to false in Production
       }),
     }),
     
+    // Register Entities for this specific module scope
     TypeOrmModule.forFeature([Doctor, Appointment]),
   ],
-  controllers: [DoctorController, AppointmentController],
-  providers: [CreateDoctorHandler, BookAppointmentHandler],
+  controllers: [
+    DoctorController, 
+    AppointmentController
+  ],
+  providers: [
+    // --- Command Handlers (Input Logic) ---
+    CreateDoctorHandler, 
+    BookAppointmentHandler,
+
+    // --- Event Handlers (Output Logic / Bridge) ---
+    PublishAppointmentCreatedHandler 
+  ],
 })
 export class AppointmentCmdModule {}
