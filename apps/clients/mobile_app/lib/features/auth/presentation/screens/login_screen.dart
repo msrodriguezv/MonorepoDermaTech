@@ -5,8 +5,12 @@ import '../../data/datasources/auth_local_data_source.dart';
 import '../../data/repositories/auth_repository_impl.dart'; 
 import 'register_screen.dart';
 
-import '../../../patients/presentation/screens/patient_list_screen.dart';
-/// Responsive Login Screen connected to Backend + Secure Storage.
+// --- IMPORTS DE LOS DESTINOS (ROLES) ---
+import '../../../patients/presentation/screens/student_dashboard_screen.dart'; // <--- DASHBOARD ESTUDIANTE (CON QR)
+import '../../../nurse/presentation/screens/nurse_dashboard_screen.dart';       // <--- DASHBOARD ENFERMERO (TRIAJE)
+import '../../../admin/presentation/screens/admin_dashboard_screen.dart';       // Web Admin
+import '../../../doctor/presentation/screens/doctor_dashboard_screen.dart';     // Web Doctor
+
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -32,50 +36,57 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  // --- LÓGICA DE LOGIN REAL (Guardada para después) ---
-  void _submitLogin() async { 
+  // --- LÓGICA DE LOGIN CON ROLES (ACTUALIZADA) ---
+  void _submitLogin() { 
     if (_formKey.currentState!.validate()) {
       
+      // 1. Mostrar Feedback Visual
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Conectando con el servidor...'),
+          content: Text('Verificando credenciales...'),
           backgroundColor: _dermaNavyBlue,
+          duration: Duration(seconds: 1),
         ),
       );
 
-      try {
-        final dio = Dio(); 
-        
-        final remoteDS = AuthRemoteDataSource(dio: dio);
-        final localDS = AuthLocalDataSource(); 
-        
-        final repository = AuthRepositoryImpl(
-          remoteDataSource: remoteDS,
-          localDataSource: localDS, 
-        );
-
-        await repository.login(
-          _emailController.text.trim(), 
-          _passwordController.text.trim()
-        );
-
+      // 2. Simular conexión (Delay) y decidir destino
+      Future.delayed(const Duration(seconds: 1), () {
         if (!mounted) return;
 
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const PatientListScreen()), // <--- ESTO ES LO CORRECTO
-        );
+        final email = _emailController.text.toLowerCase().trim();
 
-      } catch (e) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: ${e.toString().replaceAll('Exception: ', '')}'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 4),
-          ),
-        );
-      }
+        // --- LÓGICA DE SEMÁFORO (ROLES) ---
+        if (email.contains('admin')) {
+          // CASO 1: ADMINISTRADOR
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const AdminDashboardScreen()),
+          );
+        } 
+        else if (email.contains('doc') || email.contains('medico')) {
+          // CASO 2: DOCTOR
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const DoctorDashboardScreen()),
+          );
+        } 
+        else if (email.contains('enf')) { 
+          // CASO 3: ENFERMERO (NUEVO)
+          // Para probar usa un correo como: enfermero@uce.edu.ec
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const NurseDashboardScreen()),
+          );
+        }
+        else {
+          // CASO 4: ESTUDIANTE / PACIENTE (POR DEFECTO)
+          // Para probar usa cualquier otro correo: estudiante@uce.edu.ec
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const StudentDashboardScreen()), 
+          );
+        }
+      });
     }
   }
 
@@ -83,13 +94,11 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _dermaBackgroundWhite,
+      // --- APP BAR ---
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: _dermaNavyBlue),
-          onPressed: () => Navigator.pop(context),
-        ),
+        automaticallyImplyLeading: false, // Sin flecha de retroceso
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
@@ -172,15 +181,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
                             const SizedBox(height: 40),
 
-                            // --- Login Button (MODIFICADO) ---
+                            // --- Login Button ---
                             ElevatedButton(
-                              // CAMBIO AQUÍ: Navegación directa para ver diseño
-                              onPressed: () {
-                                Navigator.pushReplacement(
-                                  context,
-                                  MaterialPageRoute(builder: (context) => const PatientListScreen()),
-                                );
-                              },
+                              onPressed: _submitLogin, 
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: _dermaNavyBlue,
                                 foregroundColor: Colors.white,

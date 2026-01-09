@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 // Import the WelcomeScreen
-import 'features/auth/presentation/screens/welcome_screen.dart'; 
-
+//import 'features/auth/presentation/screens/welcome_screen.dart'; 
+import 'features/auth/presentation/screens/login_screen.dart';
+import 'features/admin/presentation/screens/admin_dashboard_screen.dart';
+import 'features/doctor/presentation/screens/doctor_dashboard_screen.dart';
 void main() {
   runApp(const DermatechApp());
 }
@@ -25,7 +27,9 @@ class DermatechApp extends StatelessWidget {
         ),
       ),
       // Set the initial route to WelcomeScreen
-      home: const WelcomeScreen(),
+      //home: const WelcomeScreen(),
+      //home: const AdminDashboardScreen(),
+      home: const LoginScreen(),
     );
   }
 }
