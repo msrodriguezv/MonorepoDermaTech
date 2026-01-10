@@ -32,7 +32,8 @@
       "plugin": "@nx/jest/plugin",
       "options": {
         "targetName": "test"
-      }
+      },
+      "exclude": ["apps/services/scheduling/appointment-cmd-e2e/**/*"]
     },
     {
       "plugin": "@nx/webpack/plugin",
