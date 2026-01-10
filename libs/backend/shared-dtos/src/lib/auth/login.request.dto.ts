@@ -9,7 +9,7 @@ import { BaseAuthDto } from '../../common/base-auth.dto';
  */
 export class LoginRequestDto extends BaseAuthDto {
   @ApiProperty({ 
-    example: 'AnyP@ssw0rd!', 
+    example: 'StrongP@ss1!', 
     description: 'User password provided during registration',
     writeOnly: true
   })
