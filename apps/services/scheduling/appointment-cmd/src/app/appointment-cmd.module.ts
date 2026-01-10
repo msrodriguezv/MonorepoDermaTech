@@ -47,19 +47,26 @@ import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish
     // Registers the Kafka Client to emit Integration Events (e.g., to Availability Query Service)
     ClientsModule.registerAsync([
       {
-        name: 'KAFKA_SERVICE', // Injection Token used in PublishAppointmentCreatedHandler
+        name: 'KAFKA_SERVICE_APPOINTMENT', // Injection Token used in PublishAppointmentCreatedHandler
         imports: [ConfigModule],
         inject: [ConfigService],
         useFactory: (config: ConfigService) => ({
           transport: Transport.KAFKA,
           options: {
             client: {
-              clientId: 'booking-service',
+              clientId: config.get<string>('KAFKA_CLIENT_ID', 'appointment-cmd'),
               brokers: [config.get<string>('KAFKA_BROKER', 'localhost:9092')],
+              retry: { retries: 10, initialRetryTime: 300 },
             },
             producer: {
-              allowAutoTopicCreation: true, // Auto-create topics in Dev (Disable in Prod)
-            }
+              idempotent: true, // not duplicates
+              allowAutoTopicCreation: config.get<string>('NODE_ENV') !== 'production',
+            },
+            consumer: {
+              groupId: config.get<string>('KAFKA_GROUP_ID', 'appointment-service-group'),
+              sessionTimeout: 30000,
+              allowAutoTopicCreation: config.get<string>('NODE_ENV') !== 'production',
+            },
           },
         }),
       },

@@ -68,11 +68,18 @@ import { RedisCacheAdapter } from '@dermatech/shared-infras';
           transport: Transport.KAFKA,
           options: {
             client: {
-              clientId: 'auth',
+              clientId: configService.get<string>('KAFKA_CLIENT_ID', 'auth-service'),
               brokers: [configService.get<string>('KAFKA_BROKERS') || 'localhost:9092'],
+              retry: { retries: 10, initialRetryTime: 300 },
+            },
+            producer: {
+              idempotent: true,//not duplicated
+              allowAutoTopicCreation: configService.get<string>('NODE_ENV') !== 'production',
             },
             consumer: {
-              groupId: 'auth-consumer',
+              groupId: configService.get<string>('KAFKA_GROUP_ID', 'auth-service-group'),
+              sessionTimeout: 30000,
+              allowAutoTopicCreation: configService.get<string>('NODE_ENV') !== 'production',
             },
           },
         }),

@@ -2,7 +2,6 @@ version: '3.8'
 
 services:
   # --- REDIS ---
-  # Estimated consumption: Very low (~50MB idle)
   redis:
     image: redis:alpine
     container_name: dermatech_redis
@@ -10,91 +9,121 @@ services:
       - "6379:6379"
     volumes:
       - ./redis_data:/data
-    command: redis-server --appendonly yes
+    # Se mantiene la contraseña que agregamos para evitar errores de AUTH
+    command: redis-server --appendonly yes --requirepass "password"
     networks:
       - dev_network
-    # --- RESOURCE OPTIMIZATION ---
     deploy:
       resources:
         limits:
-          memory: 128M  # Enough for sessions and simple caching
+          memory: 128M
         reservations:
           memory: 64M
-    # Log rotation to prevent disk filling
-    logging:
+    logging: &default-logging
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "password", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   # --- ZOOKEEPER ---
-  # Estimated consumption: Moderate (Java based)
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: dermatech_zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
-      # CRITICAL: Limit internal Java Heap memory
       KAFKA_OPTS: "-Xmx256M -Xms256M"
     networks:
       - dev_network
     deploy:
       resources:
         limits:
-          memory: 350M # Slightly more than Heap for OS overhead
+          memory: 350M
         reservations:
           memory: 200M
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo 'ruok' | nc localhost 2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # --- KAFKA ---
-  # Estimated consumption: HIGH (The heaviest service)
   kafka:
     image: confluentinc/cp-kafka:7.5.0
     container_name: dermatech_kafka
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     ports:
       - "9092:9092"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      # Hybrid Network Configuration (Internal & External access)
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      # --- CRITICAL JAVA OPTIMIZATION ---
-      # Forces Kafka to use only 400MB of RAM for the Heap.
-      # Without this, it will try to grab 1GB+ and crash the t3.medium instance.
+      # Disable auto topic creation to prevent leaderless partitions
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # Transaction and replication settings for single-broker setup
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_MIN_INSYNC_REPLICAS: 1
       KAFKA_HEAP_OPTS: "-Xmx400M -Xms400M"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
     networks:
       - dev_network
     deploy:
       resources:
         limits:
-          memory: 768M  # Strict limit to protect the server
+          memory: 768M
         reservations:
           memory: 512M
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+    logging: *default-logging
+
+  # --- INIT KAFKA (VERSION CORREGIDA - SIN VARIABLES) ---
+  init-kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: dermatech_init_kafka
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: [ '/bin/bash', '-c' ]
+    # Comandos directos y sencillos. Sin loops ni $variables para no romper Docker.
+    command: |
+      echo "⏳ Waiting for Kafka to be ready..."
+      cub kafka-ready -b kafka:29092 1 60
+      
+      echo "🔨 Creating topic: booking.events"
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic booking.events --replication-factor 1 --partitions 1
+      
+      echo "🔨 Creating topic: auth.user.registered"
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic auth.user.registered --replication-factor 1 --partitions 1
+      
+      echo "🎉 Topics created successfully."
+      echo "📋 Checking topics:"
+      kafka-topics --bootstrap-server kafka:29092 --list
+    networks:
+      - dev_network
 
   # --- MINIO ---
-  # Estimated consumption: Medium (Go based)
   minio:
     image: minio/minio:latest
     container_name: dermatech_minio
     ports:
-      # NOTE: We map external port 9001 to internal 9000 (API)
       - "9001:9000"
-      - "9002:9001" # Console Web UI
+      - "9002:9001"
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -104,24 +133,19 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M  # Generous for file operations
+          memory: 512M
         reservations:
           memory: 256M
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+    logging: *default-logging
 
-  # --- CREATE BUCKETS SCRIPT ---
-  # Ephemeral container (Runs and dies)
+  # --- CREATE BUCKETS ---
   createbuckets:
     image: minio/mc:latest
     depends_on:
       - minio
     entrypoint: >
       /bin/sh -c "
-      while ! /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin; do echo 'Waiting...'; sleep 2; done;
+      while ! /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin; do echo 'Waiting for MinIO...'; sleep 2; done;
       /usr/bin/mc mb --ignore-existing myminio/dermatech-avatars;
       /usr/bin/mc anonymous set public myminio/dermatech-avatars;
       exit 0;
@@ -131,11 +155,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 64M # Minimal requirement
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "1m"
+          memory: 64M
 
 networks:
   dev_network:

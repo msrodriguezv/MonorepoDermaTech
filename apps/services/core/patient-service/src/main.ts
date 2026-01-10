@@ -22,12 +22,18 @@ async function bootstrap() {
     transport: Transport.KAFKA,
     options: {
       client: {
-        // Fetch brokers from .env (e.g., 'localhost:9092')
+        clientId: configService.get<string>('KAFKA_CLIENT_ID', 'patient-service'),
         brokers: [configService.get<string>('KAFKA_BROKERS') || 'localhost:9092'],
+        retry: { retries: 10, initialRetryTime: 300 },
+      },
+      producer: {
+        idempotent: true, // not duplicates
+        allowAutoTopicCreation: configService.get<string>('NODE_ENV') !== 'production',
       },
       consumer: {
-        // Consumer Group ID is critical for independent consumption
         groupId: configService.get<string>('KAFKA_GROUP_ID') || 'patient-service-group',
+        sessionTimeout: 30000,
+        allowAutoTopicCreation: configService.get<string>('NODE_ENV') !== 'production',
       },
     },
   });
