@@ -36,11 +36,6 @@ async function bootstrap() {
     defaultVersion: '1', // Forces v1 for all controllers without explicit version
   });
 
-  const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:4200';
-
-  // Log the allowed origins to debug connection issues easily
-  logger.log(`CORS enabled for origin(s): ${corsOrigin}`);
-
   // Global Validation Pipe (DTO Validation)
   app.useGlobalPipes(new ValidationPipe({
     whitelist: true,
@@ -50,7 +45,7 @@ async function bootstrap() {
 
   // CORS Configuration
   app.enableCors({
-    origin: corsOrigin.split(',').map(origin => origin.trim()), // In production, replace with specific domain
+    origin: true, // In production, replace with specific domain
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });

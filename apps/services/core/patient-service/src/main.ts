@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, Logger } from '@nestjs/common';
+import { ValidationPipe, Logger, VersioningType} from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { Transport, MicroserviceOptions } from '@nestjs/microservices';
@@ -15,6 +15,13 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
 
   app.setGlobalPrefix('api');
+
+  // Enable URI Versioning (This adds /v1/ to the path automatically)
+  app.enableVersioning({
+    type: VersioningType.URI,
+    defaultVersion: '1', // Forces v1 for all controllers without explicit version
+  });
+  
 
   // 2. CONNECT KAFKA MICROSERVICE
   // This enables the application to listen to Kafka messages/events.
@@ -49,6 +56,11 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document); 
 
+  const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:4200';
+
+  // Log the allowed origins to debug connection issues easily
+  logger.log(`CORS enabled for origin(s): ${corsOrigin}`);
+
   // --- GLOBAL PIPES ---
   app.useGlobalPipes(
     new ValidationPipe({
@@ -57,6 +69,13 @@ async function bootstrap() {
       transform: true,
     }),
   );
+
+  // CORS Configuration
+  app.enableCors({
+    origin: corsOrigin.split(',').map(origin => origin.trim()), // In production, replace with specific domain
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    credentials: true,
+  });
 
   // 3. START MICROSERVICES
   // CRITICAL STEP: Without this, the Kafka consumer will never start listening.
@@ -67,6 +86,7 @@ async function bootstrap() {
   const port = configService.get<number>('PORT') || 3001;
   await app.listen(port);
   
+   logger.log(`Auth Service is running on: http://localhost:${port}/api/v1/patient`);
   logger.log(`HTTP Server is running on: http://localhost:${port}/api/docs`);
 }
 
