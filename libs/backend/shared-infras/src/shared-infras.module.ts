@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
 import { RedisCacheAdapter } from './adapters/redis-cache.adapter';
+import * as path from 'path';
 
 /**
  * Shared Infrastructure Module.
@@ -9,7 +10,12 @@ import { RedisCacheAdapter } from './adapters/redis-cache.adapter';
  * to be reused across multiple microservices or shared modules.
  */
 @Module({
-  imports: [ConfigModule], // Required to access Environment Variables (REDIS_HOST, etc.)
+imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: path.resolve(process.cwd(), '.env'), 
+    }),
+  ],
   providers: [
     // 1. Redis Client Provider (The physical connection)
     {
@@ -17,7 +23,9 @@ import { RedisCacheAdapter } from './adapters/redis-cache.adapter';
       useFactory: (configService: ConfigService): Redis => {
         const host = configService.get<string>('REDIS_HOST') || 'localhost';
         const port = configService.get<number>('REDIS_PORT') || 6379;
-        return new Redis({ host, port });
+        const password = configService.get<string>('REDIS_PASSWORD');
+
+        return new Redis({ host, port, password });
       },
       inject: [ConfigService],
     },

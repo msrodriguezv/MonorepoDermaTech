@@ -9,7 +9,7 @@ services:
       - "6379:6379"
     volumes:
       - ./redis_data:/data
-    # Se mantiene la contraseña que agregamos para evitar errores de AUTH
+    
     command: redis-server --appendonly yes --requirepass "password"
     networks:
       - dev_network
