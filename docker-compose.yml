@@ -1,6 +1,10 @@
 version: '3.8'
 
 services:
+  # =========================================
+  # CACHE & COORDINATION LAYER
+  # =========================================
+
   # --- REDIS ---
   redis:
     image: redis:alpine
@@ -9,7 +13,6 @@ services:
       - "6379:6379"
     volumes:
       - ./redis_data:/data
-    
     command: redis-server --appendonly yes --requirepass "password"
     networks:
       - dev_network
@@ -53,6 +56,10 @@ services:
       timeout: 5s
       retries: 5
 
+  # =========================================
+  # MESSAGING & STREAMING LAYER
+  # =========================================
+
   # --- KAFKA ---
   kafka:
     image: confluentinc/cp-kafka:7.5.0
@@ -69,9 +76,7 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      # Disable auto topic creation to prevent leaderless partitions
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      # Transaction and replication settings for single-broker setup
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_MIN_INSYNC_REPLICAS: 1
@@ -92,41 +97,68 @@ services:
           memory: 512M
     logging: *default-logging
 
-  # --- INIT KAFKA (VERSION CORREGIDA - SIN VARIABLES) ---
-  init-kafka:
-    image: confluentinc/cp-kafka:7.5.0
-    container_name: dermatech_init_kafka
-    depends_on:
-      kafka:
-        condition: service_healthy
-    entrypoint: [ '/bin/bash', '-c' ]
-    # Comandos directos y sencillos. Sin loops ni $variables para no romper Docker.
-    command: |
-      echo "⏳ Waiting for Kafka to be ready..."
-      cub kafka-ready -b kafka:29092 1 60
-      
-      echo "🔨 Creating topic: booking.events"
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic booking.events --replication-factor 1 --partitions 1
-      
-      echo "🔨 Creating topic: auth.user.registered"
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic auth.user.registered --replication-factor 1 --partitions 1
-      
-      echo "🎉 Topics created successfully."
-      echo "📋 Checking topics:"
-      kafka-topics --bootstrap-server kafka:29092 --list
+  # --- RABBITMQ ---
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: dermatech_rabbitmq
+    ports:
+      - "5672:5672"   # AMQP Port
+      - "15672:15672" # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
     networks:
       - dev_network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # --- MOSQUITTO (MQTT) ---
+  mosquitto:
+    image: eclipse-mosquitto
+    container_name: dermatech_mqtt
+    ports:
+      - "1883:1883" # MQTT Port
+      - "9001:9001" # Websockets Port (Kept 9001 for Mosquitto)
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    networks:
+      - dev_network
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+    logging: *default-logging
+
+  # =========================================
+  # STORAGE & OBJECT LAYER
+  # =========================================
 
   # --- MINIO ---
   minio:
     image: minio/minio:latest
     container_name: dermatech_minio
     ports:
-      - "9001:9000"
-      - "9002:9001"
+      - "9000:9000"  # API Port (S3 Standard)
+      - "9090:9001"  # Console Port (Mapped EXTERNAL 9090 to INTERNAL 9001)
+                     # FIX: This avoids conflict with Mosquitto's 9001
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
+    # Internal command still binds to 9001 inside the container, which is fine
     command: server /data --console-address ":9001"
     networks:
       - dev_network
@@ -138,13 +170,14 @@ services:
           memory: 256M
     logging: *default-logging
 
-  # --- CREATE BUCKETS ---
+  # --- MINIO BUCKET CREATION ---
   createbuckets:
     image: minio/mc:latest
     depends_on:
       - minio
     entrypoint: >
       /bin/sh -c "
+      # Connect to MinIO via internal network on port 9000
       while ! /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin; do echo 'Waiting for MinIO...'; sleep 2; done;
       /usr/bin/mc mb --ignore-existing myminio/dermatech-avatars;
       /usr/bin/mc anonymous set public myminio/dermatech-avatars;

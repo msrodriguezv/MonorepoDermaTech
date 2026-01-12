@@ -1,6 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+// --- CORE & ARCHITECTURE IMPORTS ---
+import '../../../../core/network/api_client.dart';
+import '../../../auth/data/datasources/auth_remote_data_source.dart';
 import '../../../auth/presentation/screens/login_screen.dart';
 
+/// **NurseDashboardScreen**
+///
+/// Main interface for the Nursing Staff role.
+/// 
+/// **Key Features:**
+/// 1. Patient Triage Management.
+/// 2. QR Code Scanning for patient identification.
+/// 3. Vital Signs Recording & Validation.
+/// 4. Referral System (Local Treatment vs. Doctor Referral).
 class NurseDashboardScreen extends StatefulWidget {
   const NurseDashboardScreen({super.key});
 
@@ -9,41 +23,48 @@ class NurseDashboardScreen extends StatefulWidget {
 }
 
 class _NurseDashboardScreenState extends State<NurseDashboardScreen> {
-  // Lista simulada de estudiantes esperados en el sistema
-  // En la vida real, esto vendría de tu Base de Datos al escanear
+  // --- MOCK DATABASE ---
+  // Simulates a backend response when scanning a QR code.
+  // In production, this implies an API call: 'GET /patients/{id}'.
   final Map<String, dynamic> _studentDatabase = {
-    'QR-STU-001': {'name': 'Carlos Pérez', 'faculty': 'Ingeniería', 'id': '1712345678'},
-    'QR-STU-002': {'name': 'Ana Gómez', 'faculty': 'Medicina', 'id': '1723456789'},
-    'QR-STU-003': {'name': 'Luis Toapanta', 'faculty': 'Artes', 'id': '1734567890'},
+    'QR-STU-001': {'name': 'Carlos Pérez', 'faculty': 'Engineering', 'id': '1712345678'},
+    'QR-STU-002': {'name': 'Ana Gómez', 'faculty': 'Medicine', 'id': '1723456789'},
+    'QR-STU-003': {'name': 'Luis Toapanta', 'faculty': 'Arts', 'id': '1734567890'},
   };
 
-  // --- LÓGICA PRINCIPAL: ESCANEAR Y LUEGO EVALUAR ---
+  /// **_startScanProcess**
+  /// Initiates the camera scanning workflow.
+  /// 
+  /// **Flow:**
+  /// 1. Opens the Camera UI (Mocked for emulator).
+  /// 2. Captures scanned code.
+  /// 3. Validates code against local/remote database.
+  /// 4. Triggers the Triage Dialog upon success.
   void _startScanProcess() async {
-    // 1. Abrimos la cámara (Simulada por ahora)
-    // Esperamos a que la cámara nos devuelva un código
+    // 1. Open Camera (Mock Implementation)
     final String? scannedCode = await showDialog<String>(
       context: context,
       builder: (_) => const _FakeCameraScanner(),
     );
 
-    // 2. Verificamos si se escaneó algo
+    // 2. Validation Logic
     if (scannedCode != null && mounted) {
-      // 3. Verificamos si el código existe en nuestra base
       if (_studentDatabase.containsKey(scannedCode)) {
         final student = _studentDatabase[scannedCode];
         
-        // Feedback de éxito
+        // Success Feedback
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text("✅ Estudiante identificado: ${student['name']}"),
+            content: Text("✅ Identified: ${student['name']}"),
             backgroundColor: Colors.green,
-            duration: const Duration(seconds: 1),
+            behavior: SnackBarBehavior.floating,
           ),
         );
 
-        // 4. ABRIMOS EL TRIAJE AUTOMÁTICAMENTE
+        // 3. Open Triage Workflow
         showDialog(
           context: context,
+          barrierDismissible: false, // Force a triage decision
           builder: (_) => _TriageDialog(
             patientName: student['name'],
             patientId: student['id'],
@@ -51,12 +72,54 @@ class _NurseDashboardScreenState extends State<NurseDashboardScreen> {
           ),
         );
       } else {
-        // Código inválido
+        // Error Feedback
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("❌ Código QR no válido o estudiante no encontrado."),
-            backgroundColor: Colors.red,
+            content: Text("❌ Invalid QR Code or Patient Not Found."),
+            backgroundColor: Colors.redAccent,
+            behavior: SnackBarBehavior.floating,
           ),
+        );
+      }
+    }
+  }
+
+  /// **_handleLogout**
+  /// Executes the robust logout workflow ensuring server and client synchronization.
+  /// 
+  /// **Flow:**
+  /// 1. Retrieve the current Access Token from Secure Storage.
+  /// 2. API Call: Request backend to blacklist the token (Redis).
+  /// 3. Local Cleanup: Delete all persisted session data.
+  /// 4. Navigation: Redirect to Login and wipe history.
+  Future<void> _handleLogout() async {
+    const storage = FlutterSecureStorage();
+    
+    try {
+      // 1. Retrieve Token
+      final token = await storage.read(key: 'accessToken');
+      
+      if (token != null) {
+        // 2. Initialize Dependencies
+        final apiClient = ApiClient();
+        final authDataSource = AuthRemoteDataSourceImpl(apiClient: apiClient);
+        
+        // 3. Server Invalidation (Redis Blacklist)
+        await authDataSource.logout(token);
+        debugPrint("✅ [LOGOUT] Token invalidated on server.");
+      }
+    } catch (e) {
+      // Fallback: Proceed with local logout even if server connection fails.
+      debugPrint("⚠️ [LOGOUT] Server invalidation warning: $e");
+    } finally {
+      // 4. Local Cleanup (Critical)
+      await storage.deleteAll();
+      
+      if (mounted) {
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+          (route) => false, // Predicate to remove all previous routes
         );
       }
     }
@@ -66,63 +129,114 @@ class _NurseDashboardScreenState extends State<NurseDashboardScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.grey[50],
+      
+      // --- APP BAR ---
       appBar: AppBar(
-        title: const Text("Estación de Enfermería - Triaje", style: TextStyle(color: Colors.white)),
+        title: const Text("Nursing Station - Triage", style: TextStyle(color: Colors.white, fontSize: 18)),
         backgroundColor: Colors.teal[700],
+        elevation: 2,
         automaticallyImplyLeading: false,
         actions: [
           IconButton(
-            icon: const Icon(Icons.logout, color: Colors.white),
-            onPressed: () => Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen())),
+            icon: const Icon(Icons.logout_rounded, color: Colors.white),
+            tooltip: "Sign Out",
+            onPressed: _handleLogout, // Linked to robust logout logic
           )
         ],
       ),
-      // --- BOTÓN FLOTANTE GRANDE PARA ESCANEAR ---
+      
+      // --- FAB (SCANNER TRIGGER) ---
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _startScanProcess,
         backgroundColor: Colors.teal,
-        icon: const Icon(Icons.qr_code_scanner, size: 30),
-        label: const Text("ESCANEAR ESTUDIANTE", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        icon: const Icon(Icons.qr_code_scanner_rounded, size: 28),
+        label: const Text(
+          "SCAN PATIENT QR", 
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, letterSpacing: 0.5)
+        ),
+        elevation: 4,
       ),
       
       body: Padding(
-        padding: const EdgeInsets.all(20.0),
+        padding: const EdgeInsets.all(24.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 1. ESTADÍSTICAS
+            
+            // 1. STATISTICS DASHBOARD
             Row(
               children: [
-                _InfoCard(title: "Atenciones Hoy", count: "12", color: Colors.teal),
-                const SizedBox(width: 15),
-                _InfoCard(title: "Derivados a Dr.", count: "4", color: Colors.blue),
+                _InfoCard(
+                  title: "Patients Today", 
+                  count: "12", 
+                  color: Colors.teal,
+                  icon: Icons.people_alt_rounded
+                ),
+                const SizedBox(width: 16),
+                _InfoCard(
+                  title: "Referred to Dr.", 
+                  count: "4", 
+                  color: Colors.blue,
+                  icon: Icons.medical_services_rounded
+                ),
               ],
             ),
-            const SizedBox(height: 30),
             
-            const Text("Historial Reciente", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-            const Text("Pacientes evaluados el día de hoy.", style: TextStyle(color: Colors.grey)),
-            const SizedBox(height: 15),
+            const SizedBox(height: 32),
+            
+            // 2. HISTORY SECTION TITLE
+            const Text(
+              "Recent Activity", 
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF0A2342))
+            ),
+            const SizedBox(height: 4),
+            Text(
+              "Patients evaluated during this shift.", 
+              style: TextStyle(color: Colors.grey[600], fontSize: 13)
+            ),
+            const SizedBox(height: 16),
 
-            // 2. LISTA INFORMATIVA (YA NO ES COLA DE ESPERA, SINO HISTORIAL)
+            // 3. ACTIVITY LIST
             Expanded(
-              child: ListView.builder(
+              child: ListView.separated(
                 itemCount: 3,
+                separatorBuilder: (_, __) => const SizedBox(height: 12),
                 itemBuilder: (context, index) {
-                  return Card(
-                    margin: const EdgeInsets.only(bottom: 10),
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.grey.withOpacity(0.05),
+                          blurRadius: 5,
+                          offset: const Offset(0, 2)
+                        )
+                      ]
+                    ),
                     child: ListTile(
-                      leading: const CircleAvatar(backgroundColor: Colors.grey, child: Icon(Icons.check, color: Colors.white)),
-                      title: Text("Estudiante Atendido ${index + 1}"),
-                      subtitle: Text("Hora: 0${8+index}:30 AM - Signos estables"),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      leading: CircleAvatar(
+                        backgroundColor: Colors.teal.withOpacity(0.1),
+                        child: const Icon(Icons.check_circle_rounded, color: Colors.teal, size: 20)
+                      ),
+                      title: Text(
+                        "Student Treated ${index + 1}",
+                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                      ),
+                      subtitle: Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text("Time: 0${8+index}:30 AM • Vitals Stable"),
+                      ),
+                      trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: Colors.grey),
                     ),
                   );
                 },
               ),
             ),
-            // Espacio para que el botón flotante no tape el último item
-            const SizedBox(height: 60), 
+            // Padding to prevent FAB from overlapping the last item
+            const SizedBox(height: 70), 
           ],
         ),
       ),
@@ -131,9 +245,53 @@ class _NurseDashboardScreenState extends State<NurseDashboardScreen> {
 }
 
 // ============================================================================
-// WIDGET SIMULADOR DE CÁMARA (FAKE SCANNER)
+// HELPER WIDGETS
 // ============================================================================
-// En la app real, aquí usarías la librería 'mobile_scanner'
+
+/// **_InfoCard**
+/// Reusable widget for statistics display.
+class _InfoCard extends StatelessWidget {
+  final String title;
+  final String count;
+  final Color color;
+  final IconData icon;
+
+  const _InfoCard({required this.title, required this.count, required this.color, required this.icon});
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white, 
+          borderRadius: BorderRadius.circular(16), 
+          border: Border(left: BorderSide(color: color, width: 5)),
+          boxShadow: [
+            BoxShadow(color: Colors.grey.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))
+          ]
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start, 
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(count, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Color(0xFF0A2342))),
+                Icon(icon, color: color.withOpacity(0.2), size: 30)
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(title, style: TextStyle(color: Colors.grey[600], fontSize: 13, fontWeight: FontWeight.w500)),
+          ]
+        ),
+      ),
+    );
+  }
+}
+
+/// **_FakeCameraScanner**
+/// Simulates the Camera Interface for development/emulator purposes.
 class _FakeCameraScanner extends StatelessWidget {
   const _FakeCameraScanner();
 
@@ -141,53 +299,68 @@ class _FakeCameraScanner extends StatelessWidget {
   Widget build(BuildContext context) {
     return Dialog(
       backgroundColor: Colors.black,
-      insetPadding: EdgeInsets.zero, // Pantalla completa
+      insetPadding: EdgeInsets.zero, // Full Screen Immersive
       child: Stack(
         alignment: Alignment.center,
         children: [
-          // Fondo de cámara
+          // Camera Feed Placeholder
           Container(
             width: double.infinity,
             height: double.infinity,
             color: Colors.black87,
-            child: const Center(child: Text("CÁMARA ACTIVA...", style: TextStyle(color: Colors.white54))),
+            child: const Center(
+              child: Text(
+                "CAMERA ACTIVE...", 
+                style: TextStyle(color: Colors.white54, letterSpacing: 2)
+              )
+            ),
           ),
           
-          // Cuadro de enfoque
+          // Focus Box Overlay
           Container(
-            width: 250,
-            height: 250,
+            width: 260,
+            height: 260,
             decoration: BoxDecoration(
-              border: Border.all(color: Colors.red, width: 2),
-              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.redAccent, width: 2),
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Stack(
+              children: [
+                // Corner Accents (Visual Flair)
+                Positioned(top: 0, left: 0, child: _Corner(color: Colors.redAccent)),
+                Positioned(top: 0, right: 0, child: _Corner(color: Colors.redAccent)),
+                Positioned(bottom: 0, left: 0, child: _Corner(color: Colors.redAccent)),
+                Positioned(bottom: 0, right: 0, child: _Corner(color: Colors.redAccent)),
+              ],
             ),
           ),
 
-          // Botones de Simulación (Para probar en tu PC)
+          // Simulation Controls (Dev Only)
           Positioned(
-            bottom: 50,
+            bottom: 60,
             child: Column(
               children: [
-                const Text("Simular detección:", style: TextStyle(color: Colors.white)),
-                const SizedBox(height: 10),
+                const Text("DEV SIMULATION", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 16),
                 Row(
                   children: [
                     ElevatedButton(
-                      onPressed: () => Navigator.pop(context, 'QR-STU-001'), // Devuelve código válido
+                      onPressed: () => Navigator.pop(context, 'QR-STU-001'), // Return Valid
                       style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                      child: const Text("QR VÁLIDO"),
+                      child: const Text("VALID QR"),
                     ),
-                    const SizedBox(width: 20),
+                    const SizedBox(width: 24),
                     ElevatedButton(
-                      onPressed: () => Navigator.pop(context, 'INVALID-CODE'), // Devuelve error
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                      child: const Text("QR ERRÓNEO"),
+                      onPressed: () => Navigator.pop(context, 'INVALID-CODE'), // Return Invalid
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                      child: const Text("INVALID QR"),
                     ),
                   ],
                 ),
+                const SizedBox(height: 12),
                 TextButton(
-                  onPressed: () => Navigator.pop(context, null), // Cancela
-                  child: const Text("Cancelar", style: TextStyle(color: Colors.white54)),
+                  onPressed: () => Navigator.pop(context, null), // Cancel
+                  child: const Text("Cancel Scan", style: TextStyle(color: Colors.white54)),
                 )
               ],
             ),
@@ -198,9 +371,17 @@ class _FakeCameraScanner extends StatelessWidget {
   }
 }
 
-// ============================================================================
-// WIDGET DIALOGO DE TRIAJE (CON DATOS PRE-CARGADOS)
-// ============================================================================
+class _Corner extends StatelessWidget {
+  final Color color;
+  const _Corner({required this.color});
+  @override
+  Widget build(BuildContext context) {
+    return Container(width: 20, height: 20, color: color);
+  }
+}
+
+/// **_TriageDialog**
+/// Modal form for entering Vital Signs and Triage Decisions.
 class _TriageDialog extends StatefulWidget {
   final String patientName;
   final String patientId;
@@ -218,98 +399,111 @@ class _TriageDialog extends StatefulWidget {
 
 class _TriageDialogState extends State<_TriageDialog> {
   final _tempController = TextEditingController();
-  final _presionController = TextEditingController();
-  final _pesoController = TextEditingController();
-  final _sintomasController = TextEditingController();
+  final _bpController = TextEditingController();
+  final _weightController = TextEditingController();
+  final _symptomsController = TextEditingController();
 
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(
-        width: 500,
-        padding: const EdgeInsets.all(20),
+        width: 500, // Fixed width for Tablet/Desktop consistency
+        padding: const EdgeInsets.all(24),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ENCABEZADO CON DATOS DEL QR
+              // HEADER
               Row(
                 children: [
                   const CircleAvatar(
+                    radius: 24,
                     backgroundColor: Colors.teal, 
-                    child: Icon(Icons.person, color: Colors.white)
+                    child: Icon(Icons.person, color: Colors.white, size: 28)
                   ),
-                  const SizedBox(width: 15),
+                  const SizedBox(width: 16),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(widget.patientName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                        Text("${widget.faculty} • CI: ${widget.patientId}", style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                        const SizedBox(height: 4),
+                        Text("${widget.faculty} • ID: ${widget.patientId}", style: const TextStyle(color: Colors.grey, fontSize: 13)),
                       ],
                     ),
                   )
                 ],
               ),
-              const Divider(height: 30),
+              const Divider(height: 40),
               
-              // SIGNOS VITALES
-              const Text("Signos Vitales", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
-              const SizedBox(height: 15),
+              // VITALS SECTION
+              const Text("Vital Signs", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 15)),
+              const SizedBox(height: 16),
               Row(
                 children: [
                   Expanded(child: _buildInput(_tempController, "Temp (°C)", Icons.thermostat)),
-                  const SizedBox(width: 10),
-                  Expanded(child: _buildInput(_presionController, "P. Arterial", Icons.favorite)),
+                  const SizedBox(width: 16),
+                  Expanded(child: _buildInput(_bpController, "BP (mmHg)", Icons.favorite_rounded)),
                 ],
               ),
-              const SizedBox(height: 10),
-              _buildInput(_pesoController, "Peso (Kg)", Icons.monitor_weight),
+              const SizedBox(height: 16),
+              _buildInput(_weightController, "Weight (Kg)", Icons.monitor_weight_rounded),
 
-              const SizedBox(height: 20),
-              const Text("Pre-Diagnóstico / Motivo", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal)),
-              const SizedBox(height: 10),
+              const SizedBox(height: 24),
+              
+              // SYMPTOMS SECTION
+              const Text("Chief Complaint / Symptoms", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal, fontSize: 15)),
+              const SizedBox(height: 12),
               TextField(
-                controller: _sintomasController,
+                controller: _symptomsController,
                 maxLines: 3,
                 decoration: InputDecoration(
-                  hintText: "Describe los síntomas principales...",
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  hintText: "Describe primary symptoms...",
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.grey.shade300)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.grey.shade300)),
                   filled: true,
                   fillColor: Colors.grey[50],
                 ),
               ),
 
-              const SizedBox(height: 30),
+              const SizedBox(height: 32),
               
-              // --- DECISIÓN ---
-              const Text("Decisión de Triaje:", style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 10),
+              // ACTION BUTTONS
+              const Text("Triage Decision:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+              const SizedBox(height: 12),
               Row(
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: () {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Atendido por Enfermería")));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Processing: Local Treatment")));
                       },
                       icon: const Icon(Icons.medical_services_outlined, color: Colors.teal),
-                      label: const Text("TRATAR AQUÍ", style: TextStyle(color: Colors.teal, fontSize: 12)),
-                      style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 15)),
+                      label: const Text("TREAT LOCALLY", style: TextStyle(color: Colors.teal, fontWeight: FontWeight.bold)),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        side: const BorderSide(color: Colors.teal),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: ElevatedButton.icon(
                       onPressed: () {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Derivado al Doctor"), backgroundColor: Colors.blue));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Processing: Referred to Doctor")));
                       },
-                      icon: const Icon(Icons.arrow_forward, color: Colors.white, size: 18),
-                      label: const Text("DERIVAR DR.", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[800], padding: const EdgeInsets.symmetric(vertical: 15)),
+                      icon: const Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 18),
+                      label: const Text("REFER TO DR.", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue[800], 
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
+                      ),
                     ),
                   ),
                 ],
@@ -327,32 +521,9 @@ class _TriageDialogState extends State<_TriageDialog> {
       keyboardType: TextInputType.number,
       decoration: InputDecoration(
         labelText: label,
-        prefixIcon: Icon(icon, size: 18, color: Colors.grey),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-        contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 10),
-      ),
-    );
-  }
-}
-
-// Widget simple para las tarjetas de estadísticas
-class _InfoCard extends StatelessWidget {
-  final String title;
-  final String count;
-  final Color color;
-
-  const _InfoCard({required this.title, required this.count, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(15),
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border(left: BorderSide(color: color, width: 4))),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(count, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-          Text(title, style: const TextStyle(color: Colors.grey)),
-        ]),
+        prefixIcon: Icon(icon, size: 20, color: Colors.grey),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
       ),
     );
   }
