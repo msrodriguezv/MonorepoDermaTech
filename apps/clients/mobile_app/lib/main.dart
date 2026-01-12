@@ -1,14 +1,19 @@
 import 'package:flutter/material.dart';
-// Import the WelcomeScreen
-//import 'features/auth/presentation/screens/welcome_screen.dart'; 
-import 'features/auth/presentation/screens/login_screen.dart';
-import 'features/admin/presentation/screens/admin_dashboard_screen.dart';
-import 'features/doctor/presentation/screens/doctor_dashboard_screen.dart';
+
+// --- AUTH GUARD IMPORT ---
+// This is entry point that handles session persistence.
+import 'features/auth/presentation/screens/auth_check_screen.dart';
+
 void main() {
+  // Ensure that the Flutter engine is fully initialized before executing any logic.
+  // This is critical when using platform channels (like FlutterSecureStorage) at startup.
+  WidgetsFlutterBinding.ensureInitialized();
+  
   runApp(const DermatechApp());
 }
 
-/// Root widget of the application.
+/// **DermatechApp**
+/// The root widget of the application.
 class DermatechApp extends StatelessWidget {
   const DermatechApp({super.key});
 
@@ -17,6 +22,8 @@ class DermatechApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Dermatech Mobile',
+      
+      // Global Theme Configuration
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0A2342)),
         useMaterial3: true,
@@ -26,10 +33,11 @@ class DermatechApp extends StatelessWidget {
           fillColor: Colors.white,
         ),
       ),
-      // Set the initial route to WelcomeScreen
-      //home: const WelcomeScreen(),
-      //home: const AdminDashboardScreen(),
-      home: const LoginScreen(),
+
+      // We do not load LoginScreen directly. We load AuthCheckScreen first.
+      // This allows the app to check for an existing session (Token) 
+      // and redirect to the Dashboard automatically.
+      home: const AuthCheckScreen(),
     );
   }
 }

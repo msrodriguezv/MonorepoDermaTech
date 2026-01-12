@@ -51,3 +51,10 @@ Thumbs.db
 *.tfstate.backup
 .terraform/
 redis_data/
+
+# --- MOSQUITTO ---
+# Ignore data and logs
+mosquitto/data/
+mosquitto/log/
+# BUT keep the config file (CRITICAL)
+!mosquitto/config/mosquitto.conf

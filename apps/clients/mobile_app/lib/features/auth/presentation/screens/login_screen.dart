@@ -9,7 +9,7 @@ import '../../../../features/patients/data/datasources/patient_remote_data_sourc
 import '../../data/models/auth_models.dart';
 import 'register_screen.dart';
 
-// --- DASHBOARD IMPORTS (REAL FEATURE MODULES) ---
+// --- DASHBOARD IMPORTS ---
 import '../../../patients/presentation/screens/complete_profile_screen.dart';
 import '../../../patients/presentation/screens/student_dashboard_screen.dart';
 import '../../../nurse/presentation/screens/nurse_dashboard_screen.dart';
@@ -36,6 +36,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
   // --- State Management ---
   bool _isLoading = false;
+  // Instance of SecureStorage for session persistence
+  final _storage = const FlutterSecureStorage();
 
   @override
   void dispose() {
@@ -44,26 +46,24 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  /// Executes the authentication flow with Role-Based Access Control (RBAC).
+  /// Executes the authentication flow.
   /// 
-  /// Flow:
-  /// 1. Validate Inputs.
-  /// 2. Request Login (Auth Service).
-  /// 3. Persist Tokens & Role.
-  /// 4. Route User based on Backend Role (Admin, Doctor, Nurse, Student).
+  /// **Process:**
+  /// 1. valid inputs.
+  /// 2. Calls API to authenticate.
+  /// 3. **Persists Session Data** (Token, Role, and Name).
+  /// 4. Redirects based on Role.
   Future<void> _submitLogin() async {
-    // 1. Input Validation
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
 
     try {
-      // 2. Dependency Initialization
-      // ApiClient includes the AuthInterceptor for future requests.
+      // Dependency Injection (Manual)
       final apiClient = ApiClient();
       final authDataSource = AuthRemoteDataSourceImpl(apiClient: apiClient);
 
-      // 3. Authentication Request
+      // 1. API Request
       final TokenResponseModel tokenResponse = await authDataSource.login(
         LoginRequestModel(
           email: _emailController.text.trim(),
@@ -71,24 +71,27 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       );
 
-      // --- CRITICAL CHECK ---
       if (tokenResponse.accessToken.isEmpty) {
-         throw Exception("Authentication failed: Server returned an empty token.");
+        throw Exception("Authentication failed: Empty access token.");
       }
 
-      // 4. Persistence Layer
-      // Store Access Token, Refresh Token, and the User Role for session management.
-      const storage = FlutterSecureStorage();
-      await storage.write(key: 'accessToken', value: tokenResponse.accessToken);
-      await storage.write(key: 'refreshToken', value: tokenResponse.refreshToken);
-      await storage.write(key: 'userRole', value: tokenResponse.role); // Save role for auto-login checks
+      // 2. Persistence Layer (Critical for Auth Guard)
+      // We must save the Role and Name so the app works after a refresh/restart.
+      await _storage.write(key: 'accessToken', value: tokenResponse.accessToken);
+      await _storage.write(key: 'refreshToken', value: tokenResponse.refreshToken);
+      await _storage.write(key: 'userRole', value: tokenResponse.role);
+      
+      // FIX: Construct and save the full name. 
+      // The AuthCheckScreen needs this to display "Hello, [Name]" on auto-login.
+      final String fullName = "${tokenResponse.firstName} ${tokenResponse.lastName}";
+      await _storage.write(key: 'userName', value: fullName);
 
-      print("✅ Login Success. Role: ${tokenResponse.role}");
+      debugPrint("✅ Session Persisted. User: $fullName, Role: ${tokenResponse.role}");
 
       if (!mounted) return;
 
-      // 5. Dynamic Routing Strategy
-      await _handleRoleRedirection(tokenResponse, apiClient);
+      // 3. Routing Strategy
+      await _handleRoleRedirection(tokenResponse, apiClient, fullName);
 
     } catch (error) {
       if (!mounted) return;
@@ -98,68 +101,66 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  /// Routes the user to the correct Dashboard based on the Role returned by the Backend.
-  Future<void> _handleRoleRedirection(TokenResponseModel user, ApiClient apiClient) async {
+  /// Handles Role-Based Access Control (RBAC) routing.
+  Future<void> _handleRoleRedirection(
+    TokenResponseModel user, 
+    ApiClient apiClient, 
+    String fullName
+  ) async {
     final role = user.role.toUpperCase();
 
     switch (role) {
       case 'STUDENT':
-      case 'PATIENT': 
-        // Students require an extra check: Profile Completeness.
-        await _handleStudentFlow(apiClient, user);
+      case 'PATIENT':
+        // Students usually require a profile check before accessing the dashboard.
+        await _handleStudentFlow(apiClient, fullName);
         break;
 
       case 'DOCTOR':
       case 'MEDICO':
-        // Direct access for Medical Staff
         _navigateTo(const DoctorDashboardScreen());
         break;
 
       case 'NURSE':
       case 'ENFERMERO':
-        // Direct access for Nursing Staff
         _navigateTo(const NurseDashboardScreen());
         break;
 
       case 'ADMIN':
-        // Direct access for Administrators
         _navigateTo(const AdminDashboardScreen());
         break;
 
       default:
-        // Fail-safe: If role is unrecognized, default to Student flow or show error.
         debugPrint("⚠️ Unknown role: $role. Defaulting to Student flow.");
-        await _handleStudentFlow(apiClient, user);
+        await _handleStudentFlow(apiClient, fullName);
         break;
     }
   }
 
-  /// Specific logic for Students: Checks if the medical profile is complete.
-  Future<void> _handleStudentFlow(ApiClient apiClient, TokenResponseModel user) async {
+  /// Checks if the student/patient profile is complete before allowing dashboard access.
+  Future<void> _handleStudentFlow(ApiClient apiClient, String fullName) async {
     try {
       final patientDataSource = PatientRemoteDataSourceImpl(apiClient: apiClient);
       
-      // Check Profile Status (Token injected by Interceptor)
+      // Use the token (injected by ApiClient interceptor) to check status
       final status = await patientDataSource.getProfileStatus();
       
       if (!mounted) return;
 
       if (status.isProfileComplete) {
-        // Happy Path -> Dashboard
-        final fullName = "${user.firstName} ${user.lastName}";
         _navigateTo(StudentDashboardScreen(studentName: fullName));
       } else {
-        // Incomplete Path -> Complete Profile Form
         _navigateTo(CompleteProfileScreen(email: _emailController.text.trim()));
       }
     } catch (e) {
-      debugPrint("❌ Profile check failed: $e");
-      // Fallback: assume incomplete if check fails, or show error
-      _navigateTo(CompleteProfileScreen(email: _emailController.text.trim()));
+      debugPrint("❌ Profile check error: $e");
+      // Fail-safe: Redirect to completion screen if status check fails
+      if(mounted) {
+        _navigateTo(CompleteProfileScreen(email: _emailController.text.trim()));
+      }
     }
   }
 
-  /// Helper to push replacement routes cleanly.
   void _navigateTo(Widget screen) {
     Navigator.pushReplacement(
       context,
@@ -167,17 +168,16 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  /// Centralized Error Handling for UI feedback.
   void _handleLoginError(Object error) {
-    String displayMessage = "Ocurrió un error inesperado.";
+    String displayMessage = "An unexpected error occurred.";
 
     if (error is DioException) {
       if (error.response?.statusCode == 401) {
-        displayMessage = "Credenciales incorrectas.";
+        displayMessage = "Incorrect credentials.";
       } else if (error.response?.statusCode == 404) {
-        displayMessage = "Usuario no encontrado.";
+        displayMessage = "User not found.";
       } else if (error.type == DioExceptionType.connectionTimeout) {
-        displayMessage = "Sin conexión al servidor.";
+        displayMessage = "Server connection timeout.";
       } else {
         final backendMsg = error.response?.data['message'];
         if (backendMsg != null) displayMessage = backendMsg.toString();
@@ -198,7 +198,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // --- UI Implementation (Same design as before) ---
     return Scaffold(
       backgroundColor: _dermaBackgroundWhite,
       appBar: AppBar(
@@ -237,7 +236,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
 
                             const Text(
-                              'Ingresar',
+                              'Login',
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                 fontSize: 32,
@@ -255,8 +254,8 @@ class _LoginScreenState extends State<LoginScreen> {
                               keyboardType: TextInputType.emailAddress,
                               style: const TextStyle(color: _dermaNavyBlue),
                               validator: (value) {
-                                if (value == null || value.isEmpty) return 'Ingrese su correo';
-                                if (!value.contains('@')) return 'Correo no válido';
+                                if (value == null || value.isEmpty) return 'Please enter your email';
+                                if (!value.contains('@')) return 'Invalid email format';
                                 return null;
                               },
                               decoration: _inputDecoration(
@@ -274,11 +273,11 @@ class _LoginScreenState extends State<LoginScreen> {
                               obscureText: true,
                               style: const TextStyle(color: _dermaNavyBlue),
                               validator: (value) {
-                                if (value == null || value.isEmpty) return 'Ingrese su contraseña';
+                                if (value == null || value.isEmpty) return 'Please enter your password';
                                 return null;
                               },
                               decoration: _inputDecoration(
-                                label: 'Contraseña',
+                                label: 'Password',
                                 icon: Icons.lock_outline,
                               ),
                             ),
@@ -304,7 +303,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                     child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5)
                                   )
                                 : const Text(
-                                    'ENTRAR',
+                                    'LOGIN',
                                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                                   ),
                             ),
@@ -315,18 +314,18 @@ class _LoginScreenState extends State<LoginScreen> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Text("¿No tienes cuenta? ", style: TextStyle(color: Colors.grey.shade600)),
+                                Text("Don't have an account? ", style: TextStyle(color: Colors.grey.shade600)),
                                 GestureDetector(
                                   onTap: () {
                                     if (!_isLoading) {
-                                        Navigator.push(
+                                      Navigator.push(
                                         context,
                                         MaterialPageRoute(builder: (context) => const RegisterScreen()),
-                                        );
+                                      );
                                     }
                                   },
                                   child: const Text(
-                                    'Regístrate',
+                                    'Register',
                                     style: TextStyle(color: _dermaAccentBlue, fontWeight: FontWeight.bold),
                                   ),
                                 ),
