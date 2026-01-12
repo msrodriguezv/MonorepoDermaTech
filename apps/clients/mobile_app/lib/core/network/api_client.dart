@@ -1,60 +1,43 @@
 import 'package:dio/dio.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../../config/environment.dart';
+import 'auth_interceptor.dart'; 
 
-/// A generic HTTP client wrapper around Dio.
-/// 
-/// Responsibilities:
-/// - Provides a singleton-like configuration for HTTP requests.
-/// - Handles global timeouts and default headers.
-/// - Standardizes error handling logic for the application.
 class ApiClient {
-  final Dio _dio;
+  late final Dio _dio;
+  final _storage = const FlutterSecureStorage();
 
-  ApiClient()
-      : _dio = Dio(BaseOptions(
-          connectTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 10),
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-          },
-        ));
+  ApiClient() {
+    // 1. Initialize Dio
+    _dio = Dio(BaseOptions(
+      baseUrl: Environment.authBaseUrl,
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 10),
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+    ));
 
-  /// Performs a POST request to the specified [path].
-  /// 
-  /// [data] - The body of the request (usually a Map/JSON).
-  /// [queryParameters] - Optional query parameters.
-  /// 
-  /// Throws a [DioException] if the request fails.
-  Future<Response> post(String path, {dynamic data, Map<String, dynamic>? queryParameters}) async {
-    try {
-      final response = await _dio.post(path, data: data, queryParameters: queryParameters);
-      return response;
-    } on DioException catch (e) {
-      throw _handleError(e);
-    }
+    // 2. Register the Interceptor (MUST BE INSIDE THE CONSTRUCTOR)
+    _dio.interceptors.add(AuthInterceptor(_storage, _dio));
   }
 
-  /// Performs a GET request to the specified [path].
-  Future<Response> get(String path, {Map<String, dynamic>? queryParameters}) async {
-    try {
-      final response = await _dio.get(path, queryParameters: queryParameters);
-      return response;
-    } on DioException catch (e) {
-      throw _handleError(e);
-    }
+  // --- Wrapper Methods ---
+
+  Future<Response> get(String path, {Options? options}) async {
+    return _dio.get(path, options: options);
   }
 
-  /// Parses [DioException] and returns a user-friendly or domain-specific exception.
-  /// 
-  /// This ensures that the UI layer receives processed error messages 
-  /// rather than raw HTTP status codes.
-  Exception _handleError(DioException error) {
-    if (error.response != null) {
-      // Extract the error message from the backend standard response (ApiResponse)
-      final errorMessage = error.response?.data['message'] ?? 'Unknown server error';
-      return Exception('Server Error (${error.response?.statusCode}): $errorMessage');
-    } else {
-      return Exception('Connection Error: Unable to reach the server. Please check your internet connection or service status.');
-    }
+  Future<Response> post(String path, dynamic data, {Options? options}) async {
+    return _dio.post(path, data: data, options: options);
+  }
+
+  Future<Response> put(String path, dynamic data, {Options? options}) async {
+    return _dio.put(path, data: data, options: options);
+  }
+
+  Future<Response> delete(String path, {Options? options}) async {
+    return _dio.delete(path, options: options);
   }
 }

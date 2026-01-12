@@ -3,28 +3,26 @@ import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse } from '@nestjs/swagger';
 
 // [LIBS AUDIT]
-// 1. Guards: Must be exported from your shared-guards library.
 import { JwtAuthGuard, RolesGuard } from '@dermatech/shared-guards';
-// 2. Decorators: Custom decorators to extract data safely.
 import { Roles, User } from '@dermatech/shared-guards'; 
-// 3. DTOs & Interfaces: Contracts shared across microservices.
 import { UserRole, JwtPayload } from '@dermatech/shared-dtos';
 
 // Local Domain Imports
 import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { UpdateProfileCommand } from '../cqrs/commands/impl/update-profile.command';
 import { GetPatientProfileQuery } from '../cqrs/queries/impl/get-patient-profile.query';
+import { GetAllPatientsQuery } from '../cqrs/queries/impl/get-all-patients.query';
 import { Patient } from '../entities/patient.entity';
 
 /**
  * PatientController
  * * Layer: Presentation (REST API).
  * * Architecture: Hybrid (Layered + CQRS).
- * * Security: Protected by Global JWT Strategy and RBAC (Role-Based Access Control).
+ * * Security: Protected by Global JWT Strategy and RBAC.
  */
 @ApiTags('Patients')
-@ApiBearerAuth() // Swagger: Indicates this controller requires a Bearer Token.
-@UseGuards(JwtAuthGuard, RolesGuard) // Security: Validates Token signature and User Roles.
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('patients')
 export class PatientController {
   private readonly logger = new Logger(PatientController.name);
@@ -34,24 +32,49 @@ export class PatientController {
     private readonly queryBus: QueryBus,
   ) {}
 
+  // ===========================================================================
+  // 1. MOBILE APP CRITICAL FLOWS (Student/Patient)
+  // ===========================================================================
+
+  /**
+   * Endpoint: Check Profile Completion Status.
+   * * Method: GET /patients/profile/status
+   * * Purpose: Used by Mobile Login to determine navigation (Dashboard vs Complete Profile).
+   * * Logic: Reuses the GetProfile Query but projects only the boolean status.
+   */
+  @Get('profile/status')
+  @Roles(UserRole.STUDENT)
+  @ApiOperation({ summary: 'Check if the profile is fully completed' })
+  @ApiResponse({ status: HttpStatus.OK, description: 'Returns boolean status' })
+  async getProfileStatus(@User() user: JwtPayload) {
+    this.logger.log(`REST Request: Check profile status for UserID ${user.sub}`);
+
+    // We reuse the existing Query to fetch the patient data
+    const patient: Patient = await this.queryBus.execute(
+      new GetPatientProfileQuery(user.sub),
+    );
+
+    // We map the response to the specific format expected by the Mobile App
+    return {
+      data: {
+        isProfileComplete: patient.isProfileComplete
+      }
+    };
+  }
+
   /**
    * Endpoint: Complete or Update Profile.
    * * Method: PUT /patients/me
-   * * Access Control: Restricted to users with 'STUDENT' role.
-   * * Flow: Controller -> CommandBus -> UpdateProfileHandler -> Service -> DB.
    */
   @Put('me')
-  @Roles(UserRole.STUDENT) // [RBAC] Only Students can modify their own patient profile.
+  @Roles(UserRole.STUDENT)
   @ApiOperation({ summary: 'Complete or update personal profile' })
   @ApiResponse({ status: HttpStatus.OK, description: 'Profile updated successfully', type: Patient })
   async updateMyProfile(
-    @User() user: JwtPayload, // [Security] We extract the UserID (sub) from the validated Token. Never from the body.
+    @User() user: JwtPayload,
     @Body() dto: UpdateProfileDto,
   ) {
     this.logger.log(`REST Request: Update profile for UserID ${user.sub}`);
-
-    // Dispatching the Command (Write Model)
-    // user.sub comes from the JWT 'sub' claim, ensuring the user can only edit THEIR own profile.
     return await this.commandBus.execute(
       new UpdateProfileCommand(user.sub, dto),
     );
@@ -60,8 +83,6 @@ export class PatientController {
   /**
    * Endpoint: Get My Profile.
    * * Method: GET /patients/me
-   * * Access Control: Restricted to users with 'STUDENT' role.
-   * * Flow: Controller -> QueryBus -> GetPatientProfileHandler -> Service -> DB.
    */
   @Get('me')
   @Roles(UserRole.STUDENT)
@@ -69,10 +90,29 @@ export class PatientController {
   @ApiResponse({ status: HttpStatus.OK, description: 'Return patient profile data', type: Patient })
   async getMyProfile(@User() user: JwtPayload) {
     this.logger.log(`REST Request: Get profile for UserID ${user.sub}`);
-
-    // Dispatching the Query (Read Model)
     return await this.queryBus.execute(
       new GetPatientProfileQuery(user.sub),
     );
+  }
+
+  // ===========================================================================
+  // 2. ADMIN DASHBOARD FLOWS (Admin Only)
+  // ===========================================================================
+
+  /**
+   * Endpoint: List All Patients.
+   * * Method: GET /patients
+   * * Access: Restricted to ADMIN.
+   */
+  @Get()
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'List all registered patients (Admin)' })
+  @ApiResponse({ status: HttpStatus.OK, description: 'List of all patients', type: [Patient] })
+  async findAllPatients() {
+    this.logger.log('REST Request: Admin getting all patients');
+    // You need to create this Query Handler if it doesn't exist, 
+    // or call service directly if breaking CQRS for Admin reads (not recommended but faster).
+    // Assuming GetAllPatientsQuery exists:
+    return await this.queryBus.execute(new GetAllPatientsQuery());
   }
 }

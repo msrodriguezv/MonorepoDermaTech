@@ -1,42 +1,169 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+// --- CORE & ARCHITECTURE IMPORTS ---
+import '../../../../core/network/api_client.dart';
+import '../../../auth/data/datasources/auth_remote_data_source.dart';
 import '../../../auth/presentation/screens/login_screen.dart';
-// IMPORTANTE: Importamos la pantalla de agendar cita
+
+// --- FEATURE IMPORTS ---
+import '../../data/datasources/patient_remote_data_source.dart';
+import '../../data/models/patient_profile_model.dart';
 import 'book_appointment_screen.dart'; 
 
-class StudentDashboardScreen extends StatelessWidget {
-  const StudentDashboardScreen({super.key});
+/// Main Dashboard Screen for Students.
+/// Converted to StatefulWidget to handle asynchronous data fetching.
+class StudentDashboardScreen extends StatefulWidget {
+  // We keep studentName as a fallback or initial data passed from login
+  final String studentName;
 
-  // --- DATOS SIMULADOS (Estos vendrían del Login/Registro) ---
-  final String studentName = "Carlos Pérez";
-  final String faculty = "Facultad de Ingeniería";
-  final String career = "Sistemas de Información";
-  final String semester = "5to Semestre";
-  final String studentCode = "QR-STU-001"; // El código para el Enfermero
+  const StudentDashboardScreen({
+    super.key, 
+    required this.studentName,
+  });
+
+  @override
+  State<StudentDashboardScreen> createState() => _StudentDashboardScreenState();
+}
+
+class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
+  // --- STATE VARIABLES ---
+  bool _isLoading = true;
+  PatientProfileModel? _profile;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchProfileData();
+  }
+
+  /// Fetches the real patient profile data from the backend.
+  Future<void> _fetchProfileData() async {
+    try {
+      // Dependency Injection (Manual for now)
+      final apiClient = ApiClient();
+      final patientDataSource = PatientRemoteDataSourceImpl(apiClient: apiClient);
+
+      final profile = await patientDataSource.getPatientProfile();
+
+      if (mounted) {
+        setState(() {
+          _profile = profile;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = "Error cargando datos: $e";
+          _isLoading = false;
+        });
+      }
+      debugPrint("❌ [DASHBOARD] Error fetching profile: $e");
+    }
+  }
+
+  /// Executes the Secure Logout Flow.
+  Future<void> _handleLogout() async {
+    const storage = FlutterSecureStorage();
+    
+    try {
+      final token = await storage.read(key: 'accessToken');
+      
+      if (token != null) {
+        final apiClient = ApiClient();
+        final authDataSource = AuthRemoteDataSourceImpl(apiClient: apiClient);
+        
+        // Invalidate token on server (Blacklist)
+        await authDataSource.logout(token);
+        debugPrint("🔍 [LOGOUT] Token invalidated on server.");
+      }
+
+    } catch (e) {
+      debugPrint("⚠️ [LOGOUT ERROR] Server invalidation failed: $e");
+    } finally {
+      // Always clear local storage and navigate
+      await storage.deleteAll();
+      debugPrint("✅ [LOGOUT] Local storage cleared.");
+
+      if (mounted) {
+        Navigator.pushReplacement(
+          context, 
+          MaterialPageRoute(builder: (_) => const LoginScreen())
+        );
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    // --- LOADING STATE ---
+    if (_isLoading) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(color: Color(0xFF0A2342)),
+        ),
+      );
+    }
+
+    // --- ERROR STATE ---
+    if (_errorMessage != null) {
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 50, color: Colors.red),
+              const SizedBox(height: 10),
+              Text(_errorMessage!, textAlign: TextAlign.center),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _fetchProfileData,
+                child: const Text("Reintentar"),
+              ),
+              TextButton(
+                onPressed: _handleLogout, 
+                child: const Text("Cerrar Sesión")
+              )
+            ],
+          ),
+        ),
+      );
+    }
+
+    // --- SUCCESS STATE (Real Data) ---
+    // Use the fetched profile data or fallbacks if strictly necessary
+    final String displayFaculty = _profile?.faculty ?? "Facultad no registrada";
+    final String displayCareer = _profile?.career ?? "Carrera no registrada";
+    final String displaySemester = "${_profile?.currentSemester ?? 1}° Semestre";
+    final String displayCode = _profile?.studentCode ?? "N/A";
+    final String displayName = _profile?.fullName ?? widget.studentName;
+
     return Scaffold(
       backgroundColor: Colors.grey[100],
+      
+      // --- APP BAR ---
       appBar: AppBar(
         title: const Text("Mi Perfil - DermaTech", style: TextStyle(color: Colors.white)),
-        backgroundColor: const Color(0xFF0A2342), // Azul Institucional
-        automaticallyImplyLeading: false, // Sin flecha de atrás
+        backgroundColor: const Color(0xFF0A2342), 
+        automaticallyImplyLeading: false, 
         actions: [
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.white),
-            onPressed: () => Navigator.pushReplacement(
-              context, 
-              MaterialPageRoute(builder: (_) => const LoginScreen())
-            ),
+            tooltip: "Cerrar Sesión",
+            onPressed: _handleLogout, 
           )
         ],
       ),
+
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 1. TARJETA DE PERFIL (DISEÑO MEJORADO)
+            
+            // 1. PROFILE CARD (REAL DATA)
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
@@ -46,7 +173,13 @@ class StudentDashboardScreen extends StatelessWidget {
                   end: Alignment.bottomRight,
                 ),
                 borderRadius: BorderRadius.circular(20),
-                boxShadow: [BoxShadow(color: Colors.blue.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 5))],
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.blue.withOpacity(0.3), 
+                    blurRadius: 10, 
+                    offset: const Offset(0, 5)
+                  )
+                ],
               ),
               child: Row(
                 children: [
@@ -60,10 +193,17 @@ class StudentDashboardScreen extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text("Hola, $studentName", style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
+                        Text(
+                          "Hola, $displayName", 
+                          style: const TextStyle(
+                            fontSize: 20, 
+                            fontWeight: FontWeight.bold, 
+                            color: Colors.white
+                          )
+                        ),
                         const SizedBox(height: 5),
-                        Text(faculty, style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                        Text("$career - $semester", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500, fontSize: 14)),
+                        Text(displayFaculty, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                        Text("$displayCareer - $displaySemester", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500, fontSize: 14)),
                       ],
                     ),
                   ),
@@ -73,7 +213,7 @@ class StudentDashboardScreen extends StatelessWidget {
 
             const SizedBox(height: 25),
 
-            // 2. CÓDIGO QR (ACCESO)
+            // 2. QR ACCESS PASS (Using Real ID/Code)
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
@@ -83,9 +223,17 @@ class StudentDashboardScreen extends StatelessWidget {
               ),
               child: Column(
                 children: [
-                  const Text("TU PASE DE ACCESO", style: TextStyle(color: Colors.grey, letterSpacing: 1.2, fontSize: 12, fontWeight: FontWeight.bold)),
+                  const Text(
+                    "TU PASE DE ACCESO", 
+                    style: TextStyle(
+                      color: Colors.grey, 
+                      letterSpacing: 1.2, 
+                      fontSize: 12, 
+                      fontWeight: FontWeight.bold
+                    )
+                  ),
                   const SizedBox(height: 20),
-                  // SIMULACIÓN DE CÓDIGO QR VISUAL
+                  // Visual QR Simulation
                   Container(
                     width: 200,
                     height: 200,
@@ -110,18 +258,31 @@ class StudentDashboardScreen extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(20)),
-                    child: Text(studentCode, style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1, color: Color(0xFF0A2342))),
+                    child: Text(
+                      displayCode, // Displays generated code from Profile ID
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold, 
+                        letterSpacing: 1, 
+                        color: Color(0xFF0A2342)
+                      )
+                    ),
                   ),
                   const SizedBox(height: 10),
-                  const Text("Presenta este código en Triaje", style: TextStyle(color: Color(0xFF00A8E8), fontWeight: FontWeight.bold, fontSize: 12)),
+                  const Text(
+                    "Presenta este código en Triaje", 
+                    style: TextStyle(color: Color(0xFF00A8E8), fontWeight: FontWeight.bold, fontSize: 12)
+                  ),
                 ],
               ),
             ),
             
             const SizedBox(height: 30),
 
-            // 3. PRÓXIMAS CITAS
-            const Text("Próximas Citas", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF0A2342))),
+            // 3. UPCOMING APPOINTMENTS LIST (Still Mocked - Future Implementation)
+            const Text(
+              "Próximas Citas", 
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF0A2342))
+            ),
             const SizedBox(height: 15),
             
             const _AppointmentCard(
@@ -141,17 +302,19 @@ class StudentDashboardScreen extends StatelessWidget {
 
             const SizedBox(height: 20),
             
-            // 4. BOTÓN SOLICITAR NUEVA CITA (CONECTADO AL FLUJO)
+            // 4. BOOK NEW APPOINTMENT ACTION
             ElevatedButton.icon(
               onPressed: () {
-                // --- NAVEGACIÓN A LA PANTALLA DE AGENDAMIENTO ---
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (context) => const BookAppointmentScreen()),
                 );
               },
               icon: const Icon(Icons.calendar_month, color: Colors.white),
-              label: const Text("Agendar Nueva Cita", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+              label: const Text(
+                "Agendar Nueva Cita", 
+                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)
+              ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF00A8E8),
                 padding: const EdgeInsets.symmetric(vertical: 18),
@@ -168,7 +331,7 @@ class StudentDashboardScreen extends StatelessWidget {
   }
 }
 
-// Widget Tarjeta de Cita
+// --- HELPER WIDGETS ---
 class _AppointmentCard extends StatelessWidget {
   final String date;
   final String time;
@@ -193,7 +356,13 @@ class _AppointmentCard extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(15),
         border: Border(left: BorderSide(color: color, width: 5)),
-        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))],
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.05), 
+            blurRadius: 10, 
+            offset: const Offset(0, 4)
+          )
+        ],
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -220,7 +389,10 @@ class _AppointmentCard extends StatelessWidget {
               color: color.withOpacity(0.1),
               borderRadius: BorderRadius.circular(20),
             ),
-            child: Text(status, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 11)),
+            child: Text(
+              status, 
+              style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 11)
+            ),
           )
         ],
       ),

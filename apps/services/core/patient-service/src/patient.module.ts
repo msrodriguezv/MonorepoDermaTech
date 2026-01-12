@@ -17,6 +17,7 @@ import { StorageService } from './patient/integration/storage.service';
 import { CreatePatientRootHandler } from './patient/cqrs/commands/handlers/create-patient-root.handler';
 import { UpdateProfileHandler } from './patient/cqrs/commands/handlers/update-profile.handler';
 import { GetPatientProfileHandler } from './patient/cqrs/queries/handlers/get-patient-profile.handler';
+import { GetAllPatientsHandler } from './patient/cqrs/queries/handlers/get-all-patients.handler';
 
 // Shared Modules Integration
 // Importing SharedAuthModule ensures that the Passport Strategies (JWT) are available via Dependency Injection.
@@ -55,6 +56,9 @@ export const QueryHandlers = [
     // Domain Services
     PatientService,
     StorageService,
+    // --- QUERY HANDLERS ---
+    GetPatientProfileHandler,
+    GetAllPatientsHandler,
     // CQRS Handlers
     ...CommandHandlers,
     ...QueryHandlers,

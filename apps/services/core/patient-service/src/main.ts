@@ -56,11 +56,6 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document); 
 
-  const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:4200';
-
-  // Log the allowed origins to debug connection issues easily
-  logger.log(`CORS enabled for origin(s): ${corsOrigin}`);
-
   // --- GLOBAL PIPES ---
   app.useGlobalPipes(
     new ValidationPipe({
@@ -69,10 +64,10 @@ async function bootstrap() {
       transform: true,
     }),
   );
-
+  
   // CORS Configuration
   app.enableCors({
-    origin: corsOrigin.split(',').map(origin => origin.trim()), // In production, replace with specific domain
+    origin: true, // In production, replace with specific domain
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });
