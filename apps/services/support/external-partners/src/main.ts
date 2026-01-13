@@ -4,7 +4,7 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  // CORS habilitado para que no te de problemas si lo llamas desde el front luego
+  // CORS habilitado para que no te de problemas si lo llamas desde el front 
   app.enableCors(); 
   
   const config = new DocumentBuilder()
