@@ -79,10 +79,10 @@ import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         type: 'postgres',
-        host: config.get<string>('DB_HOST', 'localhost'),
+        host: config.get<string>('DB_HOST', 'aws-1-us-east-1.pooler.supabase.com'),
         port: config.get<number>('DB_PORT', 5432),
-        username: config.get<string>('DB_USER', 'postgres'),
-        password: config.get<string>('DB_PASSWORD', 'postgres'),
+        username: config.get<string>('DB_USER', 'postgres.ztmlnmfiewjqalrgyneb'),
+        password: config.get<string>('DB_PASSWORD', 'DermaTechTesis2025PS'),
         database: config.get<string>('DB_NAME', 'postgres'),
         autoLoadEntities: true,
         synchronize: true, // WARNING: Set to false in Production
