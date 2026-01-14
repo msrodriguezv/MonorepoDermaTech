@@ -38,6 +38,12 @@ resource "aws_instance" "worker" {
   subnet_id              = var.public_subnet_id
   vpc_security_group_ids = [aws_security_group.compute_sg.id]
 
+  root_block_device {
+    volume_size = 25        
+    volume_type = "gp3"     # Disco SSD de propósito general 
+    delete_on_termination = true
+  }
+
   # Install Docker & Compose
   user_data = <<-EOF
               #!/bin/bash

@@ -1,0 +1,136 @@
+name: Deploy QA Environment
+
+on:
+  push:
+    branches: [ "developer" ]
+
+env:
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+
+jobs:
+  # ====================================================
+  # JOB 1: CONSTRUIR Y SUBIR IMÁGENES (BUILD)
+  # ====================================================
+  build-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: 
+          - { name: 'auth-service', path: 'apps/services/core/auth-service' }
+          - { name: 'patient-service', path: 'apps/services/core/patient-service' }
+          - { name: 'api-gateway', path: 'apps/services/api-gateway' } 
+          # ... AGREGA AQUÍ EL RESTO DE TUS MICROSERVICIOS ...
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ env.DOCKER_USERNAME }}
+          password: ${{ env.DOCKER_PASSWORD }}
+
+      - name: Build Backend ${{ matrix.service.name }}
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ env.DOCKER_USERNAME }}/dermatech-${{ matrix.service.name }}:qa
+          build-args: |
+            APP_NAME=${{ matrix.service.name }}
+            BUILD_PATH=dist/${{ matrix.service.path }}
+
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ env.DOCKER_USERNAME }}
+          password: ${{ env.DOCKER_PASSWORD }}
+      - name: Build Frontend
+        uses: docker/build-push-action@v4
+        with:
+          context: ./apps/clients/mobile_app
+          file: ./apps/clients/mobile_app/Dockerfile
+          push: true
+          tags: ${{ env.DOCKER_USERNAME }}/dermatech-frontend:qa
+
+  # ====================================================
+  # JOB 2: DESPLEGAR EN NODE A (QA)
+  # ====================================================
+  deploy-qa:
+    needs: [build-push, build-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # --- AQUÍ OCURRE LA MAGIA DE LAS VARIABLES ---
+      - name: Generate Production .env
+        run: |
+          # 1. APP CONFIGURATION (Estáticas / Hardcoded)
+          echo "PORT=3000" >> .env
+          echo "NODE_ENV=production" >> .env
+          
+          # 2. SECURITY (Desde GitHub Secrets - CAMBIADAS)
+          echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
+          echo "JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}" >> .env
+          
+          # 3. TIEMPOS DE EXPIRACIÓN (Igual que tu local, pero escritos aquí)
+          echo "JWT_EXPIRES_IN=1h" >> .env
+          echo "JWT_REFRESH_EXPIRES_IN=7d" >> .env
+
+          # 4. DATABASE (Supabase - Desde Secrets)
+          echo "DATABASE_HOST=${{ secrets.DATABASE_HOST }}" >> .env
+          echo "DATABASE_PORT=5432" >> .env
+          echo "DATABASE_USER=${{ secrets.DATABASE_USER }}" >> .env
+          echo "DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}" >> .env
+          echo "DATABASE_NAME=${{ secrets.DATABASE_NAME }}" >> .env
+          # OJO: Sync en false para no borrar datos en prod
+          echo "DATABASE_SYNC=false" >> .env
+
+          # 5. REDIS (Cambio de Localhost -> IP Cuenta 04)
+          echo "REDIS_HOST=${{ secrets.STATE_IP }}" >> .env
+          echo "REDIS_PORT=6379" >> .env
+          echo "REDIS_PASSWORD=admin123" >> .env
+
+          # 6. KAFKA (Cambio de Localhost -> IP Cuenta 03)
+          # ID y Group pueden ser estáticos o dinámicos, aquí los dejamos fijos para QA
+          echo "KAFKA_BROKERS=${{ secrets.EVENTS_IP }}:9092" >> .env
+          echo "KAFKA_CLIENT_ID=auth-service-qa" >> .env
+          echo "KAFKA_GROUP_ID=auth-group-qa" >> .env
+          
+          # 7. EXTRA
+          echo "DOCKER_USERNAME=${{ env.DOCKER_USERNAME }}" >> .env
+
+      # Copiar archivos al servidor
+      - name: Copy files to Node A
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.NODE_A_IP }}
+          username: ec2-user
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "infrastructure/docker-cloud/docker-compose.apps.yml, .env"
+          target: "/home/ec2-user/app"
+
+      # Ejecutar Docker Compose
+      - name: Deploy Docker Compose
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.NODE_A_IP }}
+          username: ec2-user
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /home/ec2-user/app
+            # Renombrar para que docker compose lo detecte fácil
+            mv infrastructure/docker-cloud/docker-compose.apps.yml docker-compose.yml
+            
+            # Descargar lo nuevo y reiniciar
+            docker compose pull
+            docker compose up -d --remove-orphans
+            docker system prune -f
