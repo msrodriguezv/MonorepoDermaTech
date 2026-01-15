@@ -18,7 +18,7 @@ export class PartnerService {
   constructor(
     @Inject('KAFKA_CLIENT') private readonly kafkaClient: ClientKafka,
     
-    // Inyectamos el Repositorio de TypeORM
+    
     @InjectRepository(ReferralLog)
     private readonly referralRepo: Repository<ReferralLog>,
   ) {}
@@ -30,19 +30,19 @@ export class PartnerService {
   async processReferral(data: DerivePatientDto) {
     this.logger.log(`🔄 Procesando derivación para paciente: ${data.patientId}`);
 
-    // 1. Validar Hospital
+    
     const hospital = this.contactList.find(h => h.id === data.targetHospitalId);
     if (!hospital) {
       throw new NotFoundException(`Hospital ID ${data.targetHospitalId} not found.`);
     }
 
-    // 2. Simulación
+    
     await new Promise(resolve => setTimeout(resolve, 1000));
 
-    // 3. Generar Código
+    
     const authCode = `AUT-${Math.floor(Math.random() * 100000)}`;
 
-    // 4. GUARDAR EN BD (TypeORM) 💾
+    
     const newReferral = this.referralRepo.create({
       patientId: data.patientId,
       doctorId: data.doctorId,
@@ -55,9 +55,9 @@ export class PartnerService {
     const savedRecord = await this.referralRepo.save(newReferral);
     this.logger.log(`💾 Guardado en Base de Datos (ID: ${savedRecord.id})`);
 
-    // 5. EMITIR EVENTO KAFKA 📢
+    
     const eventPayload = {
-      ...savedRecord, // Enviamos todo lo que guardamos
+      ...savedRecord, 
       eventType: 'REFERRAL_CREATED',
     };
 

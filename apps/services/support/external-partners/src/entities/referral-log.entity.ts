@@ -1,6 +1,6 @@
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn } from 'typeorm';
 
-@Entity('referral_logs') // Nombre de la tabla en Postgres
+@Entity('referral_logs') 
 export class ReferralLog {
   @PrimaryGeneratedColumn('uuid')
   id: string;

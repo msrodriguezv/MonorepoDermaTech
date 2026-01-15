@@ -13,7 +13,7 @@ describe('PartnerService', () => {
   };
 
   beforeEach(async () => {
-    // 🧹 LIMPIEZA VITAL PARA QUE NO FALLEN LOS TESTS
+    
     jest.clearAllMocks();
 
     const module: TestingModule = await Test.createTestingModule({
@@ -46,7 +46,7 @@ describe('PartnerService', () => {
       const result = await service.processReferral(dto);
 
       expect(result.success).toBe(true);
-      // Expect English name
+    
       expect(result.data.hospital).toBe('Metropolitan Hospital');
       
       expect(kafkaClient.emit).toHaveBeenCalledWith(

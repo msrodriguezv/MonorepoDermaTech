@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Body, Inject, OnModuleInit, Logger } from '@nestjs/common';
-import { ClientKafka, EventPattern, Payload } from '@nestjs/microservices'; // <--- Importar EventPattern
+import { ClientKafka, EventPattern, Payload } from '@nestjs/microservices';
 import { PartnerService } from '../services/partner.service';
 import { DerivePatientDto } from '../dtos/derive-patient.dto';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
@@ -13,7 +13,7 @@ export class PartnerController implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    // Nos suscribimos para escuchar nuestro propio evento y mostrarlo en consola
+  
     this.kafkaClient.subscribeToResponseOf('referral.processed');
     await this.kafkaClient.connect();
   }
@@ -30,7 +30,7 @@ export class PartnerController implements OnModuleInit {
     return this.partnerService.processReferral(dto);
   }
 
-  // 👇 ESTO HARÁ QUE SALGA LA NOTIFICACIÓN EN TU CONSOLA
+  
   @EventPattern('referral.processed')
   async handleReferralNotification(@Payload() data: any) {
     console.log('\n==================================================');
