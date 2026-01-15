@@ -1,54 +1,66 @@
 import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app/app.module';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { AppModule } from './app.modules';
 import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 async function bootstrap() {
-  // 1. Logger con nombre consistente
   const logger = new Logger('ExternalPartners');
-  
   const app = await NestFactory.create(AppModule);
-  
-  // ⚠️ ESTO FALLARÁ SI NO ARREGLAS EL APP.MODULE (Ver Paso 2 abajo)
-  const configService = app.get(ConfigService);
 
-  // 2. Configuración Global
-  app.enableCors(); 
-  app.setGlobalPrefix('api'); // Prefijo global recomendado
+  // ---------------------------------------------------------
+  // 1. CONFIGURACIÓN GLOBALES
+  // ---------------------------------------------------------
+  const globalPrefix = 'api/support/external-partners';
+  app.setGlobalPrefix(globalPrefix);
 
-  // 3. Versionamiento
   app.enableVersioning({
     type: VersioningType.URI,
     defaultVersion: '1',
   });
 
-  // 4. Pipes de Validación
+  // ---------------------------------------------------------
+  // 2. CORS (MANDATORIO PARA TODOS LOS MICROSERVICIOS)
+  // ---------------------------------------------------------
+  // Define quién puede consumir este servicio (Frontend, Gateway, etc)
+  app.enableCors({
+    origin: true, // Permitir cualquier origen (ajustar a dominio real en Prod)
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    credentials: true, // Permitir cookies/tokens de autorización
+    allowedHeaders: 'Content-Type, Accept, Authorization',
+  });
+  logger.log('✅ CORS habilitado con credenciales y métodos estándar.');
+
+  // ---------------------------------------------------------
+  // 3. PIPES DE VALIDACIÓN (CQRS/DTOs)
+  // ---------------------------------------------------------
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,
       transform: true,
-    })
+    }),
   );
 
-  // 5. Swagger (Documentación)
+  // ---------------------------------------------------------
+  // 4. SWAGGER (DOCUMENTACIÓN)
+  // ---------------------------------------------------------
   const config = new DocumentBuilder()
-    .setTitle('External Partners Service') // Título corregido
-    .setDescription('Microservicio para gestión de aliados externos')
+    .setTitle('External Partners Service')
+    .setDescription('Microservicio de Derivación Médica Externa')
     .setVersion('1.0')
-    .addTag('external-partners')
+    .addBearerAuth() // Para documentar que usa JWT
     .build();
-
+  
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document); // 👈 Ruta explícita
+  SwaggerModule.setup(`${globalPrefix}/docs`, app, document);
 
-  // 6. Iniciar Servidor
-  const port = configService.get<number>('PORT') || 3004;
+  // ---------------------------------------------------------
+  // 5. START
+  // ---------------------------------------------------------
+  const port = process.env.PORT || 3000;
   await app.listen(port);
   
-  // 7. Logs Dinámicos (Usan el puerto real)
-  logger.log(`🚀 External Partners Service running on: http://localhost:${port}/api/v1/`);
-  logger.log(`📑 Swagger Docs available at:         http://localhost:${port}/api/docs`);
+  logger.log(`🚀 Microservice running on: http://localhost:${port}/${globalPrefix}`);
+  logger.log(`📄 Swagger UI: http://localhost:${port}/${globalPrefix}/docs`);
 }
 bootstrap();
