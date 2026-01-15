@@ -47,7 +47,6 @@ resource "aws_instance" "gateway" {
   subnet_id              = var.public_subnet_id
   vpc_security_group_ids = [aws_security_group.gateway_sg.id]
 
-  # Install Nginx, Docker, Git
   user_data = <<-EOF
               #!/bin/bash
               dnf update -y
@@ -57,6 +56,34 @@ resource "aws_instance" "gateway" {
               systemctl start docker
               systemctl enable docker
               usermod -aG docker ec2-user
+              
+              # --- AUTOMATED LOAD BALANCER CONFIGURATION ---
+              # Note: In a real scenario, IPs are injected dynamically.
+              # Here we configure the Nginx Proxy Pass logic.
+              
+              cat <<EOT > /etc/nginx/nginx.conf
+              user nginx;
+              worker_processes auto;
+              error_log /var/log/nginx/error.log;
+              pid /run/nginx.pid;
+              events { worker_connections 1024; }
+              http {
+                  include /etc/nginx/mime.types;
+                  default_type application/octet-stream;
+                  
+                  # Placeholder Upstreams (To be updated by Configuration Management)
+                  upstream backend_cluster {
+                     server 10.0.1.X:3000; # Example IP
+                  }
+                  
+                  server {
+                      listen 80;
+                      location / { proxy_pass http://backend_cluster; }
+                  }
+              }
+              EOT
+              
+              systemctl restart nginx
               EOF
 
   tags = {

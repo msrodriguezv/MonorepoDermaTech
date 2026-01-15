@@ -10,28 +10,65 @@ env:
 
 jobs:
   # ====================================================
-  # JOB 1: CONSTRUIR Y SUBIR IMÁGENES (BUILD)
+  # JOB 1: TEST, BUILD AND PUSH BACKEND MICROSERVICES
   # ====================================================
-  build-push:
+  build-push-backend:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false # If one service fails, don't stop the others immediately (optional)
       matrix:
         service: 
+          # --- CORE SERVICES ---
           - { name: 'auth-service', path: 'apps/services/core/auth-service' }
           - { name: 'patient-service', path: 'apps/services/core/patient-service' }
-          - { name: 'api-gateway', path: 'apps/services/api-gateway' } 
-          # ... AGREGA AQUÍ EL RESTO DE TUS MICROSERVICIOS ...
+          
+          # --- SCHEDULING SERVICES ---
+          # - { name: 'appointment-cmd', path: 'apps/services/scheduling/appointment-cmd' }
+          # - { name: 'availability-qry', path: 'apps/services/scheduling/availability-qry' }
+
+          # --- SUPPORT SERVICES ---
+          # - { name: 'notification-svc', path: 'apps/services/support/notification-svc' }
+          # - { name: 'external-partners', path: 'apps/services/support/external-partners' }
+
+          # --- TRIAGE SERVICES ---
+          # - { name: 'ai-agent', path: 'apps/services/triage/ai-agent' }
+          # - { name: 'qr-ingest', path: 'apps/services/triage/qr-ingest' }
+          # - { name: 'triage-engine', path: 'apps/services/triage/triage-engine' }
+
+          # --- API GATEWAY ---
+          # - { name: 'api-gateway', path: 'apps/services/api-gateway' }
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
+      # Setup Node to run tests before Docker build
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      # ------------------------------------------------------------------------
+      # STEP: UNIT TESTING (JEST)
+      # Description: Runs unit tests for the specific microservice in the matrix.
+      # Requirement: CI/CD must include automated testing (Point 8).
+      # ------------------------------------------------------------------------
+      - name: Run Unit Tests for ${{ matrix.service.name }}
+        run: npx nx test ${{ matrix.service.name }} --skip-nx-cache
+
+      # Login to Docker Hub
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ env.DOCKER_USERNAME }}
           password: ${{ env.DOCKER_PASSWORD }}
 
-      - name: Build Backend ${{ matrix.service.name }}
+      # Build and Push
+      - name: Build and Push ${{ matrix.service.name }}
         uses: docker/build-push-action@v4
         with:
           context: .
@@ -42,17 +79,28 @@ jobs:
             APP_NAME=${{ matrix.service.name }}
             BUILD_PATH=dist/${{ matrix.service.path }}
 
-  build-frontend:
+  # ====================================================
+  # JOB 2: BUILD AND PUSH FRONTEND (FLUTTER)
+  # ====================================================
+  build-push-frontend:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
+
+      # Note: Adding Flutter Test here is recommended if you have tests
+      # - name: Setup Flutter
+      #   uses: subosito/flutter-action@v2
+      # - name: Flutter Test
+      #   run: flutter test
+
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ env.DOCKER_USERNAME }}
           password: ${{ env.DOCKER_PASSWORD }}
-      - name: Build Frontend
+
+      - name: Build and Push Frontend
         uses: docker/build-push-action@v4
         with:
           context: ./apps/clients/mobile_app
@@ -61,55 +109,46 @@ jobs:
           tags: ${{ env.DOCKER_USERNAME }}/dermatech-frontend:qa
 
   # ====================================================
-  # JOB 2: DESPLEGAR EN NODE A (QA)
+  # JOB 3: DEPLOY TO QA CLUSTER (HIGH AVAILABILITY)
   # ====================================================
   deploy-qa:
-    needs: [build-push, build-frontend]
+    needs: [build-push-backend, build-push-frontend]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # --- AQUÍ OCURRE LA MAGIA DE LAS VARIABLES ---
+      # ------------------------------------------------------------------------
+      # STEP: GENERATE RUNTIME CONFIGURATION (.env)
+      # Description: Injects secrets and infrastructure IPs into a production .env 
+      # file. This file is never committed to the repo for security.
+      # ------------------------------------------------------------------------
       - name: Generate Production .env
         run: |
-          # 1. APP CONFIGURATION (Estáticas / Hardcoded)
           echo "PORT=3000" >> .env
           echo "NODE_ENV=production" >> .env
-          
-          # 2. SECURITY (Desde GitHub Secrets - CAMBIADAS)
           echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
           echo "JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}" >> .env
-          
-          # 3. TIEMPOS DE EXPIRACIÓN (Igual que tu local, pero escritos aquí)
           echo "JWT_EXPIRES_IN=1h" >> .env
           echo "JWT_REFRESH_EXPIRES_IN=7d" >> .env
-
-          # 4. DATABASE (Supabase - Desde Secrets)
           echo "DATABASE_HOST=${{ secrets.DATABASE_HOST }}" >> .env
           echo "DATABASE_PORT=5432" >> .env
           echo "DATABASE_USER=${{ secrets.DATABASE_USER }}" >> .env
           echo "DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}" >> .env
           echo "DATABASE_NAME=${{ secrets.DATABASE_NAME }}" >> .env
-          # OJO: Sync en false para no borrar datos en prod
           echo "DATABASE_SYNC=false" >> .env
-
-          # 5. REDIS (Cambio de Localhost -> IP Cuenta 04)
           echo "REDIS_HOST=${{ secrets.STATE_IP }}" >> .env
           echo "REDIS_PORT=6379" >> .env
           echo "REDIS_PASSWORD=admin123" >> .env
-
-          # 6. KAFKA (Cambio de Localhost -> IP Cuenta 03)
-          # ID y Group pueden ser estáticos o dinámicos, aquí los dejamos fijos para QA
           echo "KAFKA_BROKERS=${{ secrets.EVENTS_IP }}:9092" >> .env
           echo "KAFKA_CLIENT_ID=auth-service-qa" >> .env
           echo "KAFKA_GROUP_ID=auth-group-qa" >> .env
-          
-          # 7. EXTRA
           echo "DOCKER_USERNAME=${{ env.DOCKER_USERNAME }}" >> .env
 
-      # Copiar archivos al servidor
-      - name: Copy files to Node A
+      # ------------------------------------------------------------------------
+      # STEP: DEPLOY TO PRIMARY NODE (NODE A)
+      # ------------------------------------------------------------------------
+      - name: Secure Copy to Node A
         uses: appleboy/scp-action@master
         with:
           host: ${{ secrets.NODE_A_IP }}
@@ -118,8 +157,7 @@ jobs:
           source: "infrastructure/docker-cloud/docker-compose.apps.yml, .env"
           target: "/home/ec2-user/app"
 
-      # Ejecutar Docker Compose
-      - name: Deploy Docker Compose
+      - name: Execute Remote Deployment (Node A)
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.NODE_A_IP }}
@@ -127,10 +165,33 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd /home/ec2-user/app
-            # Renombrar para que docker compose lo detecte fácil
             mv infrastructure/docker-cloud/docker-compose.apps.yml docker-compose.yml
-            
-            # Descargar lo nuevo y reiniciar
+            docker compose pull
+            docker compose up -d --remove-orphans
+            docker system prune -f
+
+      # ------------------------------------------------------------------------
+      # STEP: DEPLOY TO REPLICA NODE (NODE B) - HIGH AVAILABILITY
+      # Description: Replicates the deployment to the secondary node to ensure HA.
+      # ------------------------------------------------------------------------
+      - name: Secure Copy to Node B
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.NODE_B_IP }}
+          username: ec2-user
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "infrastructure/docker-cloud/docker-compose.apps.yml, .env"
+          target: "/home/ec2-user/app"
+
+      - name: Execute Remote Deployment (Node B)
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.NODE_B_IP }}
+          username: ec2-user
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /home/ec2-user/app
+            mv infrastructure/docker-cloud/docker-compose.apps.yml docker-compose.yml
             docker compose pull
             docker compose up -d --remove-orphans
             docker system prune -f

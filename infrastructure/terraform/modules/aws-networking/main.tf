@@ -24,12 +24,12 @@ resource "aws_internet_gateway" "igw" {
 }
 
 # 3. Public Subnet
-# Hosting the instances that need public IPs
 resource "aws_subnet" "public" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = var.public_subnet_cidr
   map_public_ip_on_launch = true
-  availability_zone       = "${var.region}a"
+  # Now it uses the variable passed from the main.tf
+  availability_zone       = var.availability_zone 
 
   tags = {
     Name = "${var.project_name}-${var.environment}-public-subnet"
