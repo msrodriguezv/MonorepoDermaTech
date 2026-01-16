@@ -101,4 +101,4 @@ dermatech-monorepo/
 ├── infrastructure/             # Terraform modules for AWS/On-Premise
 │   ├── modules/
 │   └── environments/
-└── .github/workflows/          # CI/CD Pipelines
+└── .github/workflows/          # CI/CD Pipelinesgit 

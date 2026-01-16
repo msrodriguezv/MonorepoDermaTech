@@ -1,4 +1,4 @@
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { Transport, MicroserviceOptions } from '@nestjs/microservices';
@@ -12,6 +12,13 @@ async function bootstrap() {
   // Initialize hybrid application (HTTP + Kafka)
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
+
+   // Enable URI Versioning (This adds /v1/ to the path automatically)
+  app.enableVersioning({
+    type: VersioningType.URI,
+    defaultVersion: '1', // Forces v1 for all controllers without explicit version
+  });
+
 
   // Configure Kafka consumer microservice
   // This consumer listens to domain events published by other services
@@ -115,6 +122,9 @@ async function bootstrap() {
     logger.error(`❌ Failed to start Kafka consumer: ${error.message}`);
     logger.warn(`⚠️  Service running in HTTP-only mode. Check Kafka availability.`);
   }
+
+   logger.log(`Auth Service is running on: http://localhost:${port}/api/v1/availability`);
+  logger.log(`HTTP Server is running on: http://localhost:${port}/api/docs`);
 }
 
 bootstrap();

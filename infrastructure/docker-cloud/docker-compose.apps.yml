@@ -1,0 +1,65 @@
+version: '3.8'
+
+# ==============================================================================
+# DOCKER COMPOSE - APPLICATION LAYER
+# Context: Deployed to Node A (QA) and Node B (Prod) EC2 Instances.
+# Purpose: Orchestrates the microservices and frontend.
+# ==============================================================================
+
+services:
+  # --- API GATEWAY (NestJS) ---
+  api-gateway:
+    image: ${DOCKER_USERNAME}/dermatech-api-gateway:latest
+    container_name: dermatech_gateway
+    restart: always
+    env_file: .env # Injects DB credentials, JWT secrets, etc.
+    ports:
+      - "3000:3000"
+    networks:
+      - app_network
+
+  # --- CORE SERVICES ---
+  auth-service:
+    image: ${DOCKER_USERNAME}/dermatech-auth-service:latest
+    container_name: dermatech_auth
+    restart: always
+    env_file: .env
+    ports:
+      - "3001:3000" # Maps external 3001 to internal container 3000
+    networks:
+      - app_network
+
+  patient-service:
+    image: ${DOCKER_USERNAME}/dermatech-patient-service:latest
+    container_name: dermatech_patient
+    restart: always
+    env_file: .env
+    ports:
+      - "3002:3000"
+    networks:
+      - app_network
+
+  # --- SUPPORT SERVICES ---
+  notification-svc:
+    image: ${DOCKER_USERNAME}/dermatech-notification-svc:latest
+    container_name: dermatech_notification
+    restart: always
+    env_file: .env
+    ports:
+      - "3003:3000"
+    networks:
+      - app_network
+
+  # --- FRONTEND (Flutter Web) ---
+  frontend:
+    image: ${DOCKER_USERNAME}/dermatech-frontend:latest
+    container_name: dermatech_frontend
+    restart: always
+    ports:
+      - "80:80"
+    networks:
+      - app_network
+
+networks:
+  app_network:
+    driver: bridge

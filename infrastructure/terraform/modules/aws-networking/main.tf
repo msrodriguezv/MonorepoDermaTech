@@ -1,6 +1,7 @@
 # infrastructure/terraform/modules/aws-networking/main.tf
 
-# 1. Global Network (VPC)
+# 1. VPC Configuration
+# Creates the virtual network for the account
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_hostnames = true
@@ -12,7 +13,8 @@ resource "aws_vpc" "main" {
   }
 }
 
-# 2. Internet Gateway (The door to the Internet)
+# 2. Internet Gateway
+# Allows traffic from the internet to enter the VPC
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
 
@@ -21,19 +23,21 @@ resource "aws_internet_gateway" "igw" {
   }
 }
 
-# 3. Public Subnet (Where the Gateway with the Fixed IP will reside)
+# 3. Public Subnet
 resource "aws_subnet" "public" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = var.public_subnet_cidr
-  map_public_ip_on_launch = true # Required for instances here to access the internet
-  availability_zone       = "${var.region}a"
+  map_public_ip_on_launch = true
+  # Now it uses the variable passed from the main.tf
+  availability_zone       = var.availability_zone 
 
   tags = {
     Name = "${var.project_name}-${var.environment}-public-subnet"
   }
 }
 
-# 4. Route Table for Public Subnet (Routing rules to access the internet)
+# 4. Route Table & Association
+# Directs traffic from subnet to the Internet Gateway
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
@@ -47,42 +51,11 @@ resource "aws_route_table" "public" {
   }
 }
 
-# 5. Associate the Route Table with the Subnet
 resource "aws_route_table_association" "public" {
   subnet_id      = aws_subnet.public.id
   route_table_id = aws_route_table.public.id
 }
 
-# 6. Public Subnet Zone B (NEW)
-resource "aws_subnet" "public_b" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = var.public_subnet_cidr_b
-  map_public_ip_on_launch = true
-  availability_zone       = "${var.region}b" # <--- ZONA B (us-east-1b)
-
-  tags = {
-    Name = "${var.project_name}-${var.environment}-public-subnet-b"
-  }
-}
-
-# 7. Route Table Association for Zone B
-resource "aws_route_table_association" "public_b" {
-  subnet_id      = aws_subnet.public_b.id
-  route_table_id = aws_route_table.public.id # Usamos la misma tabla de rutas
-}
-
 # --- OUTPUTS ---
-output "vpc_id" {
-  value       = aws_vpc.main.id
-  description = "The ID of the created VPC"
-}
-
-output "public_subnet_id" {
-  value       = aws_subnet.public.id
-  description = "The ID of the public subnet"
-}
-
-output "public_subnet_id_b" {
-  value = aws_subnet.public_b.id
-  description = "The ID of the public subnet B"
-}
+output "vpc_id" { value = aws_vpc.main.id }
+output "public_subnet_id" { value = aws_subnet.public.id }
