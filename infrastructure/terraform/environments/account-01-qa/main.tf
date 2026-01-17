@@ -1,3 +1,11 @@
+terraform {
+  backend "s3" {
+    bucket = "tfstate-qa-dermatech"
+    key    = "qa/terraform.tfstate"
+    region = "us-east-1"
+  }
+}
+
 provider "aws" {
   region  = "us-east-1"
   profile = "qa-dermatech" 
@@ -17,102 +25,69 @@ module "networking" {
   region             = "us-east-1"
   project_name       = local.project_name
   environment        = local.environment
-  vpc_cidr           = var.qa_cidr            # 10.0.0.0/16
+  vpc_cidr           = var.qa_cidr            
   public_subnet_cidr = "10.0.1.0/24"
-  availability_zone  = "us-east-1a"           # Hub located in Zone A
+  availability_zone  = "us-east-1a"            
 }
 
 # ==============================================================================
-# 2. AUTOMATIC DISCOVERY LAYER (DATA SOURCES)
-# Purpose: Dynamically fetch VPC IDs using Name Tags for full automation.
-# ==============================================================================
-
-# Discover Events VPC
-data "aws_vpc" "events_discovery" {
-  filter {
-    name   = "tag:Name"
-    values = ["dermatech-infra-events-vpc"]
-  }
-}
-
-# Discover State VPC
-data "aws_vpc" "state_discovery" {
-  filter {
-    name   = "tag:Name"
-    values = ["dermatech-infra-state-vpc"]
-  }
-}
-
-# Discover Node A VPC
-data "aws_vpc" "node_a_discovery" {
-  filter {
-    name   = "tag:Name"
-    values = ["dermatech-infra-node-a-vpc"]
-  }
-}
-
-# Discover Node B VPC
-data "aws_vpc" "node_b_discovery" {
-  filter {
-    name   = "tag:Name"
-    values = ["dermatech-infra-node-b-vpc"]
-  }
-}
-
-# ==============================================================================
-# 3. GATEWAY / BASTION LAYER
+# 2. GATEWAY / BASTION LAYER
 # ==============================================================================
 module "gateway" {
-  source           = "../../modules/aws-gateway-node"
-  project_name     = local.project_name
-  environment      = local.environment
-  vpc_id           = module.networking.vpc_id
-  ami_id           = local.ami_id
-  public_subnet_id = module.networking.public_subnet_id
+  source              = "../../modules/aws-gateway-node"
+  project_name        = local.project_name
+  environment         = local.environment
+  vpc_id              = module.networking.vpc_id
+  ami_id              = local.ami_id
+  public_subnet_id    = module.networking.public_subnet_id
+  availability_zone   = "us-east-1a"
+
+  # Fixed Private IP for Internal Network Consistency
+  bastion_private_ip  = "10.0.1.59"
+  
+  # Shielded Elastic IP (Cloudflare) - Existing Allocation ID
+  eip_allocation_id   = "eipalloc-04a19075ece27ac49"
 }
 
 # ==============================================================================
-# 4. INTERCONNECTION LAYER (VPC PEERING REQUESTS)
+# 3. INTERCONNECTION LAYER (VPC PEERING REQUESTS)
+# Uses injected Variable IDs instead of Data Lookups to enable CI/CD workflows
 # ==============================================================================
 
-# Request to Events
 resource "aws_vpc_peering_connection" "qa_to_events" {
   peer_owner_id = var.events_account_id
-  peer_vpc_id   = data.aws_vpc.events_discovery.id
+  peer_vpc_id   = var.events_vpc_id   # Injected Variable
   vpc_id        = module.networking.vpc_id
   auto_accept   = false
   tags          = { Name = "qa-to-events-peering" }
 }
 
-# Request to State
 resource "aws_vpc_peering_connection" "qa_to_state" {
   peer_owner_id = var.state_account_id
-  peer_vpc_id   = data.aws_vpc.state_discovery.id
+  peer_vpc_id   = var.state_vpc_id    # Injected Variable
   vpc_id        = module.networking.vpc_id
   auto_accept   = false
   tags          = { Name = "qa-to-state-peering" }
 }
 
-# Request to Node A
 resource "aws_vpc_peering_connection" "qa_to_node_a" {
   peer_owner_id = var.node_a_account_id
-  peer_vpc_id   = data.aws_vpc.node_a_discovery.id
+  peer_vpc_id   = var.node_a_vpc_id   # Injected Variable
   vpc_id        = module.networking.vpc_id
   auto_accept   = false
   tags          = { Name = "qa-to-node-a-peering" }
 }
 
-# Request to Node B
 resource "aws_vpc_peering_connection" "qa_to_node_b" {
   peer_owner_id = var.node_b_account_id
-  peer_vpc_id   = data.aws_vpc.node_b_discovery.id
+  peer_vpc_id   = var.node_b_vpc_id   # Injected Variable
   vpc_id        = module.networking.vpc_id
   auto_accept   = false
   tags          = { Name = "qa-to-node-b-peering" }
 }
 
 # ==============================================================================
-# 5. ROUTING LAYER (ACCESS TO SPOKE NETWORKS)
+# 4. ROUTING LAYER (ACCESS TO SPOKE NETWORKS)
 # ==============================================================================
 
 resource "aws_route" "route_to_events" {
@@ -140,10 +115,14 @@ resource "aws_route" "route_to_node_b" {
 }
 
 # ==============================================================================
-# 6. OUTPUTS
+# 5. OUTPUTS
 # ==============================================================================
 output "QA_GATEWAY_PUBLIC_IP" {
   value = module.gateway.final_public_ip
+}
+
+output "QA_GATEWAY_PRIVATE_IP" {
+  value = module.gateway.bastion_private_ip
 }
 
 output "QA_VPC_ID" {

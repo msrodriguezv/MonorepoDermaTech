@@ -1,37 +1,37 @@
 # ==============================================================================
 # MODULE: AWS COMPUTE EVENTS
-# Context: Kafka, RabbitMQ, Zookeeper, Mosquitto
-# Purpose: Provisioning of the Message Broker Server with Persistent Storage
+# Context: Kafka, RabbitMQ, Zookeeper
+# Purpose: Messaging Server with INDESTRUCTIBLE IP (by ID) and Storage
+# Instance: t3.large (8GB RAM) for JVM Heap stability
 # ==============================================================================
 
 # ==============================================================================
-# 1. SECURITY GROUP (BASTION & INTERNAL ONLY)
-# Purpose: Strict firewall rules. No public access except via Bastion/Nodes.
+# 1. SECURITY GROUP
 # ==============================================================================
 resource "aws_security_group" "events_sg" {
   name        = "${var.project_name}-${var.environment}-sg"
-  description = "Security Group for Events Infrastructure (Whitelisted)"
+  description = "Security Group for Events Infrastructure"
   vpc_id      = var.vpc_id
 
-  # --- SSH ACCESS (Admin via Bastion) ---
+  # SSH Access from QA Bastion only
   ingress {
-    description = "SSH Access from QA Gateway"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
     cidr_blocks = [var.gateway_allowed_ip] 
   }
 
-  # --- DATA PORTS (Kafka/RabbitMQ from App Nodes) ---
+  # Messaging Ports (Internal Network)
+  # 9092 (Kafka), 2181 (Zookeeper), 5672/15672 (Rabbit), 1883/9001 (MQTT)
   ingress {
-    description = "Data Traffic from Trusted App Nodes"
     from_port   = 0
     to_port     = 65535
     protocol    = "tcp"
     cidr_blocks = var.app_nodes_ips
+    description = "Allow App Nodes Full Access"
   }
 
-  # --- OUTBOUND TRAFFIC (Allow All) ---
+  # Outbound Traffic (Allow All)
   egress {
     from_port   = 0
     to_port     = 0
@@ -39,109 +39,119 @@ resource "aws_security_group" "events_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.project_name}-${var.environment}-sg"
-  }
+  tags = { Name = "${var.project_name}-${var.environment}-sg" }
 }
 
 # ==============================================================================
-# 2. PERSISTENT STORAGE (EBS VOLUME)
-# Purpose: Independent disk to save Kafka/Rabbit logs if instance is recreated.
+# 2. DATA SOURCE: ELASTIC IP (BLINDADO POR ID)
+# We use the immutable Allocation ID. Terraform reads it, never destroys it.
+# ==============================================================================
+data "aws_eip" "events_eip" {
+  id = var.eip_allocation_id
+}
+
+# ==============================================================================
+# 3. PERSISTENT STORAGE (10GB)
+# External volume that SURVIVES instance destruction.
 # ==============================================================================
 resource "aws_ebs_volume" "data_volume" {
-  availability_zone = "${var.region}a"
+  availability_zone = var.availability_zone
   size              = 10
   type              = "gp3"
+  encrypted         = true
 
   tags = {
-    Name = "${var.project_name}-${var.environment}-persistence"
+    Name      = "${var.project_name}-${var.environment}-persistence"
+    ManagedBy = "terraform"
   }
 
   lifecycle {
-    prevent_destroy = true 
+    prevent_destroy = true # CRITICAL: DATA PROTECTION
   }
 }
 
 # ==============================================================================
-# 3. EC2 INSTANCE (EVENTS SERVER)
-# Purpose: Hosting Kafka, Zookeeper, RabbitMQ, and MQTT
+# 4. EC2 INSTANCE (EVENTS SERVER)
 # ==============================================================================
 resource "aws_instance" "worker" {
-  ami           = var.ami_id
-  instance_type = "t3.large" 
-  subnet_id     = var.public_subnet_id
-  private_ip    = var.private_ip_address
+  ami             = var.ami_id
+  instance_type   = "t3.large" 
+  subnet_id       = var.public_subnet_id
   
-  vpc_security_group_ids = [aws_security_group.events_sg.id]
+  # CRITICAL: Fixed Private IP (10.1.1.50)
+  private_ip      = var.private_ip_address
+  
+  availability_zone = var.availability_zone
+  
+  vpc_security_group_ids      = [aws_security_group.events_sg.id]
   user_data_replace_on_change = true
 
+  # ROOT VOLUME (System + Docker Images)
   root_block_device {
     volume_size           = 25
     volume_type           = "gp3"
     delete_on_termination = true
   }
 
-  tags = {
-    Name = "${var.project_name}-${var.environment}-server"
-  }
+  tags = { Name = "${var.project_name}-${var.environment}-server" }
 
   user_data = <<-EOF
     #!/bin/bash
     set -e
-
-    # A. INSTALL DOCKER & TOOLS
+    
+    # --- INSTALLATION ---
     dnf update -y
     dnf install -y docker git htop nc
     systemctl start docker
     systemctl enable docker
     usermod -aG docker ec2-user
 
-    # B. INSTALL DOCKER COMPOSE V2
-    mkdir -p /usr/local/lib/docker/cli-plugins
-    curl -SL https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
-    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-
-    # C. SWAP MEMORY CONFIGURATION (STABILITY)
-    # Essential for Java/Kafka memory spikes on T3 instances
+    # --- SWAP SETUP (4GB) ---
+    # Critical for t3.large running Kafka + RabbitMQ + ZK
     dd if=/dev/zero of=/swapfile bs=128M count=32
     chmod 600 /swapfile
     mkswap /swapfile
     swapon /swapfile
     echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
 
-    # D. MOUNT PERSISTENT DISK & PERMISSIONS FIX
+    # --- PERSISTENT DISK MOUNTING ---
     DATA_DISK="/dev/nvme1n1"
     MOUNT_POINT="/data"
     
-    # Grace period for EBS hot-plugging
-    sleep 20 
+    # Wait for AWS to attach the volume
+    while [ ! -b $DATA_DISK ]; do echo "Waiting for disk..."; sleep 5; done
 
-    if ! blkid $DATA_DISK; then
-        mkfs -t xfs $DATA_DISK
-    fi
+    # Only format if it's a NEW disk (Protects Data)
+    if ! blkid $DATA_DISK; then mkfs -t xfs $DATA_DISK; fi
+    
     mkdir -p $MOUNT_POINT
     mount $DATA_DISK $MOUNT_POINT
-    echo "$DATA_DISK $MOUNT_POINT xfs defaults,nofail 0 2" >> /etc/fstab
     
-    # Create Persistent Directories Structure
+    # Persist mount on reboot
+    if ! grep -qs "$MOUNT_POINT" /etc/fstab; then
+      echo "$DATA_DISK $MOUNT_POINT xfs defaults,nofail 0 2" >> /etc/fstab
+    fi
+    
+    # --- DIRECTORIES & PERMISSIONS (CRITICAL) ---
     mkdir -p $MOUNT_POINT/kafka $MOUNT_POINT/zookeeper $MOUNT_POINT/rabbitmq
     mkdir -p $MOUNT_POINT/mosquitto/config $MOUNT_POINT/mosquitto/data $MOUNT_POINT/mosquitto/log
 
-    # --- GRANULAR OWNERSHIP FIX (Production Critical) ---
-    # Prevents "Permission Denied" boot loops in containers
-    # UID 1000: Default for Confluent/Kafka images
-    # UID 999:  Default for Official RabbitMQ images
+    # RabbitMQ (UID 999) - Kafka/ZK (UID 1000 for Confluent/Bitnami often varies, setting permissive or specific)
+    # Using 1000:1000 for generic non-root users often used by containers
     chown -R 1000:1000 $MOUNT_POINT/kafka $MOUNT_POINT/zookeeper
+    
+    # RabbitMQ Official Image uses UID 999
     chown -R 999:999 $MOUNT_POINT/rabbitmq
+    
+    # Mosquitto Official Image uses UID 1883
     chown -R 1883:1883 $MOUNT_POINT/mosquitto
-
-    # --- RABBITMQ SECURITY COMPLIANCE ---
-    # Erlang cookies MUST have 600 permissions and proper ownership to boot
-    touch $MOUNT_POINT/rabbitmq/.erlang.cookie
+    
+    # RabbitMQ Cookie Security (Prevents cluster startup failure)
+    echo "DERMATECH_SECRET_COOKIE" > $MOUNT_POINT/rabbitmq/.erlang.cookie
     chown 999:999 $MOUNT_POINT/rabbitmq/.erlang.cookie
     chmod 600 $MOUNT_POINT/rabbitmq/.erlang.cookie
 
-    # E. CONFIGURE MOSQUITTO
+    # Mosquitto Config Injection
     cat <<MQTTCFG > $MOUNT_POINT/mosquitto/config/mosquitto.conf
     persistence true
     persistence_location /mosquitto/data/
@@ -151,16 +161,15 @@ resource "aws_instance" "worker" {
     listener 9001
     protocol websockets
     MQTTCFG
+    
+    # Fix ownership of config file
+    chown 1883:1883 $MOUNT_POINT/mosquitto/config/mosquitto.conf
 
-    # F. INJECT ENVIRONMENT VARIABLES
+    # Public IP Injection for Kafka Advertised Listeners
     PUBLIC_IP=$(curl -s http://checkip.amazonaws.com)
     echo "KAFKA_PUBLIC_IP=$PUBLIC_IP" > /home/ec2-user/.env
     
-    # G. AUTOMATE MASTER SSH KEY INJECTION
-    # Ensures instant access for tunneling without manual console intervention
-    echo "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC3saMxMtMwZ1jRfnber/C2Qz/Y6qaKidbk9P3TPN1pE1rc2ayyqPGQcbDs9K6pSgwWWRn9e20kaeWc/K73kVo9F1biknB+P6CARX/0E2ybT4JuJMUH4cZ38ZDjT4brxC++OO+zqel5QubXajp6bslOzlXMYFCrexzFYXAQ5+0LtRPz4cw3KlFT2aFS6KCBsWxo3KsecCIYLfbU4l0qb72Jq8iIpujaCf2av3DkuE9BkFLUT52DsJ39paLfJYfSh48Qly42DM241oNawmZAdfPL92pctVxTCfmPnFuybnwksetaHMNi6OjH2LrIuySIxGIzuFKJHUqUZsQ5NdpFZqH/HOVgS4UhzVjkTSRAQuBpOUnjw5NTLjSfSfLkag29SK3QD2indvs+QZmJcLDWIXyJhSMFARX0nfOfuOhIyMrhAIG86Ekh2TgTCp5MwnmA/t2oqA4JRHVikPtmqO187AVe6wS/ZN0Nq8B8vHpZsF5xUFO/lZNIfxidIyzaprgiB09d02q7+9rr5g8ObRSUtkyOi8wkqo74ioWj4Vx1NRMVMb6FX4pGr6633Uw6Az4QFR8sVbZee/BYVgZVf//7t/SK/zHK7wzOhgIqRy2qkKgIJZHCgyF0eEr/zM2f/oM746WUl5aqQR7+W+SS6sHgGPjVxriQeRRAdjU+EyWWzKM0RQ==" >> /home/ec2-user/.ssh/authorized_keys
-
-    # H. CREATE DOCKER COMPOSE FILE
+    # Docker Compose File Generation
     cat <<COMPOSE > /home/ec2-user/docker-compose.yml
     version: '3.8'
     services:
@@ -188,6 +197,7 @@ resource "aws_instance" "worker" {
         environment:
           KAFKA_BROKER_ID: 1
           KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          # Listeners: Internal (29092) and External (9092 via Public IP)
           KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://$${KAFKA_PUBLIC_IP}:9092
           KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
           KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
@@ -205,6 +215,7 @@ resource "aws_instance" "worker" {
         environment:
           RABBITMQ_DEFAULT_USER: admin
           RABBITMQ_DEFAULT_PASS: admin123
+          RABBITMQ_ERLANG_COOKIE: "DERMATECH_SECRET_COOKIE"
         volumes:
           - $MOUNT_POINT/rabbitmq:/var/lib/rabbitmq
         restart: always
@@ -222,32 +233,27 @@ resource "aws_instance" "worker" {
         restart: always
     COMPOSE
 
-    # I. START SERVICES
+    # Start Stack
     cd /home/ec2-user
     docker compose up -d
-    
-    echo "SETUP COMPLETE: Persistent Stack Online"
   EOF
 }
 
 # ==============================================================================
-# 4. VOLUME ATTACHMENT & ELASTIC IP
+# 5. ATTACHMENTS & ASSOCIATIONS
 # ==============================================================================
 resource "aws_volume_attachment" "ebs_att" {
-  device_name = "/dev/sdf"
-  volume_id   = aws_ebs_volume.data_volume.id
-  instance_id = aws_instance.worker.id
-}
-
-resource "aws_eip" "events_eip" {
-  domain = "vpc"
-  tags = { Name = "${var.project_name}-${var.environment}-eip" }
-  lifecycle { prevent_destroy = true }
+  device_name  = "/dev/sdf"
+  volume_id    = aws_ebs_volume.data_volume.id
+  instance_id  = aws_instance.worker.id
+  force_detach = true
 }
 
 resource "aws_eip_association" "eip_assoc" {
   instance_id   = aws_instance.worker.id
-  allocation_id = aws_eip.events_eip.id
+  allocation_id = data.aws_eip.events_eip.id
 }
 
-output "public_ip" { value = aws_eip.events_eip.public_ip }
+output "public_ip" { 
+  value = data.aws_eip.events_eip.public_ip 
+}
