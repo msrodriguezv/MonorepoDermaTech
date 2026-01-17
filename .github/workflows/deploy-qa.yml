@@ -1,0 +1,144 @@
+name: "TURBO DEPLOY: DermaTech Global"
+
+on:
+  push:
+    branches: [ qa ]
+
+jobs:
+  # ==========================================
+  # NIVEL 1: CIMIENTOS (EVENTS y STATE)
+  # Corren al mismo tiempo (Paralelo)
+  # ==========================================
+  base-layer:
+    name: Deploy Base (${{ matrix.account }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - account: 'Events'
+            path: 'account-02-events'
+            profile: 'events-dermatech' # Debe coincidir con tu archivo
+            output_var: 'VPC_EVENTS'
+          - account: 'State'
+            path: 'account-03-state'
+            profile: 'state-dermatech'
+            output_var: 'VPC_STATE'
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
+
+      # Restauramos el archivo maestro de credenciales
+      - name: Restore Credentials
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+
+      - name: Deploy
+        env:
+          AWS_PROFILE: ${{ matrix.profile }}
+          AWS_REGION: us-east-1
+        run: |
+          cd infrastructure/terraform/environments/${{ matrix.path }}
+          terraform init -reconfigure
+          terraform apply -auto-approve
+          # Guardamos el ID en un archivo de texto
+          echo "${{ matrix.output_var }}=$(terraform output -raw vpc_id)" > vpc_id.txt
+      
+      # Subimos el ID a la nube temporal de GitHub para que QA lo pueda leer luego
+      - name: Upload VPC ID
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output_var }}
+          path: infrastructure/terraform/environments/${{ matrix.path }}/vpc_id.txt
+
+  # ==========================================
+  # NIVEL 2: NODOS (A y B)
+  # Esperan a que termine el Nivel 1 (needs: base-layer)
+  # ==========================================
+  nodes-layer:
+    name: Deploy Node (${{ matrix.account }})
+    needs: base-layer
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - account: 'Node A'
+            path: 'account-04-node-a'
+            profile: 'node-a-dermatech'
+            output_var: 'VPC_NODE_A'
+          - account: 'Node B'
+            path: 'account-05-node-b'
+            profile: 'node-b-dermatech'
+            output_var: 'VPC_NODE_B'
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
+
+      - name: Restore Credentials
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+
+      - name: Deploy
+        env:
+          AWS_PROFILE: ${{ matrix.profile }}
+          AWS_REGION: us-east-1
+        run: |
+          cd infrastructure/terraform/environments/${{ matrix.path }}
+          terraform init -reconfigure
+          terraform apply -auto-approve
+          echo "${{ matrix.output_var }}=$(terraform output -raw vpc_id)" > vpc_id.txt
+
+      - name: Upload VPC ID
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output_var }}
+          path: infrastructure/terraform/environments/${{ matrix.path }}/vpc_id.txt
+
+  # ==========================================
+  # NIVEL 3: QA HUB (FINAL)
+  # Espera a TODOS (needs: [base-layer, nodes-layer])
+  # ==========================================
+  qa-hub:
+    name: Deploy QA Hub
+    needs: [base-layer, nodes-layer]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
+      
+      - name: Restore Credentials
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+
+      # Descargamos los 4 IDs recolectados
+      - uses: actions/download-artifact@v4
+        with: { name: 'VPC_EVENTS', path: 'VPC_EVENTS' }
+      - uses: actions/download-artifact@v4
+        with: { name: 'VPC_STATE', path: 'VPC_STATE' }
+      - uses: actions/download-artifact@v4
+        with: { name: 'VPC_NODE_A', path: 'VPC_NODE_A' }
+      - uses: actions/download-artifact@v4
+        with: { name: 'VPC_NODE_B', path: 'VPC_NODE_B' }
+
+      - name: Read IDs into Environment
+        run: |
+          echo "VPC_EVENTS=$(cat VPC_EVENTS/vpc_id.txt)" >> $GITHUB_ENV
+          echo "VPC_STATE=$(cat VPC_STATE/vpc_id.txt)" >> $GITHUB_ENV
+          echo "VPC_NODE_A=$(cat VPC_NODE_A/vpc_id.txt)" >> $GITHUB_ENV
+          echo "VPC_NODE_B=$(cat VPC_NODE_B/vpc_id.txt)" >> $GITHUB_ENV
+
+      - name: Deploy QA
+        env:
+          AWS_PROFILE: qa-dermatech
+          AWS_REGION: us-east-1
+        run: |
+          cd infrastructure/terraform/environments/account-01-qa
+          terraform init -reconfigure
+          # Aquí inyectamos los IDs capturados
+          terraform apply -auto-approve \
+            -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
+            -var="state_vpc_id=${{ env.VPC_STATE }}" \
+            -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
+            -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
