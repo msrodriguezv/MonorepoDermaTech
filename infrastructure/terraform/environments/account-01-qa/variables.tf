@@ -33,21 +33,25 @@ variable "node_b_cidr" {
 variable "events_vpc_id" {
   description = "VPC ID of the Events Account"
   type        = string
+  default     = ""
 }
 
 variable "state_vpc_id" {
   description = "VPC ID of the State Account"
   type        = string
+  default     = ""
 }
 
 variable "node_a_vpc_id" {
   description = "VPC ID of the Node A Account"
   type        = string
+  default     = ""
 }
 
 variable "node_b_vpc_id" {
   description = "VPC ID of the Node B Account"
   type        = string
+  default     = ""
 }
 
 # --- AWS Account IDs (For Peering Authentication) ---

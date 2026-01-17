@@ -135,8 +135,8 @@ jobs:
           cd infrastructure/terraform/environments/account-01-qa
           terraform init -reconfigure
           terraform destroy -auto-approve \
-            -var="events_vpc_id=null" -var="state_vpc_id=null" \
-            -var="node_a_vpc_id=null" -var="node_b_vpc_id=null"
+            -var="events_vpc_id=" -var="state_vpc_id=" \
+            -var="node_a_vpc_id=" -var="node_b_vpc_id="
 
       - name: Force Delete Remaining Resources
         run: |
@@ -164,8 +164,8 @@ jobs:
         run: |
           cd infrastructure/terraform/environments/account-01-qa
           terraform destroy -auto-approve \
-            -var="events_vpc_id=null" -var="state_vpc_id=null" \
-            -var="node_a_vpc_id=null" -var="node_b_vpc_id=null" || true
+            -var="events_vpc_id=" -var="state_vpc_id=" \
+            -var="node_a_vpc_id=" -var="node_b_vpc_id=" || true
 
   # ==========================================
   # PASO 2: DESTRUIR NODOS (Paralelo)

@@ -15,6 +15,14 @@ provider "aws" {
   profile = "node-b-dermatech" 
 }
 
+locals {
+  # Conditional flag: only create peerings if VPC IDs are provided
+  create_peerings = (
+    var.events_vpc_id != "" &&
+    var.state_vpc_id != ""
+  )
+}
+
 # ==============================================================================
 # 1. NETWORKING LAYER (AZ: us-east-1b)
 # ==============================================================================
@@ -51,9 +59,12 @@ module "compute" {
 
 # ==============================================================================
 # 3. INTERCONNECTION LAYER (AUTOMATED PEERING REQUESTS)
+# CRITICAL: Only created when VPC IDs are provided (deploy mode)
 # ==============================================================================
 
 resource "aws_vpc_peering_connection" "node_b_to_events" {
+  count = local.create_peerings ? 1 : 0
+  
   peer_owner_id = var.events_account_id
   peer_vpc_id   = var.events_vpc_id 
   vpc_id        = module.networking.vpc_id
@@ -62,6 +73,8 @@ resource "aws_vpc_peering_connection" "node_b_to_events" {
 }
 
 resource "aws_vpc_peering_connection" "node_b_to_state" {
+  count = local.create_peerings ? 1 : 0
+  
   peer_owner_id = var.state_account_id
   peer_vpc_id   = var.state_vpc_id 
   vpc_id        = module.networking.vpc_id
@@ -71,18 +84,23 @@ resource "aws_vpc_peering_connection" "node_b_to_state" {
 
 # ==============================================================================
 # 4. ROUTING LAYER
+# Routes only created when peerings exist
 # ==============================================================================
 
 resource "aws_route" "route_to_events" {
+  count = local.create_peerings ? 1 : 0
+  
   route_table_id            = module.networking.public_route_table_id
   destination_cidr_block    = var.events_cidr
-  vpc_peering_connection_id = aws_vpc_peering_connection.node_b_to_events.id
+  vpc_peering_connection_id = aws_vpc_peering_connection.node_b_to_events[0].id
 }
 
 resource "aws_route" "route_to_state" {
+  count = local.create_peerings ? 1 : 0
+  
   route_table_id            = module.networking.public_route_table_id
   destination_cidr_block    = var.state_cidr
-  vpc_peering_connection_id = aws_vpc_peering_connection.node_b_to_state.id
+  vpc_peering_connection_id = aws_vpc_peering_connection.node_b_to_state[0].id
 }
 
 # ==============================================================================

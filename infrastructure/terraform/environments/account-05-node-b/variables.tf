@@ -57,9 +57,11 @@ variable "state_account_id" {
 variable "events_vpc_id" {
   description = "VPC ID of Events Account (Injected by Workflow)"
   type        = string
+  default     = ""
 }
 
 variable "state_vpc_id" {
   description = "VPC ID of State Account (Injected by Workflow)"
   type        = string
+  default     = ""
 }

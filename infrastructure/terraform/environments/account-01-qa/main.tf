@@ -15,6 +15,14 @@ locals {
   project_name = "dermatech"
   environment  = "qa"
   ami_id       = "ami-051f7e7f6c2f40dc1" # Amazon Linux 2023
+  
+  # Validation flag for peering creation
+  create_peerings = (
+    var.events_vpc_id != "" &&
+    var.state_vpc_id != "" &&
+    var.node_a_vpc_id != "" &&
+    var.node_b_vpc_id != ""
+  )
 }
 
 # ==============================================================================
@@ -51,36 +59,44 @@ module "gateway" {
 
 # ==============================================================================
 # 3. INTERCONNECTION LAYER (VPC PEERING REQUESTS)
-# Uses injected Variable IDs instead of Data Lookups to enable CI/CD workflows
+# CRITICAL: Only create if all VPC IDs are provided (deploy mode)
 # ==============================================================================
 
 resource "aws_vpc_peering_connection" "qa_to_events" {
+  count = local.create_peerings ? 1 : 0
+  
   peer_owner_id = var.events_account_id
-  peer_vpc_id   = var.events_vpc_id   # Injected Variable
+  peer_vpc_id   = var.events_vpc_id
   vpc_id        = module.networking.vpc_id
   auto_accept   = false
   tags          = { Name = "qa-to-events-peering" }
 }
 
 resource "aws_vpc_peering_connection" "qa_to_state" {
+  count = local.create_peerings ? 1 : 0
+  
   peer_owner_id = var.state_account_id
-  peer_vpc_id   = var.state_vpc_id    # Injected Variable
+  peer_vpc_id   = var.state_vpc_id
   vpc_id        = module.networking.vpc_id
   auto_accept   = false
   tags          = { Name = "qa-to-state-peering" }
 }
 
 resource "aws_vpc_peering_connection" "qa_to_node_a" {
+  count = local.create_peerings ? 1 : 0
+  
   peer_owner_id = var.node_a_account_id
-  peer_vpc_id   = var.node_a_vpc_id   # Injected Variable
+  peer_vpc_id   = var.node_a_vpc_id
   vpc_id        = module.networking.vpc_id
   auto_accept   = false
   tags          = { Name = "qa-to-node-a-peering" }
 }
 
 resource "aws_vpc_peering_connection" "qa_to_node_b" {
+  count = local.create_peerings ? 1 : 0
+  
   peer_owner_id = var.node_b_account_id
-  peer_vpc_id   = var.node_b_vpc_id   # Injected Variable
+  peer_vpc_id   = var.node_b_vpc_id
   vpc_id        = module.networking.vpc_id
   auto_accept   = false
   tags          = { Name = "qa-to-node-b-peering" }
@@ -91,27 +107,35 @@ resource "aws_vpc_peering_connection" "qa_to_node_b" {
 # ==============================================================================
 
 resource "aws_route" "route_to_events" {
+  count = local.create_peerings ? 1 : 0
+  
   route_table_id            = module.networking.public_route_table_id
   destination_cidr_block    = var.events_cidr
-  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_events.id
+  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_events[0].id
 }
 
 resource "aws_route" "route_to_state" {
+  count = local.create_peerings ? 1 : 0
+  
   route_table_id            = module.networking.public_route_table_id
   destination_cidr_block    = var.state_cidr
-  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_state.id
+  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_state[0].id
 }
 
 resource "aws_route" "route_to_node_a" {
+  count = local.create_peerings ? 1 : 0
+  
   route_table_id            = module.networking.public_route_table_id
   destination_cidr_block    = var.node_a_cidr
-  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_node_a.id
+  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_node_a[0].id
 }
 
 resource "aws_route" "route_to_node_b" {
+  count = local.create_peerings ? 1 : 0
+  
   route_table_id            = module.networking.public_route_table_id
   destination_cidr_block    = var.node_b_cidr
-  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_node_b.id
+  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_node_b[0].id
 }
 
 # ==============================================================================
