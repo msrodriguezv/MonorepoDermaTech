@@ -74,7 +74,7 @@ resource "aws_ebs_volume" "state_data_volume" {
   }
 
   lifecycle {
-    prevent_destroy = true # CRITICAL: DATA PROTECTION
+    prevent_destroy = false # temporal(false) CRITICAL: DATA PROTECTION
   }
 }
 
