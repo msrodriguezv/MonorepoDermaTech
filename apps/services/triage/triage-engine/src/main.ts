@@ -1,29 +1,37 @@
+import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 
 async function bootstrap() {
-  // 1. Crear la aplicación Híbrida (REST + Kafka)
+  // 1. Crear la aplicación híbrida (HTTP + Microservicio)
   const app = await NestFactory.create(AppModule);
 
-  // 2. Configurar el Microservicio Kafka
+  // 2. Configurar la conexión a Kafka
   app.connectMicroservice<MicroserviceOptions>({
     transport: Transport.KAFKA,
     options: {
       client: {
-        brokers: ['localhost:9092'], // Tu broker de Kafka
+        brokers: ['localhost:9092'], // Tu Kafka local
       },
       consumer: {
-        groupId: 'triage-consumer-group', // Importante para que no pierda mensajes
+        groupId: 'triage-consumer-group', // Identificador del grupo
       },
     },
   });
 
-  // 3. Iniciar ambos
-  await app.startAllMicroservices();
+  // 3. Iniciar servicios
+  await app.startAllMicroservices(); // Arranca Kafka
   
-  // Puerto 3003 para no chocar con Go (3006) ni otros
-  await app.listen(3003);
-  console.log('🚀 Triage Engine (NestJS) corriendo en puerto 3003 y escuchando Kafka');
+  const globalPrefix = 'api';
+  app.setGlobalPrefix(globalPrefix);
+  const port = process.env.PORT || 3000;
+  await app.listen(port); // Arranca HTTP
+
+  Logger.log(
+    `🚀 Triage Engine corriendo en: http://localhost:${port}/${globalPrefix}`
+  );
+  Logger.log(`👂 Escuchando eventos de Kafka...`);
 }
+
 bootstrap();

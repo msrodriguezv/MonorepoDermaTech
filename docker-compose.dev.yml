@@ -208,6 +208,45 @@ services:
         limits:
           memory: 64M
 
+  # =========================================
+  # AI & AUTOMATION LAYER (AGREGADO)
+  # =========================================
+
+  # --- AI AGENT (PYTHON) ---
+  ai-agent:
+    build:
+      context: ./apps/services/ai-agent
+      dockerfile: Dockerfile
+    container_name: dermatech_ai_agent
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./apps/services/ai-agent:/app
+    environment:
+      - FLASK_ENV=development
+    networks:
+      - dev_network
+
+  # --- n8n (WORKFLOW ORCHESTRATOR) ---
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: dermatech_n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=password
+      - GENERIC_TIMEZONE=America/Guayaquil
+      - TZ=America/Guayaquil
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - dev_network
+
 networks:
   dev_network:
     driver: bridge
+
+volumes:
+  n8n_data:

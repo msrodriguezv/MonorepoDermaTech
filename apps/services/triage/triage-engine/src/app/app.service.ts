@@ -1,62 +1,64 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import axios from 'axios';
 
 @Injectable()
 export class AppService {
   private supabase: SupabaseClient;
   private readonly logger = new Logger(AppService.name);
+  
+  private readonly N8N_URL = 'http://localhost:5678/webhook-test/ai-analysis';
 
   constructor() {
-    // 1. Leer variables de entorno
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_KEY;
-
-    // 2. Validación de seguridad (Para que no falle silenciosamente)
-    if (!supabaseUrl || !supabaseKey) {
-      this.logger.error('❌ Faltan las variables SUPABASE_URL o SUPABASE_KEY en el archivo .env');
-      throw new Error('Configuración de Supabase incompleta');
-    }
-
-    // 3. Crear cliente
-    this.supabase = createClient(supabaseUrl, supabaseKey);
-    this.logger.log('✅ Conexión con Supabase Client inicializada correctamente');
+    this.supabase = createClient(
+      process.env.SUPABASE_URL || '',
+      process.env.SUPABASE_KEY || ''
+    );
   }
 
   getHello(): string {
-    return 'Triage Engine (NestJS) is Running!';
+    return 'Triage Engine w/ AI Agent Running';
   }
 
   async processTriage(data: any) {
-    this.logger.log(`🔄 [Servicio] Procesando triage para appointment: ${data.appointmentId}`);
+    this.logger.log(`🔄 Procesando paciente: ${data.appointmentId}`);
 
-    // 1. Simulación temporal de IA (Pre-diagnóstico)
-    const mockDiagnosis = this.mockAIAnalysis(data.symptoms);
+    let aiDiagnosis = 'PENDIENTE';
+    let severity = '1'; // Valor por defecto como string (varchar en tu tabla)
 
-    // 2. Guardar en Supabase
-    const { error } = await this.supabase
-      .from('triage_records') 
-      .insert({
-        appointment_id: data.appointmentId,
-        qr_data: data.qrData,
+    try {
+      this.logger.log('📡 Enviando datos a n8n...');
+      const response = await axios.post(this.N8N_URL, {
         symptoms: data.symptoms,
-        ai_pre_diagnosis: mockDiagnosis,
+        qrData: data.qrData
       });
 
+      if (response.data) {
+        aiDiagnosis = response.data.diagnosis || 'SIN DIAGNOSTICO';
+        // Capturamos el score de severidad del nuevo prompt
+        severity = String(response.data.severity_score || '1');
+        
+        this.logger.log(`🤖 IA Respondió: ${aiDiagnosis} (Nivel: ${severity})`);
+      }
+
+    } catch (error) {
+      this.logger.error(`❌ Error conectando con n8n: ${error.message}`);
+      aiDiagnosis = 'ERROR_IA_TIMEOUT';
+    }
+
+    // Guardado final en Supabase con tus columnas reales
+    const { error } = await this.supabase.from('triage_records').insert({
+      appointment_id: data.appointmentId,
+      qr_data: data.qrData,
+      symptoms: data.symptoms,
+      ai_pre_diagnosis: aiDiagnosis,
+      severity_level: severity
+    });
+
     if (error) {
-      this.logger.error(`❌ Error guardando en Supabase: ${error.message}`);
+      this.logger.error('❌ Error guardando en DB:', error.message);
     } else {
-      this.logger.log('✅ Registro guardado exitosamente en la tabla triage_records');
+      this.logger.log('✅ Registro dermatológico completado exitosamente.');
     }
-  }
-
-  // Función auxiliar privada
-  private mockAIAnalysis(symptoms: string[]): string {
-    if (!symptoms || !Array.isArray(symptoms)) return 'Datos insuficientes';
-
-    const symptomsString = symptoms.join(' ').toLowerCase();
-    if (symptomsString.includes('fiebre') || symptomsString.includes('sangre')) {
-      return 'POSIBLE INFECCION';
-    }
-    return 'REVISION RUTINA';
   }
 }

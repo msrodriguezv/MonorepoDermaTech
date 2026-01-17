@@ -1,22 +1,22 @@
-import { Controller, Get } from '@nestjs/common';
-import { EventPattern, Payload } from '@nestjs/microservices';
+import { Controller, Logger } from '@nestjs/common';
 import { AppService } from './app.service';
+import { EventPattern, Payload } from '@nestjs/microservices';
 
 @Controller()
 export class AppController {
+  private readonly logger = new Logger(AppController.name);
+
   constructor(private readonly appService: AppService) {}
 
-  @Get()
-  getHello(): string {
-    return this.appService.getHello();
-  }
-
-  @EventPattern('triage.ingest') 
-  async handleStudentIngest(@Payload() message: any) {
-    console.log('📨 [NestJS] Nuevo mensaje recibido desde Kafka:');
-    console.log(JSON.stringify(message, null, 2));
-
-    // Llamamos al servicio para procesar (Guardar en DB / Llamar IA)
-    await this.appService.processTriage(message);
+  // 📡 ESTA ES LA ANTENA
+  @EventPattern('patient-triage-topic') 
+  async handlePatientTriage(@Payload() data: any) {
+    this.logger.log('📨 ¡Mensaje capturado por NestJS!');
+    
+    // A veces Kafka envía los datos crudos o dentro de un objeto 'value'.
+    // Esta línea asegura que siempre tengamos los datos limpios.
+    const pacienteData = data.value ? data.value : data;
+    
+    await this.appService.processTriage(pacienteData);
   }
 }
