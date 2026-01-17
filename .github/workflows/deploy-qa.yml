@@ -6,18 +6,81 @@ on:
 
 jobs:
   # ==========================================
+  # PASO 0: LIMPIEZA FORZADA (CRÍTICO)
+  # Elimina recursos huérfanos que bloquean
+  # ==========================================
+  cleanup:
+    name: Force Cleanup Orphaned Resources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Restore Credentials
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+
+      - name: Delete All VPC Peering Connections
+        run: |
+          # Lista TODAS las cuentas a limpiar
+          for profile in qa-dermatech events-dermatech state-dermatech node-a-dermatech node-b-dermatech; do
+            echo "🧹 Limpiando peerings en perfil: $profile"
+            
+            # Lista todos los peerings activos/pendientes
+            peering_ids=$(aws ec2 describe-vpc-peering-connections \
+              --profile $profile \
+              --region us-east-1 \
+              --filters "Name=status-code,Values=active,pending-acceptance" \
+              --query 'VpcPeeringConnections[*].VpcPeeringConnectionId' \
+              --output text 2>/dev/null || echo "")
+            
+            # Elimina cada uno
+            for id in $peering_ids; do
+              echo "  ❌ Eliminando peering: $id"
+              aws ec2 delete-vpc-peering-connection \
+                --profile $profile \
+                --region us-east-1 \
+                --vpc-peering-connection-id $id || true
+            done
+          done
+
+      - name: Delete Network Interfaces (ENIs)
+        run: |
+          for profile in qa-dermatech events-dermatech state-dermatech node-a-dermatech node-b-dermatech; do
+            echo "🧹 Limpiando ENIs en: $profile"
+            
+            eni_ids=$(aws ec2 describe-network-interfaces \
+              --profile $profile \
+              --region us-east-1 \
+              --query 'NetworkInterfaces[?Status==`available`].NetworkInterfaceId' \
+              --output text 2>/dev/null || echo "")
+            
+            for id in $eni_ids; do
+              echo "  ❌ Eliminando ENI: $id"
+              aws ec2 delete-network-interface \
+                --profile $profile \
+                --region us-east-1 \
+                --network-interface-id $id || true
+            done
+          done
+
+      - name: Wait for Cleanup
+        run: sleep 30
+
+  # ==========================================
   # NIVEL 1: CIMIENTOS (EVENTS y STATE)
-  # Corren al mismo tiempo (Paralelo)
   # ==========================================
   base-layer:
     name: Deploy Base (${{ matrix.account }})
+    needs: cleanup
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false  # Continúa aunque uno falle
       matrix:
         include:
           - account: 'Events'
             path: 'account-02-events'
-            profile: 'events-dermatech' # Debe coincidir con tu archivo
+            profile: 'events-dermatech'
             output_var: 'VPC_EVENTS'
           - account: 'State'
             path: 'account-03-state'
@@ -27,39 +90,47 @@ jobs:
       - uses: actions/checkout@v3
       - uses: hashicorp/setup-terraform@v2
 
-      # Restauramos el archivo maestro de credenciales
       - name: Restore Credentials
         run: |
           mkdir -p ~/.aws
           echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
-      - name: Deploy
+      - name: Deploy ${{ matrix.account }}
         env:
           AWS_PROFILE: ${{ matrix.profile }}
           AWS_REGION: us-east-1
         run: |
           cd infrastructure/terraform/environments/${{ matrix.path }}
           terraform init -reconfigure
-          terraform apply -auto-approve
-          # Guardamos el ID en un archivo de texto
-          echo "${{ matrix.output_var }}=$(terraform output -raw vpc_id)" > vpc_id.txt
+          
+          # Intenta aplicar, si falla destruye y vuelve a aplicar
+          if ! terraform apply -auto-approve; then
+            echo "⚠️ Primer intento falló, ejecutando destroy..."
+            terraform destroy -auto-approve || true
+            sleep 20
+            terraform apply -auto-approve
+          fi
+          
+          VPC_ID=$(terraform output -raw vpc_id)
+          echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
+          echo "✅ VPC creada: $VPC_ID"
       
-      # Subimos el ID a la nube temporal de GitHub para que QA lo pueda leer luego
       - name: Upload VPC ID
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.output_var }}
           path: infrastructure/terraform/environments/${{ matrix.path }}/vpc_id.txt
+          retention-days: 1
 
   # ==========================================
   # NIVEL 2: NODOS (A y B)
-  # Esperan a que termine el Nivel 1 (needs: base-layer)
   # ==========================================
   nodes-layer:
     name: Deploy Node (${{ matrix.account }})
     needs: base-layer
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - account: 'Node A'
@@ -79,25 +150,60 @@ jobs:
           mkdir -p ~/.aws
           echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
-      - name: Deploy
+      # CRÍTICO: Descarga los IDs de Events y State
+      - uses: actions/download-artifact@v4
+        with: 
+          name: 'VPC_EVENTS'
+          path: 'artifacts/events'
+      - uses: actions/download-artifact@v4
+        with: 
+          name: 'VPC_STATE'
+          path: 'artifacts/state'
+
+      - name: Read VPC IDs
+        run: |
+          EVENTS_ID=$(grep VPC_EVENTS artifacts/events/vpc_id.txt | cut -d'=' -f2)
+          STATE_ID=$(grep VPC_STATE artifacts/state/vpc_id.txt | cut -d'=' -f2)
+          echo "EVENTS_VPC_ID=$EVENTS_ID" >> $GITHUB_ENV
+          echo "STATE_VPC_ID=$STATE_ID" >> $GITHUB_ENV
+          echo "📡 Events VPC: $EVENTS_ID"
+          echo "📡 State VPC: $STATE_ID"
+
+      - name: Deploy ${{ matrix.account }}
         env:
           AWS_PROFILE: ${{ matrix.profile }}
           AWS_REGION: us-east-1
         run: |
           cd infrastructure/terraform/environments/${{ matrix.path }}
           terraform init -reconfigure
-          terraform apply -auto-approve
-          echo "${{ matrix.output_var }}=$(terraform output -raw vpc_id)" > vpc_id.txt
+          
+          # Pasa los IDs necesarios para peering
+          if ! terraform apply -auto-approve \
+            -var="events_vpc_id=${{ env.EVENTS_VPC_ID }}" \
+            -var="state_vpc_id=${{ env.STATE_VPC_ID }}"; then
+            echo "⚠️ Primer intento falló, ejecutando destroy..."
+            terraform destroy -auto-approve \
+              -var="events_vpc_id=${{ env.EVENTS_VPC_ID }}" \
+              -var="state_vpc_id=${{ env.STATE_VPC_ID }}" || true
+            sleep 20
+            terraform apply -auto-approve \
+              -var="events_vpc_id=${{ env.EVENTS_VPC_ID }}" \
+              -var="state_vpc_id=${{ env.STATE_VPC_ID }}"
+          fi
+          
+          VPC_ID=$(terraform output -raw vpc_id)
+          echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
+          echo "✅ VPC creada: $VPC_ID"
 
       - name: Upload VPC ID
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.output_var }}
           path: infrastructure/terraform/environments/${{ matrix.path }}/vpc_id.txt
+          retention-days: 1
 
   # ==========================================
   # NIVEL 3: QA HUB (FINAL)
-  # Espera a TODOS (needs: [base-layer, nodes-layer])
   # ==========================================
   qa-hub:
     name: Deploy QA Hub
@@ -112,7 +218,6 @@ jobs:
           mkdir -p ~/.aws
           echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
-      # Descargamos los 4 IDs recolectados
       - uses: actions/download-artifact@v4
         with: { name: 'VPC_EVENTS', path: 'VPC_EVENTS' }
       - uses: actions/download-artifact@v4
@@ -122,23 +227,36 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: 'VPC_NODE_B', path: 'VPC_NODE_B' }
 
-      - name: Read IDs into Environment
+      - name: Read All VPC IDs
         run: |
-          echo "VPC_EVENTS=$(cat VPC_EVENTS/vpc_id.txt)" >> $GITHUB_ENV
-          echo "VPC_STATE=$(cat VPC_STATE/vpc_id.txt)" >> $GITHUB_ENV
-          echo "VPC_NODE_A=$(cat VPC_NODE_A/vpc_id.txt)" >> $GITHUB_ENV
-          echo "VPC_NODE_B=$(cat VPC_NODE_B/vpc_id.txt)" >> $GITHUB_ENV
+          echo "VPC_EVENTS=$(grep VPC_EVENTS VPC_EVENTS/vpc_id.txt | cut -d'=' -f2)" >> $GITHUB_ENV
+          echo "VPC_STATE=$(grep VPC_STATE VPC_STATE/vpc_id.txt | cut -d'=' -f2)" >> $GITHUB_ENV
+          echo "VPC_NODE_A=$(grep VPC_NODE_A VPC_NODE_A/vpc_id.txt | cut -d'=' -f2)" >> $GITHUB_ENV
+          echo "VPC_NODE_B=$(grep VPC_NODE_B VPC_NODE_B/vpc_id.txt | cut -d'=' -f2)" >> $GITHUB_ENV
 
-      - name: Deploy QA
+      - name: Deploy QA Hub
         env:
           AWS_PROFILE: qa-dermatech
           AWS_REGION: us-east-1
         run: |
           cd infrastructure/terraform/environments/account-01-qa
           terraform init -reconfigure
-          # Aquí inyectamos los IDs capturados
-          terraform apply -auto-approve \
+          
+          if ! terraform apply -auto-approve \
             -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
             -var="state_vpc_id=${{ env.VPC_STATE }}" \
             -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
-            -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
+            -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"; then
+            echo "⚠️ Primer intento falló, ejecutando destroy..."
+            terraform destroy -auto-approve \
+              -var="events_vpc_id=null" -var="state_vpc_id=null" \
+              -var="node_a_vpc_id=null" -var="node_b_vpc_id=null" || true
+            sleep 20
+            terraform apply -auto-approve \
+              -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
+              -var="state_vpc_id=${{ env.VPC_STATE }}" \
+              -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
+              -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
+          fi
+          
+          echo "🎉 INFRAESTRUCTURA COMPLETA DESPLEGADA"

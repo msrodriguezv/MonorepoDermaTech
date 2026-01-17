@@ -1,12 +1,121 @@
 name: "TURBO DESTROY: DermaTech"
 
 on:
-  workflow_dispatch: # Se activa manualmente
+  workflow_dispatch:
 
 jobs:
-  # 1. PRIMERO: Destruimos QA (El Hub)
+  # ==========================================
+  # PASO 0: ROMPER TODAS LAS DEPENDENCIAS
+  # ==========================================
+  break-dependencies:
+    name: Break All Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Restore Credentials
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+
+      - name: Delete VPC Peerings (All Accounts)
+        run: |
+          echo "🔥 FASE 1: Eliminando TODOS los peerings..."
+          for profile in qa-dermatech events-dermatech state-dermatech node-a-dermatech node-b-dermatech; do
+            echo "  Procesando: $profile"
+            
+            peering_ids=$(aws ec2 describe-vpc-peering-connections \
+              --profile $profile \
+              --region us-east-1 \
+              --query 'VpcPeeringConnections[*].VpcPeeringConnectionId' \
+              --output text 2>/dev/null || echo "")
+            
+            for id in $peering_ids; do
+              echo "    ❌ Eliminando: $id"
+              aws ec2 delete-vpc-peering-connection \
+                --profile $profile \
+                --region us-east-1 \
+                --vpc-peering-connection-id $id 2>/dev/null || true
+            done
+          done
+
+      - name: Delete Transit Gateway Attachments
+        run: |
+          echo "🔥 FASE 2: Eliminando attachments TGW..."
+          for profile in qa-dermatech events-dermatech state-dermatech node-a-dermatech node-b-dermatech; do
+            echo "  Procesando: $profile"
+            
+            attachment_ids=$(aws ec2 describe-transit-gateway-attachments \
+              --profile $profile \
+              --region us-east-1 \
+              --filters "Name=state,Values=available,pending" \
+              --query 'TransitGatewayAttachments[*].TransitGatewayAttachmentId' \
+              --output text 2>/dev/null || echo "")
+            
+            for id in $attachment_ids; do
+              echo "    ❌ Eliminando: $id"
+              aws ec2 delete-transit-gateway-vpc-attachment \
+                --profile $profile \
+                --region us-east-1 \
+                --transit-gateway-attachment-id $id 2>/dev/null || true
+            done
+          done
+
+      - name: Delete NAT Gateways
+        run: |
+          echo "🔥 FASE 3: Eliminando NAT Gateways..."
+          for profile in qa-dermatech events-dermatech state-dermatech node-a-dermatech node-b-dermatech; do
+            echo "  Procesando: $profile"
+            
+            nat_ids=$(aws ec2 describe-nat-gateways \
+              --profile $profile \
+              --region us-east-1 \
+              --filter "Name=state,Values=available,pending" \
+              --query 'NatGateways[*].NatGatewayId' \
+              --output text 2>/dev/null || echo "")
+            
+            for id in $nat_ids; do
+              echo "    ❌ Eliminando: $id"
+              aws ec2 delete-nat-gateway \
+                --profile $profile \
+                --region us-east-1 \
+                --nat-gateway-id $id 2>/dev/null || true
+            done
+          done
+
+      - name: Delete Network Interfaces
+        run: |
+          echo "🔥 FASE 4: Eliminando ENIs disponibles..."
+          for profile in qa-dermatech events-dermatech state-dermatech node-a-dermatech node-b-dermatech; do
+            echo "  Procesando: $profile"
+            
+            eni_ids=$(aws ec2 describe-network-interfaces \
+              --profile $profile \
+              --region us-east-1 \
+              --filters "Name=status,Values=available" \
+              --query 'NetworkInterfaces[*].NetworkInterfaceId' \
+              --output text 2>/dev/null || echo "")
+            
+            for id in $eni_ids; do
+              echo "    ❌ Eliminando: $id"
+              aws ec2 delete-network-interface \
+                --profile $profile \
+                --region us-east-1 \
+                --network-interface-id $id 2>/dev/null || true
+            done
+          done
+
+      - name: Wait for Resources to Terminate
+        run: |
+          echo "⏳ Esperando 60s para que los recursos terminen de eliminarse..."
+          sleep 60
+
+  # ==========================================
+  # PASO 1: DESTRUIR QA HUB
+  # ==========================================
   destroy-hub:
     name: Destroy QA Hub
+    needs: break-dependencies
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -17,33 +126,58 @@ jobs:
           mkdir -p ~/.aws
           echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
-      - name: Destroy QA
+      - name: Destroy QA (First Pass)
+        env:
+          AWS_PROFILE: qa-dermatech
+          AWS_REGION: us-east-1
+        continue-on-error: true
+        run: |
+          cd infrastructure/terraform/environments/account-01-qa
+          terraform init -reconfigure
+          terraform destroy -auto-approve \
+            -var="events_vpc_id=null" -var="state_vpc_id=null" \
+            -var="node_a_vpc_id=null" -var="node_b_vpc_id=null"
+
+      - name: Force Delete Remaining Resources
+        run: |
+          echo "🔨 Limpieza forzada de recursos restantes en QA..."
+          
+          # Security Groups (excepto default)
+          sg_ids=$(aws ec2 describe-security-groups \
+            --profile qa-dermatech \
+            --region us-east-1 \
+            --query 'SecurityGroups[?GroupName!=`default`].GroupId' \
+            --output text 2>/dev/null || echo "")
+          
+          for id in $sg_ids; do
+            echo "  ❌ Eliminando SG: $id"
+            aws ec2 delete-security-group \
+              --profile qa-dermatech \
+              --region us-east-1 \
+              --group-id $id 2>/dev/null || true
+          done
+
+      - name: Destroy QA (Second Pass)
         env:
           AWS_PROFILE: qa-dermatech
           AWS_REGION: us-east-1
         run: |
           cd infrastructure/terraform/environments/account-01-qa
-          terraform init -reconfigure
-          # Pasamos null a las variables para que no falle al pedir IDs
           terraform destroy -auto-approve \
             -var="events_vpc_id=null" -var="state_vpc_id=null" \
-            -var="node_a_vpc_id=null" -var="node_b_vpc_id=null"
+            -var="node_a_vpc_id=null" -var="node_b_vpc_id=null" || true
 
-  # 2. SEGUNDO: Destrucción Masiva Paralela
-  destroy-satellites:
+  # ==========================================
+  # PASO 2: DESTRUIR NODOS (Paralelo)
+  # ==========================================
+  destroy-nodes:
     name: Destroy ${{ matrix.account }}
-    needs: destroy-hub # Espera a que QA muera
+    needs: destroy-hub
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - account: 'Events'
-            path: 'account-02-events'
-            profile: 'events-dermatech'
-          - account: 'State'
-            path: 'account-03-state'
-            profile: 'state-dermatech'
           - account: 'Node A'
             path: 'account-04-node-a'
             profile: 'node-a-dermatech'
@@ -59,11 +193,125 @@ jobs:
           mkdir -p ~/.aws
           echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
-      - name: Destroy ${{ matrix.account }}
+      - name: Destroy ${{ matrix.account }} (Pass 1)
+        env:
+          AWS_PROFILE: ${{ matrix.profile }}
+          AWS_REGION: us-east-1
+        continue-on-error: true
+        run: |
+          cd infrastructure/terraform/environments/${{ matrix.path }}
+          terraform init -reconfigure
+          terraform destroy -auto-approve \
+            -var="events_vpc_id=null" -var="state_vpc_id=null"
+
+      - name: Force Cleanup
+        run: |
+          echo "🔨 Limpieza forzada en ${{ matrix.account }}..."
+          
+          sg_ids=$(aws ec2 describe-security-groups \
+            --profile ${{ matrix.profile }} \
+            --region us-east-1 \
+            --query 'SecurityGroups[?GroupName!=`default`].GroupId' \
+            --output text 2>/dev/null || echo "")
+          
+          for id in $sg_ids; do
+            aws ec2 delete-security-group \
+              --profile ${{ matrix.profile }} \
+              --region us-east-1 \
+              --group-id $id 2>/dev/null || true
+          done
+
+      - name: Destroy ${{ matrix.account }} (Pass 2)
         env:
           AWS_PROFILE: ${{ matrix.profile }}
           AWS_REGION: us-east-1
         run: |
           cd infrastructure/terraform/environments/${{ matrix.path }}
+          terraform destroy -auto-approve \
+            -var="events_vpc_id=null" -var="state_vpc_id=null" || true
+
+  # ==========================================
+  # PASO 3: DESTRUIR BASE (Events y State)
+  # ==========================================
+  destroy-base:
+    name: Destroy ${{ matrix.account }}
+    needs: destroy-nodes
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - account: 'Events'
+            path: 'account-02-events'
+            profile: 'events-dermatech'
+          - account: 'State'
+            path: 'account-03-state'
+            profile: 'state-dermatech'
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
+      
+      - name: Restore Credentials
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+
+      - name: Destroy ${{ matrix.account }} (Pass 1)
+        env:
+          AWS_PROFILE: ${{ matrix.profile }}
+          AWS_REGION: us-east-1
+        continue-on-error: true
+        run: |
+          cd infrastructure/terraform/environments/${{ matrix.path }}
           terraform init -reconfigure
           terraform destroy -auto-approve
+
+      - name: Force Cleanup
+        run: |
+          echo "🔨 Limpieza final en ${{ matrix.account }}..."
+          
+          sg_ids=$(aws ec2 describe-security-groups \
+            --profile ${{ matrix.profile }} \
+            --region us-east-1 \
+            --query 'SecurityGroups[?GroupName!=`default`].GroupId' \
+            --output text 2>/dev/null || echo "")
+          
+          for id in $sg_ids; do
+            aws ec2 delete-security-group \
+              --profile ${{ matrix.profile }} \
+              --region us-east-1 \
+              --group-id $id 2>/dev/null || true
+          done
+
+      - name: Destroy ${{ matrix.account }} (Pass 2)
+        env:
+          AWS_PROFILE: ${{ matrix.profile }}
+          AWS_REGION: us-east-1
+        run: |
+          cd infrastructure/terraform/environments/${{ matrix.path }}
+          terraform destroy -auto-approve || true
+
+  # ==========================================
+  # VERIFICACIÓN FINAL
+  # ==========================================
+  verify-cleanup:
+    name: Verify Complete Cleanup
+    needs: [destroy-base]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restore Credentials
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+
+      - name: Check for Remaining Resources
+        run: |
+          echo "Verificando recursos restantes..."
+          for profile in qa-dermatech events-dermatech state-dermatech node-a-dermatech node-b-dermatech; do
+            echo "Cuenta: $profile"
+            vpc_count=$(aws ec2 describe-vpcs --profile $profile --region us-east-1 --query 'length(Vpcs[?!IsDefault])' 2>/dev/null || echo "0")
+            echo "  VPCs: $vpc_count"
+            peering_count=$(aws ec2 describe-vpc-peering-connections --profile $profile --region us-east-1 --query 'length(VpcPeeringConnections)' 2>/dev/null || echo "0")
+            echo "  Peerings: $peering_count"
+          done
+          echo "Verificacion completa"
