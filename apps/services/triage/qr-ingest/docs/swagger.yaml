@@ -1,0 +1,63 @@
+basePath: /api
+definitions:
+  main.IngestRequest:
+    properties:
+      studentId:
+        example: EST-SWAGGER-01
+        type: string
+      symptoms:
+        example:
+        - dolor
+        - ' mareo'
+        items:
+          type: string
+        type: array
+    type: object
+  main.IngestResponse:
+    properties:
+      appointmentId:
+        example: 550e8400...
+        type: string
+      message:
+        example: Procesado Correctamente
+        type: string
+      qr_data:
+        example: DERMA|EST|UUID
+        type: string
+      qr_image:
+        example: data:image/png;base64...
+        type: string
+      status:
+        example: SUCCESS
+        type: string
+    type: object
+host: localhost:3006
+info:
+  contact: {}
+  description: Microservicio de Ingesta (Lineal)
+  title: DermaTech Triage API
+  version: "1.0"
+paths:
+  /triage/ingest:
+    post:
+      consumes:
+      - application/json
+      description: Recibe datos y devuelve el QR generado (Imagen + Texto)
+      parameters:
+      - description: Datos
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.IngestRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.IngestResponse'
+      summary: Generar QR
+      tags:
+      - Triage
+swagger: "2.0"
