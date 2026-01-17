@@ -1,6 +1,9 @@
 name: "TURBO DESTROY: DermaTech"
 
 on:
+  push:
+    branches:
+      - developer
   workflow_dispatch:
 
 jobs:
