@@ -54,7 +54,7 @@ module "compute" {
   
   # HARDCODED ALLOCATION ID (BLINDADO)
   # Asegúrate de que este ID sea el correcto para el Node B
-  eip_allocation_id   = "eipalloc-00966a34584282e70" 
+  eip_allocation_id   = "eipalloc-0f602e180348c4ad9" 
 }
 
 # ==============================================================================
