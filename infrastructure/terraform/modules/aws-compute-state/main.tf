@@ -85,6 +85,7 @@ resource "aws_instance" "state_worker" {
   ami             = var.ami_id
   instance_type   = "t3.large" 
   subnet_id       = var.public_subnet_id
+  key_name          = "vockey"
   
   # CRITICAL: Fixed Private IP (10.2.1.100)
   private_ip      = var.private_ip_address
