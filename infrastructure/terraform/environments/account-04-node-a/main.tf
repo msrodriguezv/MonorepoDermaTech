@@ -15,16 +15,9 @@ provider "aws" {
   profile = "node-a-dermatech" 
 }
 
-locals {
-  # Conditional flag: only create peerings if VPC IDs are provided
-  create_peerings = (
-    var.events_vpc_id != "" &&
-    var.state_vpc_id != ""
-  )
-}
-
 # ==============================================================================
 # 1. NETWORKING LAYER (AZ: us-east-1a)
+# Context: VPC Creation for App Node A
 # ==============================================================================
 module "networking" {
   source             = "../../modules/aws-networking"
@@ -38,6 +31,7 @@ module "networking" {
 
 # ==============================================================================
 # 2. COMPUTE LAYER (APPLICATION WORKER)
+# Context: NestJS & Flutter Host
 # ==============================================================================
 module "compute" {
   source              = "../../modules/aws-compute-app"
@@ -54,71 +48,4 @@ module "compute" {
   
   # HARDCODED ALLOCATION ID (BLINDADO)
   eip_allocation_id   = "eipalloc-023185aa6f1f7bafb"
-}
-
-# ==============================================================================
-# 3. INTERCONNECTION LAYER (AUTOMATED PEERING REQUESTS)
-# Uses Injected Variable IDs (Workflow Safe)
-# CRITICAL: Only created when VPC IDs are provided (deploy mode)
-# ==============================================================================
-
-# Peering Request towards Events Account (Kafka/RabbitMQ)
-resource "aws_vpc_peering_connection" "node_a_to_events" {
-  count = local.create_peerings ? 1 : 0
-  
-  peer_owner_id = var.events_account_id
-  peer_vpc_id   = var.events_vpc_id   # Variable injected by Workflow
-  vpc_id        = module.networking.vpc_id
-  auto_accept   = false
-  tags          = { Name = "node-a-to-events-peering" }
-}
-
-# Peering Request towards State Account (Redis/Metrics)
-resource "aws_vpc_peering_connection" "node_a_to_state" {
-  count = local.create_peerings ? 1 : 0
-  
-  peer_owner_id = var.state_account_id
-  peer_vpc_id   = var.state_vpc_id    # Variable injected by Workflow
-  vpc_id        = module.networking.vpc_id
-  auto_accept   = false
-  tags          = { Name = "node-a-to-state-peering" }
-}
-
-# ==============================================================================
-# 4. ROUTING LAYER (CROSS-ACCOUNT TRAFFIC)
-# Routes only created when peerings exist
-# ==============================================================================
-
-# Route to Events Subnet (10.1.0.0/16)
-resource "aws_route" "route_to_events" {
-  count = local.create_peerings ? 1 : 0
-  
-  route_table_id            = module.networking.public_route_table_id
-  destination_cidr_block    = var.events_cidr
-  vpc_peering_connection_id = aws_vpc_peering_connection.node_a_to_events[0].id
-}
-
-# Route to State Subnet (10.2.0.0/16)
-resource "aws_route" "route_to_state" {
-  count = local.create_peerings ? 1 : 0
-  
-  route_table_id            = module.networking.public_route_table_id
-  destination_cidr_block    = var.state_cidr
-  vpc_peering_connection_id = aws_vpc_peering_connection.node_a_to_state[0].id
-}
-
-# ==============================================================================
-# 5. OUTPUTS
-# ==============================================================================
-output "NODE_A_PUBLIC_IP" { 
-  value = module.compute.public_ip 
-}
-
-output "NODE_A_PRIVATE_IP" { 
-  value = "10.3.1.10" 
-}
-
-# Output needed for QA (if QA is deployed after)
-output "vpc_id" {
-  value = module.networking.vpc_id
 }

@@ -55,22 +55,8 @@ variable "node_b_vpc_id" {
 }
 
 # --- AWS Account IDs (For Peering Authentication) ---
-variable "qa_account_id" {
-  default = "474829115013"
-}
-
-variable "events_account_id" {
-  default = "528062813765"
-}
-
-variable "state_account_id" {
-  default = "957842195675"
-}
-
-variable "node_a_account_id" {
-  default = "475100560521"
-}
-
-variable "node_b_account_id" {
-  default = "125941635234"
-}
+variable "qa_account_id"     { default = "474829115013" }
+variable "events_account_id" { default = "528062813765" }
+variable "state_account_id"  { default = "957842195675" }
+variable "node_a_account_id" { default = "475100560521" }
+variable "node_b_account_id" { default = "125941635234" }

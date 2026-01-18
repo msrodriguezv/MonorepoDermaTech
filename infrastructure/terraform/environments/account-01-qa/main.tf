@@ -6,9 +6,42 @@ terraform {
   }
 }
 
+# ==============================================================================
+# PROVIDERS CONFIGURATION (MULTI-ACCOUNT ORCHESTRATION)
+# ==============================================================================
+
+# 1. Default Provider (QA Account)
 provider "aws" {
   region  = "us-east-1"
   profile = "qa-dermatech" 
+}
+
+# 2. Events Account Provider
+provider "aws" {
+  alias   = "events"
+  region  = "us-east-1"
+  profile = "events-dermatech"
+}
+
+# 3. State Account Provider
+provider "aws" {
+  alias   = "state"
+  region  = "us-east-1"
+  profile = "state-dermatech"
+}
+
+# 4. Node A Account Provider
+provider "aws" {
+  alias   = "node_a"
+  region  = "us-east-1"
+  profile = "node-a-dermatech"
+}
+
+# 5. Node B Account Provider
+provider "aws" {
+  alias   = "node_b"
+  region  = "us-east-1"
+  profile = "node-b-dermatech"
 }
 
 locals {
@@ -16,8 +49,8 @@ locals {
   environment  = "qa"
   ami_id       = "ami-051f7e7f6c2f40dc1" # Amazon Linux 2023
   
-  # Validation flag for peering creation
-  create_peerings = (
+  # Validation: Ensure all VPC IDs are present before attempting peerings
+  deploy_connectivity = (
     var.events_vpc_id != "" &&
     var.state_vpc_id != "" &&
     var.node_a_vpc_id != "" &&
@@ -26,14 +59,14 @@ locals {
 }
 
 # ==============================================================================
-# 1. NETWORKING LAYER (HUB)
+# 1. NETWORKING LAYER (QA HUB VPC)
 # ==============================================================================
 module "networking" {
   source             = "../../modules/aws-networking"
   region             = "us-east-1"
   project_name       = local.project_name
   environment        = local.environment
-  vpc_cidr           = var.qa_cidr            
+  vpc_cidr           = var.qa_cidr             
   public_subnet_cidr = "10.0.1.0/24"
   availability_zone  = "us-east-1a"            
 }
@@ -53,102 +86,319 @@ module "gateway" {
   # Fixed Private IP for Internal Network Consistency
   bastion_private_ip  = "10.0.1.59"
   
-  # Shielded Elastic IP (Cloudflare) - Existing Allocation ID
+  # Shielded Elastic IP (Cloudflare)
   eip_allocation_id   = "eipalloc-04a19075ece27ac49"
 }
 
 # ==============================================================================
-# 3. INTERCONNECTION LAYER (VPC PEERING REQUESTS)
-# CRITICAL: Only create if all VPC IDs are provided (deploy mode)
+# 3. DATA SOURCES: REMOTE ROUTE TABLES LOOKUP
 # ==============================================================================
 
+data "aws_route_table" "events_rt" {
+  provider = aws.events
+  vpc_id   = var.events_vpc_id
+  filter {
+    name   = "tag:Name"
+    values = ["*-public-rt"] 
+  }
+}
+
+data "aws_route_table" "state_rt" {
+  provider = aws.state
+  vpc_id   = var.state_vpc_id
+  filter {
+    name   = "tag:Name"
+    values = ["*-public-rt"]
+  }
+}
+
+data "aws_route_table" "node_a_rt" {
+  provider = aws.node_a
+  vpc_id   = var.node_a_vpc_id
+  filter {
+    name   = "tag:Name"
+    values = ["*-public-rt"]
+  }
+}
+
+data "aws_route_table" "node_b_rt" {
+  provider = aws.node_b
+  vpc_id   = var.node_b_vpc_id
+  filter {
+    name   = "tag:Name"
+    values = ["*-public-rt"]
+  }
+}
+
+# ==============================================================================
+# 4. ADMIN CONNECTIVITY: QA HUB <-> ALL SPOKES
+# ==============================================================================
+
+# --- A. QA <-> EVENTS ---
 resource "aws_vpc_peering_connection" "qa_to_events" {
-  count = local.create_peerings ? 1 : 0
-  
-  peer_owner_id = var.events_account_id
-  peer_vpc_id   = var.events_vpc_id
+  count         = local.deploy_connectivity ? 1 : 0
   vpc_id        = module.networking.vpc_id
-  auto_accept   = false
+  peer_vpc_id   = var.events_vpc_id
+  peer_owner_id = var.events_account_id
+  peer_region   = "us-east-1"
   tags          = { Name = "qa-to-events-peering" }
 }
-
-resource "aws_vpc_peering_connection" "qa_to_state" {
-  count = local.create_peerings ? 1 : 0
-  
-  peer_owner_id = var.state_account_id
-  peer_vpc_id   = var.state_vpc_id
-  vpc_id        = module.networking.vpc_id
-  auto_accept   = false
-  tags          = { Name = "qa-to-state-peering" }
+resource "aws_vpc_peering_connection_accepter" "events_accept_qa" {
+  provider                  = aws.events
+  count                     = local.deploy_connectivity ? 1 : 0
+  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_events[0].id
+  auto_accept               = true
 }
-
-resource "aws_vpc_peering_connection" "qa_to_node_a" {
-  count = local.create_peerings ? 1 : 0
-  
-  peer_owner_id = var.node_a_account_id
-  peer_vpc_id   = var.node_a_vpc_id
-  vpc_id        = module.networking.vpc_id
-  auto_accept   = false
-  tags          = { Name = "qa-to-node-a-peering" }
-}
-
-resource "aws_vpc_peering_connection" "qa_to_node_b" {
-  count = local.create_peerings ? 1 : 0
-  
-  peer_owner_id = var.node_b_account_id
-  peer_vpc_id   = var.node_b_vpc_id
-  vpc_id        = module.networking.vpc_id
-  auto_accept   = false
-  tags          = { Name = "qa-to-node-b-peering" }
-}
-
-# ==============================================================================
-# 4. ROUTING LAYER (ACCESS TO SPOKE NETWORKS)
-# ==============================================================================
-
-resource "aws_route" "route_to_events" {
-  count = local.create_peerings ? 1 : 0
-  
+resource "aws_route" "qa_route_events" {
+  count                     = local.deploy_connectivity ? 1 : 0
   route_table_id            = module.networking.public_route_table_id
   destination_cidr_block    = var.events_cidr
   vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_events[0].id
 }
+resource "aws_route" "events_route_qa" {
+  provider                  = aws.events
+  count                     = local.deploy_connectivity ? 1 : 0
+  route_table_id            = data.aws_route_table.events_rt.id
+  destination_cidr_block    = var.qa_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_events[0].id
+}
 
-resource "aws_route" "route_to_state" {
-  count = local.create_peerings ? 1 : 0
-  
+# --- B. QA <-> STATE ---
+resource "aws_vpc_peering_connection" "qa_to_state" {
+  count         = local.deploy_connectivity ? 1 : 0
+  vpc_id        = module.networking.vpc_id
+  peer_vpc_id   = var.state_vpc_id
+  peer_owner_id = var.state_account_id
+  tags          = { Name = "qa-to-state-peering" }
+}
+resource "aws_vpc_peering_connection_accepter" "state_accept_qa" {
+  provider                  = aws.state
+  count                     = local.deploy_connectivity ? 1 : 0
+  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_state[0].id
+  auto_accept               = true
+}
+resource "aws_route" "qa_route_state" {
+  count                     = local.deploy_connectivity ? 1 : 0
   route_table_id            = module.networking.public_route_table_id
   destination_cidr_block    = var.state_cidr
   vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_state[0].id
 }
+resource "aws_route" "state_route_qa" {
+  provider                  = aws.state
+  count                     = local.deploy_connectivity ? 1 : 0
+  route_table_id            = data.aws_route_table.state_rt.id
+  destination_cidr_block    = var.qa_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_state[0].id
+}
 
-resource "aws_route" "route_to_node_a" {
-  count = local.create_peerings ? 1 : 0
-  
+# --- C. QA <-> NODE A ---
+resource "aws_vpc_peering_connection" "qa_to_node_a" {
+  count         = local.deploy_connectivity ? 1 : 0
+  vpc_id        = module.networking.vpc_id
+  peer_vpc_id   = var.node_a_vpc_id
+  peer_owner_id = var.node_a_account_id
+  tags          = { Name = "qa-to-node-a-peering" }
+}
+resource "aws_vpc_peering_connection_accepter" "node_a_accept_qa" {
+  provider                  = aws.node_a
+  count                     = local.deploy_connectivity ? 1 : 0
+  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_node_a[0].id
+  auto_accept               = true
+}
+resource "aws_route" "qa_route_node_a" {
+  count                     = local.deploy_connectivity ? 1 : 0
   route_table_id            = module.networking.public_route_table_id
   destination_cidr_block    = var.node_a_cidr
   vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_node_a[0].id
 }
+resource "aws_route" "node_a_route_qa" {
+  provider                  = aws.node_a
+  count                     = local.deploy_connectivity ? 1 : 0
+  route_table_id            = data.aws_route_table.node_a_rt.id
+  destination_cidr_block    = var.qa_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_node_a[0].id
+}
 
-resource "aws_route" "route_to_node_b" {
-  count = local.create_peerings ? 1 : 0
-  
+# --- D. QA <-> NODE B ---
+resource "aws_vpc_peering_connection" "qa_to_node_b" {
+  count         = local.deploy_connectivity ? 1 : 0
+  vpc_id        = module.networking.vpc_id
+  peer_vpc_id   = var.node_b_vpc_id
+  peer_owner_id = var.node_b_account_id
+  tags          = { Name = "qa-to-node-b-peering" }
+}
+resource "aws_vpc_peering_connection_accepter" "node_b_accept_qa" {
+  provider                  = aws.node_b
+  count                     = local.deploy_connectivity ? 1 : 0
+  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_node_b[0].id
+  auto_accept               = true
+}
+resource "aws_route" "qa_route_node_b" {
+  count                     = local.deploy_connectivity ? 1 : 0
   route_table_id            = module.networking.public_route_table_id
   destination_cidr_block    = var.node_b_cidr
   vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_node_b[0].id
 }
-
-# ==============================================================================
-# 5. OUTPUTS
-# ==============================================================================
-output "QA_GATEWAY_PUBLIC_IP" {
-  value = module.gateway.final_public_ip
+resource "aws_route" "node_b_route_qa" {
+  provider                  = aws.node_b
+  count                     = local.deploy_connectivity ? 1 : 0
+  route_table_id            = data.aws_route_table.node_b_rt.id
+  destination_cidr_block    = var.qa_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_node_b[0].id
 }
 
-output "QA_GATEWAY_PRIVATE_IP" {
-  value = module.gateway.bastion_private_ip
+# ==============================================================================
+# 5. CONNECTIVITY: EVENTS <-> STATE (BACKEND SYNC)
+# ==============================================================================
+resource "aws_vpc_peering_connection" "events_to_state" {
+  provider      = aws.events
+  count         = local.deploy_connectivity ? 1 : 0
+  vpc_id        = var.events_vpc_id
+  peer_vpc_id   = var.state_vpc_id
+  peer_owner_id = var.state_account_id
+  tags          = { Name = "events-to-state-peering" }
+}
+resource "aws_vpc_peering_connection_accepter" "state_accept_events" {
+  provider                  = aws.state
+  count                     = local.deploy_connectivity ? 1 : 0
+  vpc_peering_connection_id = aws_vpc_peering_connection.events_to_state[0].id
+  auto_accept               = true
+}
+resource "aws_route" "events_route_state" {
+  provider                  = aws.events
+  count                     = local.deploy_connectivity ? 1 : 0
+  route_table_id            = data.aws_route_table.events_rt.id
+  destination_cidr_block    = var.state_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.events_to_state[0].id
+}
+resource "aws_route" "state_route_events" {
+  provider                  = aws.state
+  count                     = local.deploy_connectivity ? 1 : 0
+  route_table_id            = data.aws_route_table.state_rt.id
+  destination_cidr_block    = var.events_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.events_to_state[0].id
 }
 
-output "QA_VPC_ID" {
-  value = module.networking.vpc_id
+# ==============================================================================
+# 6. CONNECTIVITY: APP NODES <-> BACKEND
+# ==============================================================================
+
+# --- A. NODE A -> EVENTS ---
+resource "aws_vpc_peering_connection" "node_a_events" {
+  provider      = aws.node_a
+  count         = local.deploy_connectivity ? 1 : 0
+  vpc_id        = var.node_a_vpc_id
+  peer_vpc_id   = var.events_vpc_id
+  peer_owner_id = var.events_account_id
+  tags          = { Name = "node-a-to-events" }
+}
+resource "aws_vpc_peering_connection_accepter" "events_accept_node_a" {
+  provider                  = aws.events
+  count                     = local.deploy_connectivity ? 1 : 0
+  vpc_peering_connection_id = aws_vpc_peering_connection.node_a_events[0].id
+  auto_accept               = true
+}
+resource "aws_route" "node_a_to_events" {
+  provider = aws.node_a
+  count    = local.deploy_connectivity ? 1 : 0
+  route_table_id = data.aws_route_table.node_a_rt.id
+  destination_cidr_block = var.events_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.node_a_events[0].id
+}
+resource "aws_route" "events_to_node_a" {
+  provider = aws.events
+  count    = local.deploy_connectivity ? 1 : 0
+  route_table_id = data.aws_route_table.events_rt.id
+  destination_cidr_block = var.node_a_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.node_a_events[0].id
+}
+
+# --- B. NODE A -> STATE ---
+resource "aws_vpc_peering_connection" "node_a_state" {
+  provider      = aws.node_a
+  count         = local.deploy_connectivity ? 1 : 0
+  vpc_id        = var.node_a_vpc_id
+  peer_vpc_id   = var.state_vpc_id
+  peer_owner_id = var.state_account_id
+  tags          = { Name = "node-a-to-state" }
+}
+resource "aws_vpc_peering_connection_accepter" "state_accept_node_a" {
+  provider                  = aws.state
+  count                     = local.deploy_connectivity ? 1 : 0
+  vpc_peering_connection_id = aws_vpc_peering_connection.node_a_state[0].id
+  auto_accept               = true
+}
+resource "aws_route" "node_a_to_state" {
+  provider = aws.node_a
+  count    = local.deploy_connectivity ? 1 : 0
+  route_table_id = data.aws_route_table.node_a_rt.id
+  destination_cidr_block = var.state_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.node_a_state[0].id
+}
+resource "aws_route" "state_to_node_a" {
+  provider = aws.state
+  count    = local.deploy_connectivity ? 1 : 0
+  route_table_id = data.aws_route_table.state_rt.id
+  destination_cidr_block = var.node_a_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.node_a_state[0].id
+}
+
+# --- C. NODE B -> EVENTS ---
+resource "aws_vpc_peering_connection" "node_b_events" {
+  provider      = aws.node_b
+  count         = local.deploy_connectivity ? 1 : 0
+  vpc_id        = var.node_b_vpc_id
+  peer_vpc_id   = var.events_vpc_id
+  peer_owner_id = var.events_account_id
+  tags          = { Name = "node-b-to-events" }
+}
+resource "aws_vpc_peering_connection_accepter" "events_accept_node_b" {
+  provider                  = aws.events
+  count                     = local.deploy_connectivity ? 1 : 0
+  vpc_peering_connection_id = aws_vpc_peering_connection.node_b_events[0].id
+  auto_accept               = true
+}
+resource "aws_route" "node_b_to_events" {
+  provider = aws.node_b
+  count    = local.deploy_connectivity ? 1 : 0
+  route_table_id = data.aws_route_table.node_b_rt.id
+  destination_cidr_block = var.events_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.node_b_events[0].id
+}
+resource "aws_route" "events_to_node_b" {
+  provider = aws.events
+  count    = local.deploy_connectivity ? 1 : 0
+  route_table_id = data.aws_route_table.events_rt.id
+  destination_cidr_block = var.node_b_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.node_b_events[0].id
+}
+
+# --- D. NODE B -> STATE ---
+resource "aws_vpc_peering_connection" "node_b_state" {
+  provider      = aws.node_b
+  count         = local.deploy_connectivity ? 1 : 0
+  vpc_id        = var.node_b_vpc_id
+  peer_vpc_id   = var.state_vpc_id
+  peer_owner_id = var.state_account_id
+  tags          = { Name = "node-b-to-state" }
+}
+resource "aws_vpc_peering_connection_accepter" "state_accept_node_b" {
+  provider                  = aws.state
+  count                     = local.deploy_connectivity ? 1 : 0
+  vpc_peering_connection_id = aws_vpc_peering_connection.node_b_state[0].id
+  auto_accept               = true
+}
+resource "aws_route" "node_b_to_state" {
+  provider = aws.node_b
+  count    = local.deploy_connectivity ? 1 : 0
+  route_table_id = data.aws_route_table.node_b_rt.id
+  destination_cidr_block = var.state_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.node_b_state[0].id
+}
+resource "aws_route" "state_to_node_b" {
+  provider = aws.state
+  count    = local.deploy_connectivity ? 1 : 0
+  route_table_id = data.aws_route_table.state_rt.id
+  destination_cidr_block = var.node_b_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.node_b_state[0].id
 }

@@ -3,22 +3,23 @@
 # ==============================================================================
 
 # --- Networking Ranges ---
+variable "state_cidr" {
+  description = "CIDR block for State VPC"
+  type        = string
+  default     = "10.2.0.0/16"
+}
+
+# --- Whitelisting CIDRs (Security Group Rules) ---
 variable "qa_cidr" {
-  description = "CIDR block for QA VPC"
+  description = "CIDR block for QA VPC (Used in SG)"
   type        = string
   default     = "10.0.0.0/16"
 }
 
 variable "events_cidr" {
-  description = "CIDR block for Events VPC"
+  description = "CIDR block for Events VPC (Critical for Prometheus scraping)"
   type        = string
   default     = "10.1.0.0/16"
-}
-
-variable "state_cidr" {
-  description = "CIDR block for State VPC"
-  type        = string
-  default     = "10.2.0.0/16"
 }
 
 variable "node_a_cidr" {
@@ -40,30 +41,9 @@ variable "qa_bastion_ip" {
   default     = "10.0.1.59/32"
 }
 
-# --- AWS Account IDs ---
-variable "qa_account_id" {
-  default = "474829115013"
-}
-
-variable "events_account_id" {
-  default = "528062813765"
-}
-
+# --- AWS Account Identifiers ---
 variable "state_account_id" {
-  default = "957842195675"
-}
-
-variable "node_a_account_id" {
-  default = "475100560521"
-}
-
-variable "node_b_account_id" {
-  default = "125941635234"
-}
-
-# --- Workflow Control Flag (CRITICAL) ---
-variable "enable_peering_acceptance" {
-  description = "Set to true only in the final workflow step to accept peering requests"
-  type        = bool
-  default     = false
+  description = "Account ID for State (Self)"
+  type        = string
+  default     = "957842195675"
 }
