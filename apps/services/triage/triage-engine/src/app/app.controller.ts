@@ -1,22 +1,33 @@
-import { Controller, Logger } from '@nestjs/common';
+import { Controller, Post, Body } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBody } from '@nestjs/swagger';
 import { AppService } from './app.service';
-import { EventPattern, Payload } from '@nestjs/microservices';
 
-@Controller()
+@ApiTags('triage')
+@Controller('triage')
 export class AppController {
-  private readonly logger = new Logger(AppController.name);
-
   constructor(private readonly appService: AppService) {}
 
-  // 📡 ESTA ES LA ANTENA
-  @EventPattern('patient-triage-topic') 
-  async handlePatientTriage(@Payload() data: any) {
-    this.logger.log('📨 ¡Mensaje capturado por NestJS!');
-    
-    // A veces Kafka envía los datos crudos o dentro de un objeto 'value'.
-    // Esta línea asegura que siempre tengamos los datos limpios.
-    const pacienteData = data.value ? data.value : data;
-    
-    await this.appService.processTriage(pacienteData);
+  @Post('analyze')
+  @ApiOperation({ summary: 'Analizar síntomas dermatológicos con IA' })
+  // Esto obligará a Swagger a mostrar el cuadro de texto con el JSON de ejemplo
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        appointmentId: { type: 'string', example: '01928374-abcd-4f84-b6f5-e3a0dfa95b69' },
+        qrData: { type: 'string', example: 'QR-SWAGGER-TEST' },
+        symptoms: {
+          type: 'object',
+          properties: {
+            description: { type: 'string', example: 'Tengo manchas rojas en los codos.' },
+            painLevel: { type: 'number', example: 5 },
+            duration: { type: 'string', example: '3 días' }
+          }
+        }
+      }
+    }
+  })
+  async analyzeSymptoms(@Body() triageData: any) {
+    return await this.appService.processTriage(triageData);
   }
 }
