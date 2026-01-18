@@ -1,0 +1,69 @@
+name: "TURBO DESTROY: DermaTech"
+
+on:
+  workflow_dispatch: # Se activa manualmente
+
+jobs:
+  # 1. PRIMERO: Destruimos QA (El Hub)
+  destroy-hub:
+    name: Destroy QA Hub
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
+      
+      - name: Restore Credentials
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+
+      - name: Destroy QA
+        env:
+          AWS_PROFILE: qa-dermatech
+          AWS_REGION: us-east-1
+        run: |
+          cd infrastructure/terraform/environments/account-01-qa
+          terraform init -reconfigure
+          # Pasamos null a las variables para que no falle al pedir IDs
+          terraform destroy -auto-approve \
+            -var="events_vpc_id=null" -var="state_vpc_id=null" \
+            -var="node_a_vpc_id=null" -var="node_b_vpc_id=null"
+
+  # 2. SEGUNDO: Destrucción Masiva Paralela
+  destroy-satellites:
+    name: Destroy ${{ matrix.account }}
+    needs: destroy-hub # Espera a que QA muera
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - account: 'Events'
+            path: 'account-02-events'
+            profile: 'events-dermatech'
+          - account: 'State'
+            path: 'account-03-state'
+            profile: 'state-dermatech'
+          - account: 'Node A'
+            path: 'account-04-node-a'
+            profile: 'node-a-dermatech'
+          - account: 'Node B'
+            path: 'account-05-node-b'
+            profile: 'node-b-dermatech'
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
+      
+      - name: Restore Credentials
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+
+      - name: Destroy ${{ matrix.account }}
+        env:
+          AWS_PROFILE: ${{ matrix.profile }}
+          AWS_REGION: us-east-1
+        run: |
+          cd infrastructure/terraform/environments/${{ matrix.path }}
+          terraform init -reconfigure
+          terraform destroy -auto-approve

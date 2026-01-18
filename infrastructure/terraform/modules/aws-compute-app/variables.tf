@@ -1,14 +1,10 @@
 # ==============================================================================
-# MODULE VARIABLES
-# Context: AWS Compute App (Worker Nodes)
-# Purpose: Define input parameters for reusable Node configuration
+# MODULE VARIABLES: AWS COMPUTE APP
+# Context: Application Workers (Node A & Node B)
 # ==============================================================================
 
-# ------------------------------------------------------------------------------
-# AWS & NETWORK CONFIGURATION
-# ------------------------------------------------------------------------------
 variable "region" {
-  description = "Target AWS Region for deployment"
+  description = "Target AWS Region"
   type        = string
   default     = "us-east-1"
 }
@@ -23,36 +19,38 @@ variable "public_subnet_id" {
   type        = string
 }
 
-# ------------------------------------------------------------------------------
-# PROJECT METADATA
-# ------------------------------------------------------------------------------
 variable "project_name" {
-  description = "Project identifier (e.g., dermatech)"
+  description = "Project identifier tag"
   type        = string
 }
 
 variable "environment" {
-  description = "Deployment environment (e.g., qa, prod)"
+  description = "Deployment environment tag"
   type        = string
 }
 
-# ------------------------------------------------------------------------------
-# COMPUTE CONFIGURATION
-# ------------------------------------------------------------------------------
 variable "ami_id" {
-  description = "AMI ID for the EC2 instance (Amazon Linux 2023 recommended)"
+  description = "AMI ID for the EC2 instance"
   type        = string
 }
 
 variable "private_ip_address" {
-  description = "Static Private IP to assign to the instance (e.g., 10.3.1.10). Essential for internal DNS stability."
+  description = "Static Private IP to assign to the instance"
   type        = string
 }
 
-# ------------------------------------------------------------------------------
-# SECURITY & BASTION CONFIGURATION
-# ------------------------------------------------------------------------------
 variable "gateway_allowed_ip" {
-  description = "The Elastic IP (CIDR) of the QA Gateway/Bastion. Only this IP will be allowed Ingress access (SSH/HTTP). Format: x.x.x.x/32"
+  description = "The Elastic IP (CIDR) of the QA Gateway/Bastion"
+  type        = string
+}
+
+# --- High Availability Configuration ---
+variable "availability_zone" {
+  description = "Availability Zone for the instance (e.g., us-east-1a or us-east-1b)"
+  type        = string
+}
+
+variable "eip_allocation_id" {
+  description = "The AWS Allocation ID (eipalloc-...) of the pre-existing IP"
   type        = string
 }

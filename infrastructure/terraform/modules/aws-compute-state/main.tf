@@ -1,55 +1,46 @@
 # ==============================================================================
 # MODULE: AWS COMPUTE STATE
-# Context: Redis (Cache), Prometheus (Metrics), Grafana (Dashboard)
-# Purpose: Provisioning of the State & Observability Server with Persistence
+# Context: Redis, Prometheus, Grafana
+# Purpose: Database & Monitoring Server with INDESTRUCTIBLE IP and Storage
+# Instance: t3.large (8GB RAM) for Monitoring Stack
 # ==============================================================================
 
 # ==============================================================================
-# 1. SECURITY GROUP (BASTION & INTERNAL ONLY)
-# Purpose: Strict firewall rules. No public access.
+# 1. SECURITY GROUP
 # ==============================================================================
 resource "aws_security_group" "state_sg" {
   name        = "${var.project_name}-${var.environment}-sg"
-  description = "Security Group for State & Monitoring (Whitelisted)"
+  description = "Security Group for State & Monitoring"
   vpc_id      = var.vpc_id
 
-  # --- SSH ACCESS & WEB UI (Admin via Bastion) ---
-  # Allows SSH (22), Grafana (3000), Prometheus (9090) ONLY from Gateway
+  # Admin Access (SSH, Grafana UI 3000, Prometheus UI 9090) from QA Bastion
   ingress {
-    description = "Admin Access (SSH/Web) from QA Gateway"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [var.gateway_allowed_ip]
+    cidr_blocks = [var.gateway_allowed_ip] 
   }
-  
   ingress {
-    description = "Grafana UI from QA Gateway"
     from_port   = 3000
     to_port     = 3000
     protocol    = "tcp"
-    cidr_blocks = [var.gateway_allowed_ip]
+    cidr_blocks = [var.gateway_allowed_ip] 
   }
-
   ingress {
-    description = "Prometheus UI from QA Gateway"
     from_port   = 9090
     to_port     = 9090
     protocol    = "tcp"
-    cidr_blocks = [var.gateway_allowed_ip]
+    cidr_blocks = [var.gateway_allowed_ip] 
   }
 
-  # --- REDIS ACCESS (Internal App Nodes) ---
-  # Only Node A and Node B can talk to Redis
+  # Redis Access (6379) from App Nodes (Internal Only)
   ingress {
-    description = "Redis Access from Trusted App Nodes"
     from_port   = 6379
     to_port     = 6379
     protocol    = "tcp"
     cidr_blocks = var.app_nodes_ips
   }
 
-  # --- OUTBOUND TRAFFIC (Allow All) ---
   egress {
     from_port   = 0
     to_port     = 0
@@ -57,121 +48,113 @@ resource "aws_security_group" "state_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.project_name}-${var.environment}-sg"
-  }
+  tags = { Name = "${var.project_name}-${var.environment}-sg" }
 }
 
 # ==============================================================================
-# 2. PERSISTENT STORAGE (EBS VOLUME)
-# Purpose: Save Grafana Dashboards and Redis Data if instance is recreated.
+# 2. DATA SOURCE: ELASTIC IP (BLINDADO POR ID)
+# Terraform reads the existing IP. It will NEVER destroy it.
+# ==============================================================================
+data "aws_eip" "state_eip" {
+  id = var.eip_allocation_id
+}
+
+# ==============================================================================
+# 3. PERSISTENT STORAGE (10GB)
 # ==============================================================================
 resource "aws_ebs_volume" "state_data_volume" {
-  availability_zone = "${var.region}a"
-  size              = 10 # 10GB is enough for Metrics/Cache logs
+  availability_zone = var.availability_zone
+  size              = 10
   type              = "gp3"
+  encrypted         = true
 
   tags = {
-    Name = "${var.project_name}-${var.environment}-persistence"
+    Name      = "${var.project_name}-${var.environment}-persistence"
+    ManagedBy = "terraform"
   }
 
-  # CRITICAL: Prevent data loss on infrastructure updates
   lifecycle {
-    prevent_destroy = true 
+    prevent_destroy = true # CRITICAL: DATA PROTECTION
   }
 }
 
 # ==============================================================================
-# 3. EC2 INSTANCE (STATE SERVER)
-# Purpose: Hosting Redis, Prometheus, Grafana
+# 4. EC2 INSTANCE (STATE SERVER)
 # ==============================================================================
 resource "aws_instance" "state_worker" {
-  ami           = var.ami_id
-  instance_type = "t3.large" 
-  subnet_id     = var.public_subnet_id
+  ami             = var.ami_id
+  instance_type   = "t3.large" 
+  subnet_id       = var.public_subnet_id
   
-  # STATIC INTERNAL IP
-  private_ip    = "10.0.1.60" 
+  # CRITICAL: Fixed Private IP (10.2.1.100)
+  private_ip      = var.private_ip_address
   
-  vpc_security_group_ids = [aws_security_group.state_sg.id]
-
-  # AUTOMATION: Re-creates instance if Cloud-Init script changes
+  availability_zone = var.availability_zone
+  
+  vpc_security_group_ids      = [aws_security_group.state_sg.id]
   user_data_replace_on_change = true
 
+  # ROOT VOLUME (25GB for Docker/System)
   root_block_device {
     volume_size           = 25
     volume_type           = "gp3"
     delete_on_termination = true
   }
 
-  tags = {
-    Name = "${var.project_name}-${var.environment}-server"
-  }
+  tags = { Name = "${var.project_name}-${var.environment}-server" }
 
-  # --------------------------------------------------------------------------
-  # AUTOMATED PROVISIONING SCRIPT (CLOUD-INIT)
-  # --------------------------------------------------------------------------
   user_data = <<-EOF
     #!/bin/bash
     set -e
-
-    # A. INSTALL DOCKER & TOOLS
+    
+    # --- INSTALLATION ---
     dnf update -y
     dnf install -y docker git htop
     systemctl start docker
     systemctl enable docker
     usermod -aG docker ec2-user
 
-    # B. INSTALL DOCKER COMPOSE V2
-    mkdir -p /usr/local/lib/docker/cli-plugins
-    curl -SL https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
-    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-
-    # C. SWAP MEMORY CONFIGURATION (STABILITY FIX)
-    # Adds 4GB Swap to prevent Prometheus OOM Kills
+    # --- SWAP SETUP (Crucial for Prometheus/Java stability) ---
     dd if=/dev/zero of=/swapfile bs=128M count=32
     chmod 600 /swapfile
     mkswap /swapfile
     swapon /swapfile
     echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
 
-    # D. MOUNT PERSISTENT DISK
+    # --- PERSISTENT DISK MOUNTING ---
     DATA_DISK="/dev/nvme1n1"
     MOUNT_POINT="/data"
     
-    # Wait for EBS attachment
-    sleep 20 
-
-    if ! blkid $DATA_DISK; then
-        mkfs -t xfs $DATA_DISK
-    fi
+    while [ ! -b $DATA_DISK ]; do echo "Waiting for disk..."; sleep 5; done
+    
+    # Only format if new (Protects Data)
+    if ! blkid $DATA_DISK; then mkfs -t xfs $DATA_DISK; fi
+    
     mkdir -p $MOUNT_POINT
     mount $DATA_DISK $MOUNT_POINT
-    echo "$DATA_DISK $MOUNT_POINT xfs defaults,nofail 0 2" >> /etc/fstab
     
-    # Create Persistent Directories
-    mkdir -p $MOUNT_POINT/redis_data
-    mkdir -p $MOUNT_POINT/prometheus_data
-    mkdir -p $MOUNT_POINT/grafana_data
-    mkdir -p $MOUNT_POINT/prometheus_config
+    if ! grep -qs "$MOUNT_POINT" /etc/fstab; then
+      echo "$DATA_DISK $MOUNT_POINT xfs defaults,nofail 0 2" >> /etc/fstab
+    fi
     
-    # --- CRITICAL PERMISSION FIX ---
-    # Prevents "Permission Denied" errors for Redis/Grafana (UID 472/1000)
+    # --- DIRECTORIES & PERMISSIONS ---
+    mkdir -p $MOUNT_POINT/redis_data $MOUNT_POINT/prometheus_data $MOUNT_POINT/grafana_data $MOUNT_POINT/prometheus_config
+    
+    # Set permissive permissions to avoid Docker boot loops on persistent volumes
+    # (Acceptable for this specific academic context)
     chmod -R 777 $MOUNT_POINT
 
-    # E. CREATE PROMETHEUS CONFIGURATION
+    # --- PROMETHEUS CONFIG ---
     cat <<'PROMCONF' > $MOUNT_POINT/prometheus_config/prometheus.yml
     global:
       scrape_interval: 15s
-
     scrape_configs:
       - job_name: 'prometheus'
         static_configs:
           - targets: ['localhost:9090']
-      # Placeholder for Node A/B targets
     PROMCONF
 
-    # F. CREATE DOCKER COMPOSE FILE
+    # --- DOCKER COMPOSE ---
     cat <<'COMPOSE' > /home/ec2-user/docker-compose.yml
     version: '3.8'
     services:
@@ -180,7 +163,7 @@ resource "aws_instance" "state_worker" {
         container_name: redis
         ports:
           - "6379:6379"
-        # Redis Persistence Command
+        # Redis persistence enabled + Password
         command: redis-server --appendonly yes --requirepass "admin123"
         volumes:
           - $MOUNT_POINT/redis_data:/data
@@ -197,8 +180,6 @@ resource "aws_instance" "state_worker" {
         command:
           - '--config.file=/etc/prometheus/prometheus.yml'
           - '--storage.tsdb.path=/prometheus'
-          - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-          - '--web.console.templates=/usr/share/prometheus/consoles'
         restart: always
 
       grafana:
@@ -216,35 +197,25 @@ resource "aws_instance" "state_worker" {
         restart: always
     COMPOSE
 
-    # G. START SERVICES
+    # --- START SERVICES ---
     cd /home/ec2-user
-    # Re-apply permissions just in case
-    chmod -R 777 $MOUNT_POINT
     docker compose up -d
-    
-    echo "SETUP COMPLETE: State Services Running."
   EOF
 }
 
 # ==============================================================================
-# 4. VOLUME ATTACHMENT & ELASTIC IP
+# 5. ATTACHMENTS & ASSOCIATIONS
 # ==============================================================================
 resource "aws_volume_attachment" "state_ebs_att" {
-  device_name = "/dev/sdf"
-  volume_id   = aws_ebs_volume.state_data_volume.id
-  instance_id = aws_instance.state_worker.id
-}
-
-resource "aws_eip" "state_eip" {
-  domain = "vpc"
-  tags = { Name = "${var.project_name}-${var.environment}-eip" }
-  # PROTECT IP FROM DELETION
-  lifecycle { prevent_destroy = true }
+  device_name  = "/dev/sdf"
+  volume_id    = aws_ebs_volume.state_data_volume.id
+  instance_id  = aws_instance.state_worker.id
+  force_detach = true
 }
 
 resource "aws_eip_association" "state_eip_assoc" {
   instance_id   = aws_instance.state_worker.id
-  allocation_id = aws_eip.state_eip.id
+  allocation_id = data.aws_eip.state_eip.id
 }
 
-output "public_ip" { value = aws_eip.state_eip.public_ip }
+output "public_ip" { value = data.aws_eip.state_eip.public_ip }
