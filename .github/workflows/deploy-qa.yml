@@ -160,14 +160,27 @@ jobs:
           name: 'VPC_STATE'
           path: 'artifacts/state'
 
-      - name: Read VPC IDs
+      - name: Read VPC IDs (BLINDADO CON REGEX)
         run: |
-          EVENTS_ID=$(grep VPC_EVENTS artifacts/events/vpc_id.txt | cut -d'=' -f2)
-          STATE_ID=$(grep VPC_STATE artifacts/state/vpc_id.txt | cut -d'=' -f2)
+          echo "🔍 Debugging contenido crudo:"
+          cat artifacts/events/vpc_id.txt
+          
+          # --- CORRECCIÓN CRÍTICA: EXTRACCIÓN POR REGEX ---
+          # Busca estrictamente el patrón 'vpc-xxxx' ignorando basura
+          EVENTS_ID=$(grep -o 'vpc-[a-z0-9]*' artifacts/events/vpc_id.txt | head -n 1)
+          STATE_ID=$(grep -o 'vpc-[a-z0-9]*' artifacts/state/vpc_id.txt | head -n 1)
+          
+          # Validación de seguridad
+          if [[ -z "$EVENTS_ID" ]]; then
+            echo "❌ ERROR FATAL: No se pudo extraer un ID válido para Events"
+            exit 1
+          fi
+
           echo "EVENTS_VPC_ID=$EVENTS_ID" >> $GITHUB_ENV
           echo "STATE_VPC_ID=$STATE_ID" >> $GITHUB_ENV
-          echo "📡 Events VPC: $EVENTS_ID"
-          echo "📡 State VPC: $STATE_ID"
+          
+          echo "🎯 ID LIMPIO Events: $EVENTS_ID"
+          echo "🎯 ID LIMPIO State:  $STATE_ID"
 
       - name: Deploy ${{ matrix.account }}
         env:
@@ -227,12 +240,24 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: 'VPC_NODE_B', path: 'VPC_NODE_B' }
 
-      - name: Read All VPC IDs
+      - name: Read All VPC IDs (BLINDADO CON REGEX)
         run: |
-          echo "VPC_EVENTS=$(grep VPC_EVENTS VPC_EVENTS/vpc_id.txt | cut -d'=' -f2)" >> $GITHUB_ENV
-          echo "VPC_STATE=$(grep VPC_STATE VPC_STATE/vpc_id.txt | cut -d'=' -f2)" >> $GITHUB_ENV
-          echo "VPC_NODE_A=$(grep VPC_NODE_A VPC_NODE_A/vpc_id.txt | cut -d'=' -f2)" >> $GITHUB_ENV
-          echo "VPC_NODE_B=$(grep VPC_NODE_B VPC_NODE_B/vpc_id.txt | cut -d'=' -f2)" >> $GITHUB_ENV
+          # --- CORRECCIÓN CRÍTICA: EXTRACCIÓN POR REGEX ---
+          EVENTS_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_EVENTS/vpc_id.txt | head -n 1)
+          STATE_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_STATE/vpc_id.txt | head -n 1)
+          NODE_A_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_NODE_A/vpc_id.txt | head -n 1)
+          NODE_B_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_NODE_B/vpc_id.txt | head -n 1)
+
+          echo "VPC_EVENTS=$EVENTS_ID" >> $GITHUB_ENV
+          echo "VPC_STATE=$STATE_ID" >> $GITHUB_ENV
+          echo "VPC_NODE_A=$NODE_A_ID" >> $GITHUB_ENV
+          echo "VPC_NODE_B=$NODE_B_ID" >> $GITHUB_ENV
+
+          echo "🎯 ID LIMPIOS DETECTADOS:"
+          echo " - Events: $EVENTS_ID"
+          echo " - State:  $STATE_ID"
+          echo " - Node A: $NODE_A_ID"
+          echo " - Node B: $NODE_B_ID"
 
       - name: Deploy QA Hub
         env:
