@@ -92,6 +92,7 @@ resource "aws_instance" "gateway" {
   instance_type   = "t3.medium"
   
   subnet_id       = var.public_subnet_id
+  key_name          = "vockey"
   
   # CRITICAL: Fixed Private IP for Peering Routes
   private_ip      = var.bastion_private_ip
