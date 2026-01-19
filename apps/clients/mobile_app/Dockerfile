@@ -1,26 +1,25 @@
 # ==============================================================================
 # DOCKERFILE: FLUTTER FRONTEND (PRODUCTION)
-# Context: Serves compiled static files via Nginx.
-# Strategy: "Build-Host, Run-Container". 
-# (We assume 'flutter build web' is executed on the host machine first).
+# Context: Requires 'flutter build web' artifact from the workflow.
 # ==============================================================================
 
-# 1. Base Image: Nginx Alpine (Lightweight web server)
 FROM nginx:alpine
 
-# 2. Housekeeping: Remove default Nginx welcome page
+# 1. Clean Default Config
+# Remove default Nginx welcome page
 RUN rm -rf /usr/share/nginx/html/*
 
-# 3. Configuration: Copy custom Nginx config for SPA routing support
+# 2. Configuration
+# Copy custom Nginx config to support SPA routing (Flutter)
+# IMPORTANT: This file must exist in your repo at this path!
 COPY apps/clients/mobile_app/nginx.conf /etc/nginx/conf.d/default.conf
 
-# 4. Artifacts: Copy the compiled web assets from the host
-# NOTE: This path assumes you run 'docker build' from the WORKSPACE ROOT.
-# If 'flutter build web' was successful, the files are in build/web.
+# 3. Static Assets
+# Copy the compiled Flutter web files from the build context
 COPY apps/clients/mobile_app/build/web /usr/share/nginx/html
 
-# 5. Network: Expose standard HTTP port
+# 4. Runtime
 EXPOSE 80
 
-# 6. Runtime: Start Nginx in foreground
+# Start Nginx
 CMD ["nginx", "-g", "daemon off;"]

@@ -1,97 +1,75 @@
 version: '3.8'
 
 services:
-  # ==============================================================================
-  # API GATEWAY (Entry Point)
-  # ==============================================================================
+  # --- FLUTTER FRONTEND ---
+  frontend:
+    image: ${DOCKER_USERNAME}/dermatech-frontend:latest
+    container_name: app_frontend
+    restart: always
+    ports:
+      - "80:80"
+    networks:
+      - app_net
+
+  # --- API GATEWAY ---
   api-gateway:
-    image: local-api-gateway # Assumes image is built locally
+    image: ${DOCKER_USERNAME}/api-gateway:latest
     container_name: app_gateway
+    restart: always
     ports:
       - "3000:3000"
     environment:
-      # Internal Service Discovery:
-      # Since apps run in the same Docker network, they use container names.
+      - NODE_ENV=production
       - AUTH_SERVICE_URL=http://auth-service:3000
       - PATIENT_SERVICE_URL=http://patient-service:3000
     networks:
-      - app_network
+      - app_net
 
-  # ==============================================================================
-  # AUTH SERVICE (NestJS)
-  # ==============================================================================
+  # --- AUTH SERVICE ---
   auth-service:
-    image: local-auth-service
+    image: ${DOCKER_USERNAME}/auth-service:latest
     container_name: app_auth
-    env_file:
-      - apps/services/core/auth-service/.env
+    restart: always
+    ports:
+      - "3001:3000"
     environment:
-      # EXTERNAL INFRASTRUCTURE CONNECTION STRATEGY:
-      # The .env file likely says 'localhost', which refers to the container itself.
-      # We override these env vars to point to 'host.docker.internal'.
-      # This routes traffic OUT of the container, to the Host machine, where
-      # the Infra containers (Kafka, Redis, MQTT) are exposing their ports.
-      - REDIS_HOST=host.docker.internal
-      - KAFKA_BROKERS=host.docker.internal:9092
-      - MQTT_HOST=host.docker.internal
-      - RABBITMQ_HOST=host.docker.internal
-    extra_hosts:
-      # DNS mapping required for Linux/Docker Desktop to resolve the host IP
-      - "host.docker.internal:host-gateway"
+      - PORT=3000
+      - NODE_ENV=production
+      # Connecting to EVENTS Account (Private IP)
+      - KAFKA_BROKERS=10.0.1.50:9092
+      - KAFKA_CLIENT_ID=auth-service
+      - RABBITMQ_HOST=10.0.1.50
+      # Connecting to STATE Account (Private IP)
+      - REDIS_HOST=10.0.1.60
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      # Security Credentials (Injected via .env file or GH Actions)
+      - JWT_SECRET=${JWT_SECRET}
+      - DATABASE_HOST=${DATABASE_HOST}
+      - DATABASE_USER=${DATABASE_USER}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - DATABASE_NAME=${DATABASE_NAME}
     networks:
-      - app_network
+      - app_net
 
-  # ==============================================================================
-  # PATIENT SERVICE (NestJS)
-  # ==============================================================================
+  # --- PATIENT SERVICE ---
   patient-service:
-    image: local-patient-service
+    image: ${DOCKER_USERNAME}/patient-service:latest
     container_name: app_patient
-    env_file:
-      - apps/services/core/patient-service/.env
-    environment:
-      # Same strategy: Connect to host for infrastructure
-      - REDIS_HOST=host.docker.internal
-      - KAFKA_BROKERS=host.docker.internal:9092
-      - MQTT_HOST=host.docker.internal
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    networks:
-      - app_network
-
-  # ==============================================================================
-  # AI AGENT (Python/Flask)
-  # ==============================================================================
-  ai-agent:
-    build:
-      context: ./apps/services/ai-agent
-      dockerfile: Dockerfile
-    container_name: app_ai_agent
+    restart: always
     ports:
-      - "5000:5000"
-    volumes:
-      # Volume mapping for hot-reloading during development testing
-      - ./apps/services/ai-agent:/app
+      - "3002:3000"
     environment:
-      - FLASK_ENV=development
-      # If AI Agent needs DB/Kafka, add overrides here too
-      - KAFKA_BROKERS=host.docker.internal:9092
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - PORT=3000
+      - NODE_ENV=production
+      - KAFKA_BROKERS=10.0.1.50:9092
+      - REDIS_HOST=10.0.1.60
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - DATABASE_HOST=${DATABASE_HOST}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
     networks:
-      - app_network
-
-  # ==============================================================================
-  # FRONTEND (Flutter Web)
-  # ==============================================================================
-  frontend:
-    image: local-frontend
-    container_name: app_frontend
-    ports:
-      - "8080:80" # Maps Container Port 80 (Nginx) to Host Port 8080
-    networks:
-      - app_network
+      - app_net
 
 networks:
-  app_network:
+  app_net:
     driver: bridge

@@ -1,21 +1,38 @@
-# apps/services/core/auth-service/Dockerfile
+# ==============================================================================
+# DOCKERFILE: AUTH SERVICE (PRODUCTION)
+# Context: Requires 'nx build auth-service --prod' to be run first.
+# Security: Runs as non-root user 'node'.
+# ==============================================================================
 
-# Usamos una imagen ligera de Node
 FROM node:18-alpine
+
+# Install dumb-init to handle PID 1 signals correctly
+RUN apk add --no-cache dumb-init
 
 WORKDIR /app
 
-# 1. Copiamos el package.json GENERADO por Nx (no el de la raíz)
-# Nx genera un package.json en el dist que tiene SOLO lo necesario para correr
+# Set NODE_ENV to production to enable optimizations
+ENV NODE_ENV production
+
+# 1. Dependency Layer
+# Copy package.json from the build output (Assumes build context is root)
 COPY dist/apps/services/core/auth-service/package*.json ./
 
-# 2. Instalamos dependencias de producción
-# (Las librerías shared YA están compiladas en el JS, esto es solo para librerías de terceros como 'nestjs', 'reflect-metadata', etc.)
-RUN npm install --omit=dev
+# Install only production dependencies
+RUN npm ci --omit=dev && npm cache clean --force
 
-# 3. Copiamos el main.js que YA TIENE tus shared-dtos integrados
+# 2. Application Layer
 COPY dist/apps/services/core/auth-service/main.js ./
 
-# 4. Exponer puerto y correr
+# 3. Security & Networking
+# Use non-root user for security
+USER node
+
 EXPOSE 3000
-CMD ["node", "main.js"]
+
+# Healthcheck to ensure the service is responsive
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD wget --quiet --tries=1 --spider http://localhost:3000/api/health || exit 1
+
+# Start using dumb-init
+CMD ["dumb-init", "node", "main.js"]

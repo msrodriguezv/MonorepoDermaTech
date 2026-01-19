@@ -1,78 +1,58 @@
-name: "TURBO DEPLOY: DermaTech Global Infrastructure"
+name: "TURBO DEPLOY: DermaTech Global Infrastructure & Services"
 
 on:
   push:
     branches: [ qa ]
 
+# DEFINIMOS LAS IPs ESTÁTICAS QUE ME DISTE (GLOBALES)
+env:
+  AWS_REGION: us-east-1
+  # Public IPs for SSH Access (GitHub Actions -> EC2)
+  EVENTS_PUBLIC_IP: 3.210.119.37
+  STATE_PUBLIC_IP: 52.201.96.185
+  NODE_A_PUBLIC_IP: 3.220.53.59
+  NODE_B_PUBLIC_IP: 54.86.159.130
+  # Private IPs for Internal Connection (Service -> Service)
+  EVENTS_PRIVATE_IP: 10.0.1.50
+  STATE_PRIVATE_IP: 10.0.1.60
+
 jobs:
-  # ==========================================
-  # STEP 0: FORCE CLEANUP (CRITICAL)
-  # Removes orphaned resources to prevent conflicts
-  # ==========================================
+  # ============================================================================
+  # TRACK A: INFRASTRUCTURE (TU CÓDIGO ORIGINAL INTACTO)
+  # ============================================================================
+
   cleanup:
     name: Force Cleanup Orphaned Resources
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      
       - name: Restore Credentials
         run: |
           mkdir -p ~/.aws
           echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
-
       - name: Delete All VPC Peering Connections
         run: |
-          # Iterates through all profiles to ensure a clean network slate
           for profile in qa-dermatech events-dermatech state-dermatech node-a-dermatech node-b-dermatech; do
             echo "🧹 Cleaning peerings for profile: $profile"
-            
-            # Fetch active or pending peering connections
-            peering_ids=$(aws ec2 describe-vpc-peering-connections \
-              --profile $profile \
-              --region us-east-1 \
-              --filters "Name=status-code,Values=active,pending-acceptance" \
-              --query 'VpcPeeringConnections[*].VpcPeeringConnectionId' \
-              --output text 2>/dev/null || echo "")
-            
-            # Delete each connection found
+            peering_ids=$(aws ec2 describe-vpc-peering-connections --profile $profile --region us-east-1 --filters "Name=status-code,Values=active,pending-acceptance" --query 'VpcPeeringConnections[*].VpcPeeringConnectionId' --output text 2>/dev/null || echo "")
             for id in $peering_ids; do
               echo "  ❌ Deleting peering: $id"
-              aws ec2 delete-vpc-peering-connection \
-                --profile $profile \
-                --region us-east-1 \
-                --vpc-peering-connection-id $id || true
+              aws ec2 delete-vpc-peering-connection --profile $profile --region us-east-1 --vpc-peering-connection-id $id || true
             done
           done
-
       - name: Delete Network Interfaces (ENIs)
         run: |
           for profile in qa-dermatech events-dermatech state-dermatech node-a-dermatech node-b-dermatech; do
             echo "🧹 Cleaning ENIs for: $profile"
-            
-            # Fetch available (detached) network interfaces
-            eni_ids=$(aws ec2 describe-network-interfaces \
-              --profile $profile \
-              --region us-east-1 \
-              --query 'NetworkInterfaces[?Status==`available`].NetworkInterfaceId' \
-              --output text 2>/dev/null || echo "")
-            
-            # Delete each ENI
+            eni_ids=$(aws ec2 describe-network-interfaces --profile $profile --region us-east-1 --query 'NetworkInterfaces[?Status==`available`].NetworkInterfaceId' --output text 2>/dev/null || echo "")
             for id in $eni_ids; do
               echo "  ❌ Deleting ENI: $id"
-              aws ec2 delete-network-interface \
-                --profile $profile \
-                --region us-east-1 \
-                --network-interface-id $id || true
+              aws ec2 delete-network-interface --profile $profile --region us-east-1 --network-interface-id $id || true
             done
           done
-
       - name: Wait for AWS Propagation
         run: sleep 30
 
-  # ==========================================
-  # LEVEL 1: FOUNDATION (EVENTS & STATE)
-  # Independent accounts with no external dependencies
-  # ==========================================
   base-layer:
     name: Deploy Base (${{ matrix.account }})
     needs: cleanup
@@ -92,12 +72,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: hashicorp/setup-terraform@v2
-
       - name: Restore Credentials
         run: |
           mkdir -p ~/.aws
           echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
-
       - name: Deploy ${{ matrix.account }}
         env:
           AWS_PROFILE: ${{ matrix.profile }}
@@ -105,19 +83,15 @@ jobs:
         run: |
           cd infrastructure/terraform/environments/${{ matrix.path }}
           terraform init -reconfigure
-          
-          # Idempotency check: destroy and retry if apply fails
           if ! terraform apply -auto-approve; then
             echo "⚠️ First attempt failed. Executing destroy..."
             terraform destroy -auto-approve || true
             sleep 20
             terraform apply -auto-approve
           fi
-          
           VPC_ID=$(terraform output -raw vpc_id)
           echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
           echo "✅ VPC Created: $VPC_ID"
-      
       - name: Upload VPC ID Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -125,10 +99,6 @@ jobs:
           path: infrastructure/terraform/environments/${{ matrix.path }}/vpc_id.txt
           retention-days: 1
 
-  # ==========================================
-  # LEVEL 2: WORKER NODES (A & B)
-  # Now passive: They do NOT require Events/State IDs anymore
-  # ==========================================
   nodes-layer:
     name: Deploy Node (${{ matrix.account }})
     needs: base-layer
@@ -148,15 +118,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: hashicorp/setup-terraform@v2
-
       - name: Restore Credentials
         run: |
           mkdir -p ~/.aws
           echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
-
-      # NOTE: We no longer download Events/State artifacts here.
-      # Nodes are now decoupled and deployed independently.
-
       - name: Deploy ${{ matrix.account }}
         env:
           AWS_PROFILE: ${{ matrix.profile }}
@@ -164,19 +129,15 @@ jobs:
         run: |
           cd infrastructure/terraform/environments/${{ matrix.path }}
           terraform init -reconfigure
-          
-          # Simplified Apply: No extra variables passed
           if ! terraform apply -auto-approve; then
             echo "⚠️ First attempt failed. Executing destroy..."
             terraform destroy -auto-approve || true
             sleep 20
             terraform apply -auto-approve
           fi
-          
           VPC_ID=$(terraform output -raw vpc_id)
           echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
           echo "✅ VPC Created: $VPC_ID"
-
       - name: Upload VPC ID Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -184,10 +145,6 @@ jobs:
           path: infrastructure/terraform/environments/${{ matrix.path }}/vpc_id.txt
           retention-days: 1
 
-  # ==========================================
-  # LEVEL 3: QA HUB (THE ORCHESTRATOR)
-  # This step connects everything. Requires ALL VPC IDs.
-  # ==========================================
   qa-hub:
     name: Deploy QA Hub (Orchestrator)
     needs: [base-layer, nodes-layer]
@@ -195,12 +152,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: hashicorp/setup-terraform@v2
-      
       - name: Restore Credentials
         run: |
           mkdir -p ~/.aws
           echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
-
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with: { name: 'VPC_EVENTS', path: 'VPC_EVENTS' }
@@ -210,27 +165,16 @@ jobs:
         with: { name: 'VPC_NODE_A', path: 'VPC_NODE_A' }
       - uses: actions/download-artifact@v4
         with: { name: 'VPC_NODE_B', path: 'VPC_NODE_B' }
-
-      - name: Extract VPC IDs (Regex Sanitization)
+      - name: Extract VPC IDs
         run: |
-          # Extracts strictly 'vpc-xxxx' patterns to prevent injection errors
           EVENTS_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_EVENTS/vpc_id.txt | head -n 1)
           STATE_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_STATE/vpc_id.txt | head -n 1)
           NODE_A_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_NODE_A/vpc_id.txt | head -n 1)
           NODE_B_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_NODE_B/vpc_id.txt | head -n 1)
-
-          # Export to GITHUB_ENV for next steps
           echo "VPC_EVENTS=$EVENTS_ID" >> $GITHUB_ENV
           echo "VPC_STATE=$STATE_ID" >> $GITHUB_ENV
           echo "VPC_NODE_A=$NODE_A_ID" >> $GITHUB_ENV
           echo "VPC_NODE_B=$NODE_B_ID" >> $GITHUB_ENV
-
-          echo "🎯 Validated IDs:"
-          echo " - Events: $EVENTS_ID"
-          echo " - State:  $STATE_ID"
-          echo " - Node A: $NODE_A_ID"
-          echo " - Node B: $NODE_B_ID"
-
       - name: Deploy QA Hub
         env:
           AWS_PROFILE: qa-dermatech
@@ -238,27 +182,265 @@ jobs:
         run: |
           cd infrastructure/terraform/environments/account-01-qa
           terraform init -reconfigure
-          
-          # Hub Deployment: Passes all VPC IDs to create peerings and routes
           if ! terraform apply -auto-approve \
             -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
             -var="state_vpc_id=${{ env.VPC_STATE }}" \
             -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
             -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"; then
-            
             echo "⚠️ First attempt failed. Executing destroy..."
-            # Pass null variables for destroy to avoid validation errors
-            terraform destroy -auto-approve \
-              -var="events_vpc_id=null" -var="state_vpc_id=null" \
-              -var="node_a_vpc_id=null" -var="node_b_vpc_id=null" || true
+            terraform destroy -auto-approve -var="events_vpc_id=null" -var="state_vpc_id=null" -var="node_a_vpc_id=null" -var="node_b_vpc_id=null" || true
             sleep 20
-            
-            # Retry Deployment
             terraform apply -auto-approve \
               -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
               -var="state_vpc_id=${{ env.VPC_STATE }}" \
               -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
               -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
           fi
-          
           echo "🎉 GLOBAL INFRASTRUCTURE SUCCESSFULLY DEPLOYED"
+
+  # ============================================================================
+  # TRACK B: COMPILATION & DOCKER (PARALLEL PROCESS)
+  # Corre al mismo tiempo que la Infra para ahorrar tiempo
+  # ============================================================================
+
+  compile-code:
+    name: 🛠️ Compile Source Code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with: { node-version: 18, cache: 'npm' }
+      
+      - name: Install Dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Build Microservices (Nx)
+        run: npx nx run-many --target=build --all --configuration=production
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with: { channel: 'stable' }
+      
+      - name: Build Flutter Web
+        run: |
+          cd apps/clients/mobile_app
+          flutter build web --release
+
+      # Guardamos los archivos compilados para pasarlos al Job de Docker
+      - name: Upload Dist Artifacts
+        uses: actions/upload-artifact@v4
+        with: { name: 'dist-files', path: 'dist', retention-days: 1 }
+      - name: Upload Flutter Build
+        uses: actions/upload-artifact@v4
+        with: { name: 'flutter-build', path: 'apps/clients/mobile_app/build/web', retention-days: 1 }
+
+  docker-build:
+    name: 🐳 Docker Build & Push
+    needs: compile-code # Espera a que termine de compilar
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: 'auth-service'
+            dockerfile: 'apps/services/core/auth-service/Dockerfile'
+          - service: 'patient-service'
+            dockerfile: 'apps/services/core/patient-service/Dockerfile'
+          - service: 'api-gateway'
+            dockerfile: 'apps/services/api-gateway/Dockerfile'
+          - service: 'dermatech-frontend'
+            dockerfile: 'apps/clients/mobile_app/Dockerfile'
+    steps:
+      - uses: actions/checkout@v3
+      
+      # Descargamos lo que compilamos en el paso anterior
+      - uses: actions/download-artifact@v4
+        with: { name: 'dist-files', path: 'dist' }
+      - uses: actions/download-artifact@v4
+        with: { name: 'flutter-build', path: 'apps/clients/mobile_app/build/web' }
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and Push ${{ matrix.service }}
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:latest
+
+  # ============================================================================
+  # TRACK C: INSTALLATION & DEPLOYMENT (SEQUENTIAL START)
+  # Solo inicia cuando la Infra (QA Hub) y los Dockers están listos
+  # ============================================================================
+
+  deploy-events:
+    name: 🚀 Deploy Events (Kafka)
+    needs: [qa-hub] # Espera a que la red exista
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@master
+        with:
+          host: ${{ env.EVENTS_PUBLIC_IP }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: EVENTS_PRIVATE_IP, RABBITMQ_PASS
+          script: |
+            # 1. Preparar Carpetas
+            sudo mkdir -p /data/kafka /data/zookeeper /data/rabbitmq /data/mosquitto/config
+            sudo chmod -R 777 /data
+            echo "listener 1883" | sudo tee /data/mosquitto/config/mosquitto.conf
+            echo "allow_anonymous true" | sudo tee -a /data/mosquitto/config/mosquitto.conf
+
+            # 2. Levantar Docker Compose
+            # Nota: Usamos la IP PRIVADA ESTÁTICA para advertised listeners
+            cat <<EOF > docker-compose.yml
+            version: '3.8'
+            services:
+              zookeeper:
+                image: confluentinc/cp-zookeeper:7.5.0
+                restart: always
+                environment: { ZOOKEEPER_CLIENT_PORT: 2181 }
+                volumes: ["/data/zookeeper:/var/lib/zookeeper/data"]
+                networks: [infra_net]
+              kafka:
+                image: confluentinc/cp-kafka:7.5.0
+                restart: always
+                depends_on: [zookeeper]
+                ports: ["9092:9092"]
+                volumes: ["/data/kafka:/var/lib/kafka/data"]
+                environment:
+                  KAFKA_BROKER_ID: 1
+                  KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+                  KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+                  KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${EVENTS_PRIVATE_IP}:9092
+                  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+                networks: [infra_net]
+              rabbitmq:
+                image: rabbitmq:3.12-management-alpine
+                restart: always
+                ports: ["5672:5672", "15672:15672"]
+                volumes: ["/data/rabbitmq:/var/lib/rabbitmq"]
+                environment:
+                  RABBITMQ_DEFAULT_USER: admin
+                  RABBITMQ_DEFAULT_PASS: ${{ secrets.RABBITMQ_PASS }}
+                networks: [infra_net]
+              mosquitto:
+                image: eclipse-mosquitto:2.0
+                restart: always
+                ports: ["1883:1883", "9001:9001"]
+                volumes: ["/data/mosquitto/config:/mosquitto/config"]
+                networks: [infra_net]
+            networks:
+              infra_net:
+                driver: bridge
+            EOF
+            
+            # 3. Lanzar
+            sudo docker compose up -d
+
+  deploy-state:
+    name: 🚀 Deploy State (Redis)
+    needs: [qa-hub]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@master
+        with:
+          host: ${{ env.STATE_PUBLIC_IP }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            sudo mkdir -p /data/redis /data/grafana /data/prometheus
+            sudo chmod -R 777 /data
+            cat <<EOF > docker-compose.yml
+            version: '3.8'
+            services:
+              redis:
+                image: redis:7.2-alpine
+                restart: always
+                ports: ["6379:6379"]
+                command: redis-server --appendonly yes --requirepass ${{ secrets.REDIS_PASSWORD }}
+                volumes: ["/data/redis:/data"]
+              grafana:
+                image: grafana/grafana:latest
+                restart: always
+                ports: ["3000:3000"]
+                environment:
+                  GF_SECURITY_ADMIN_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }}
+                volumes: ["/data/grafana:/var/lib/grafana"]
+            EOF
+            sudo docker compose up -d
+
+  deploy-apps:
+    name: 🚀 Deploy Apps (Node A & B)
+    # Espera a que: 1. Infra esté creada, 2. Motores (Kafka/Redis) estén arriba, 3. Dockers estén subidos
+    needs: [docker-build, deploy-events, deploy-state]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Desplegamos en ambos nodos
+        node_ip: [3.220.53.59, 54.86.159.130]
+    steps:
+      - uses: appleboy/ssh-action@master
+        with:
+          host: ${{ matrix.node_ip }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: DOCKER_USERNAME, EVENTS_PRIVATE_IP, STATE_PRIVATE_IP
+          script: |
+            # 1. Login Docker Hub
+            echo "${{ secrets.DOCKER_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+            # 2. Crear Compose (Conectando a las IPs privadas de Events/State)
+            cat <<EOF > docker-compose.yml
+            version: '3.8'
+            services:
+              frontend:
+                image: ${DOCKER_USERNAME}/dermatech-frontend:latest
+                restart: always
+                ports: ["80:80"]
+              api-gateway:
+                image: ${DOCKER_USERNAME}/api-gateway:latest
+                restart: always
+                ports: ["3000:3000"]
+                environment:
+                  - AUTH_SERVICE_URL=http://auth-service:3000
+                  - PATIENT_SERVICE_URL=http://patient-service:3000
+              auth-service:
+                image: ${DOCKER_USERNAME}/auth-service:latest
+                restart: always
+                ports: ["3001:3000"]
+                environment:
+                  - NODE_ENV=production
+                  - KAFKA_BROKERS=${EVENTS_PRIVATE_IP}:9092
+                  - REDIS_HOST=${STATE_PRIVATE_IP}
+                  - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+                  - JWT_SECRET=${{ secrets.JWT_SECRET }}
+                  - DATABASE_HOST=${{ secrets.DATABASE_HOST }}
+                  - DATABASE_USER=${{ secrets.DATABASE_USER }}
+                  - DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+                  - DATABASE_NAME=${{ secrets.DATABASE_NAME }}
+              patient-service:
+                image: ${DOCKER_USERNAME}/patient-service:latest
+                restart: always
+                ports: ["3002:3000"]
+                environment:
+                  - NODE_ENV=production
+                  - KAFKA_BROKERS=${EVENTS_PRIVATE_IP}:9092
+                  - REDIS_HOST=${STATE_PRIVATE_IP}
+                  - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+                  - DATABASE_HOST=${{ secrets.DATABASE_HOST }}
+                  - DATABASE_USER=${{ secrets.DATABASE_USER }}
+                  - DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+                  - DATABASE_NAME=${{ secrets.DATABASE_NAME }}
+            EOF
+            
+            # 3. Levantar
+            sudo docker compose pull
+            sudo docker compose up -d --remove-orphans

@@ -1,14 +1,25 @@
 version: '3.8'
+
 services:
+  # --- ZOOKEEPER ---
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
-    volumes:
-      - /data/zookeeper:/var/lib/zookeeper/data
+    container_name: infra_zookeeper
+    restart: always
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - /data/zookeeper/data:/var/lib/zookeeper/data
+      - /data/zookeeper/log:/var/lib/zookeeper/log
+    networks:
+      - infra_net
 
+  # --- KAFKA BROKER ---
   kafka:
     image: confluentinc/cp-kafka:7.5.0
+    container_name: infra_kafka
+    restart: always
     depends_on:
       - zookeeper
     ports:
@@ -16,17 +27,54 @@ services:
     volumes:
       - /data/kafka:/var/lib/kafka/data
     environment:
+      KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://10.1.1.50:9092
+      # CRITICAL: Advertises the specific AWS Private IP (10.0.1.50)
+      # This allows Node A and Node B to connect via peering.
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://10.0.1.50:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    networks:
+      - infra_net
+    healthcheck:
+      test: nc -z localhost 9092 || exit 1
+      interval: 10s
+      retries: 5
 
+  # --- RABBITMQ ---
   rabbitmq:
-    image: rabbitmq:3-management-alpine
+    image: rabbitmq:3.12-management-alpine
+    container_name: infra_rabbitmq
+    restart: always
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Management UI
     volumes:
       - /data/rabbitmq:/var/lib/rabbitmq
     environment:
-      RABBITMQ_DEFAULT_USER: admin
-      RABBITMQ_DEFAULT_PASS: admin123
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
+    networks:
+      - infra_net
+
+  # --- MOSQUITTO (MQTT) ---
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: infra_mosquitto
+    restart: always
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - /data/mosquitto/config:/mosquitto/config
+      - /data/mosquitto/data:/mosquitto/data
+      - /data/mosquitto/log:/mosquitto/log
+    # Note: Requires a mosquitto.conf mounted in /data/mosquitto/config
+    # containing: 'listener 1883' and 'allow_anonymous false' (if using auth)
+    networks:
+      - infra_net
+
+networks:
+  infra_net:
+    driver: bridge
