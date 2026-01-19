@@ -287,6 +287,11 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: EVENTS_PRIVATE_IP, RABBITMQ_PASS
           script: |
+            # --- INSTALL DOCKER COMPOSE ---
+            sudo mkdir -p /usr/local/lib/docker/cli-plugins
+            sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+            sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            # ------------------------------------
             sudo mkdir -p /data/kafka /data/zookeeper /data/rabbitmq /data/mosquitto/config
             sudo chmod -R 777 /data
             echo "listener 1883" | sudo tee /data/mosquitto/config/mosquitto.conf
@@ -346,6 +351,11 @@ jobs:
           username: ec2-user
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            # --- INSTALL DOCKER COMPOSE ---
+            sudo mkdir -p /usr/local/lib/docker/cli-plugins
+            sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+            sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            # ------------------------------------
             sudo mkdir -p /data/redis /data/grafana /data/prometheus
             sudo chmod -R 777 /data
             cat <<EOF > docker-compose.yml
@@ -382,6 +392,11 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: DOCKER_USERNAME, EVENTS_PRIVATE_IP, STATE_PRIVATE_IP
           script: |
+            # --- INSTALL DOCKER COMPOSE ---
+            sudo mkdir -p /usr/local/lib/docker/cli-plugins
+            sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+            sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            # ------------------------------------
             # Login Docker Hub
             echo "${{ secrets.DOCKER_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
