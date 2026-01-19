@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  # ==============================================================================
+  # API GATEWAY (Entry Point)
+  # ==============================================================================
+  api-gateway:
+    image: local-api-gateway # Assumes image is built locally
+    container_name: app_gateway
+    ports:
+      - "3000:3000"
+    environment:
+      # Internal Service Discovery:
+      # Since apps run in the same Docker network, they use container names.
+      - AUTH_SERVICE_URL=http://auth-service:3000
+      - PATIENT_SERVICE_URL=http://patient-service:3000
+    networks:
+      - app_network
+
+  # ==============================================================================
+  # AUTH SERVICE (NestJS)
+  # ==============================================================================
+  auth-service:
+    image: local-auth-service
+    container_name: app_auth
+    env_file:
+      - apps/services/core/auth-service/.env
+    environment:
+      # EXTERNAL INFRASTRUCTURE CONNECTION STRATEGY:
+      # The .env file likely says 'localhost', which refers to the container itself.
+      # We override these env vars to point to 'host.docker.internal'.
+      # This routes traffic OUT of the container, to the Host machine, where
+      # the Infra containers (Kafka, Redis, MQTT) are exposing their ports.
+      - REDIS_HOST=host.docker.internal
+      - KAFKA_BROKERS=host.docker.internal:9092
+      - MQTT_HOST=host.docker.internal
+      - RABBITMQ_HOST=host.docker.internal
+    extra_hosts:
+      # DNS mapping required for Linux/Docker Desktop to resolve the host IP
+      - "host.docker.internal:host-gateway"
+    networks:
+      - app_network
+
+  # ==============================================================================
+  # PATIENT SERVICE (NestJS)
+  # ==============================================================================
+  patient-service:
+    image: local-patient-service
+    container_name: app_patient
+    env_file:
+      - apps/services/core/patient-service/.env
+    environment:
+      # Same strategy: Connect to host for infrastructure
+      - REDIS_HOST=host.docker.internal
+      - KAFKA_BROKERS=host.docker.internal:9092
+      - MQTT_HOST=host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - app_network
+
+  # ==============================================================================
+  # AI AGENT (Python/Flask)
+  # ==============================================================================
+  ai-agent:
+    build:
+      context: ./apps/services/ai-agent
+      dockerfile: Dockerfile
+    container_name: app_ai_agent
+    ports:
+      - "5000:5000"
+    volumes:
+      # Volume mapping for hot-reloading during development testing
+      - ./apps/services/ai-agent:/app
+    environment:
+      - FLASK_ENV=development
+      # If AI Agent needs DB/Kafka, add overrides here too
+      - KAFKA_BROKERS=host.docker.internal:9092
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - app_network
+
+  # ==============================================================================
+  # FRONTEND (Flutter Web)
+  # ==============================================================================
+  frontend:
+    image: local-frontend
+    container_name: app_frontend
+    ports:
+      - "8080:80" # Maps Container Port 80 (Nginx) to Host Port 8080
+    networks:
+      - app_network
+
+networks:
+  app_network:
+    driver: bridge

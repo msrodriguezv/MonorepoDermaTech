@@ -16,7 +16,7 @@ import { AppointmentCreatedHandler } from './cqrs/events/appointment-created.han
     // 1. Load Environment Variables
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: 'apps/services/scheduling/availability-qry/.env',
+      //envFilePath: 'apps/services/scheduling/availability-qry/.env',
     }),
 
     // 2. Security Layer (JWT & Guards)

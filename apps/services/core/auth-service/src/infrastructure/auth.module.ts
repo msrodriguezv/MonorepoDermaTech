@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, Logger } from '@nestjs/common';
 import { CqrsModule } from '@nestjs/cqrs';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule, JwtModuleOptions } from '@nestjs/jwt';
@@ -53,25 +53,43 @@ import { SharedInfrasModule } from '@dermatech/shared-infras';
         name: 'AUTH_KAFKA_CLIENT',
         imports: [ConfigModule],
         inject: [ConfigService],
-        useFactory: (configService: ConfigService) => ({
-          transport: Transport.KAFKA,
-          options: {
-            client: {
-              clientId: configService.get<string>('KAFKA_CLIENT_ID', 'auth-service'),
-              brokers: [configService.get<string>('KAFKA_BROKERS') || 'localhost:9092'],
-              retry: { retries: 10, initialRetryTime: 300 },
+        useFactory: (configService: ConfigService) => {
+          // --- KAFKA CONNECTION DEBUGGING & VALIDATION ---
+          const logger = new Logger('AuthModuleKafka');
+          const brokers = configService.get<string>('KAFKA_BROKERS');
+          const clientId = configService.get<string>('KAFKA_CLIENT_ID', 'auth-service');
+          const groupId = configService.get<string>('KAFKA_GROUP_ID', 'auth-service-group');
+ 
+          // This prevents the application from silently defaulting to localhost and failing later with connection refused.
+          if (!brokers) {
+            const errorMsg = 'CRITICAL ERROR: KAFKA_BROKERS environment variable is missing. Connection will fail.';
+            logger.error(errorMsg);
+            throw new Error(errorMsg);
+          }
+
+          logger.log(`Kafka Client Initialization: Connecting to Brokers at [${brokers}]`);
+
+          return {
+            transport: Transport.KAFKA,
+            options: {
+              client: {
+                clientId: clientId,
+                // We must strictly use the environment variable provided by Docker Compose (host.docker.internal).
+                brokers: [brokers], 
+                retry: { retries: 10, initialRetryTime: 300 },
+              },
+              producer: {
+                idempotent: true,
+                allowAutoTopicCreation: configService.get<string>('NODE_ENV') !== 'production',
+              },
+              consumer: {
+                groupId: groupId,
+                sessionTimeout: 30000,
+                allowAutoTopicCreation: configService.get<string>('NODE_ENV') !== 'production',
+              },
             },
-            producer: {
-              idempotent: true,
-              allowAutoTopicCreation: configService.get<string>('NODE_ENV') !== 'production',
-            },
-            consumer: {
-              groupId: configService.get<string>('KAFKA_GROUP_ID', 'auth-service-group'),
-              sessionTimeout: 30000,
-              allowAutoTopicCreation: configService.get<string>('NODE_ENV') !== 'production',
-            },
-          },
-        }),
+          };
+        },
       },
     ]),
   ],

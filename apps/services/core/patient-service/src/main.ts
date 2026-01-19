@@ -1,3 +1,16 @@
+// -----------------------------------------------------------------------------
+// POLYFILL: Crypto Compatibility for Node.js v18 + Webpack
+// Context: Resolves "ReferenceError: crypto is not defined" within TypeORM.
+// -----------------------------------------------------------------------------
+import * as crypto from 'crypto';
+
+if (!global.crypto) {
+  // @ts-expect-error: Node.js 'crypto' differs slightly from the Web Crypto API.
+  // We suppress this specific type mismatch to allow the polyfill to work.
+  global.crypto = crypto;
+}
+// -----------------------------------------------------------------------------
+
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger, VersioningType} from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -11,20 +24,17 @@ async function bootstrap() {
   // 1. Create the application instance
   const app = await NestFactory.create(AppModule);
   
-  // Retrieve ConfigService to access environment variables safely
   const configService = app.get(ConfigService);
 
   app.setGlobalPrefix('api');
 
-  // Enable URI Versioning (This adds /v1/ to the path automatically)
+  // Enable URI Versioning
   app.enableVersioning({
     type: VersioningType.URI,
-    defaultVersion: '1', // Forces v1 for all controllers without explicit version
+    defaultVersion: '1', 
   });
   
-
   // 2. CONNECT KAFKA MICROSERVICE
-  // This enables the application to listen to Kafka messages/events.
   app.connectMicroservice<MicroserviceOptions>({
     transport: Transport.KAFKA,
     options: {
@@ -34,7 +44,7 @@ async function bootstrap() {
         retry: { retries: 10, initialRetryTime: 300 },
       },
       producer: {
-        idempotent: true, // not duplicates
+        idempotent: true, 
         allowAutoTopicCreation: configService.get<string>('NODE_ENV') !== 'production',
       },
       consumer: {
@@ -45,7 +55,7 @@ async function bootstrap() {
     },
   });
 
-  // --- SWAGGER CONFIGURATION ---
+  // Swagger Configuration
   const config = new DocumentBuilder()
     .setTitle('Patient Service')
     .setDescription('The Patient Service API')
@@ -56,7 +66,7 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document); 
 
-  // --- GLOBAL PIPES ---
+  // Global Pipes
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -67,13 +77,12 @@ async function bootstrap() {
   
   // CORS Configuration
   app.enableCors({
-    origin: true, // In production, replace with specific domain
+    origin: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });
 
   // 3. START MICROSERVICES
-  // CRITICAL STEP: Without this, the Kafka consumer will never start listening.
   await app.startAllMicroservices();
   logger.log('Microservice (Kafka Consumer) is listening...');
 
@@ -81,8 +90,7 @@ async function bootstrap() {
   const port = configService.get<number>('PORT') || 3001;
   await app.listen(port);
   
-   logger.log(`Auth Service is running on: http://localhost:${port}/api/v1/patient`);
+  logger.log(`Patient Service is running on: http://localhost:${port}/api/v1/patient`);
   logger.log(`HTTP Server is running on: http://localhost:${port}/api/docs`);
 }
-
 bootstrap();

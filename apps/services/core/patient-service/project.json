@@ -13,6 +13,9 @@
         "target": "node",
         "compiler": "tsc",
         "outputPath": "dist/apps/services/core/patient-service",
+        
+        "generatePackageJson": true, 
+
         "webpackConfig": "apps/services/core/patient-service/webpack.config.js",
         "main": "apps/services/core/patient-service/src/main.ts",
         "tsConfig": "apps/services/core/patient-service/tsconfig.app.json",

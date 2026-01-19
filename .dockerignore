@@ -8,8 +8,8 @@
 # We must install dependencies fresh inside the container architecture
 node_modules
 **/node_modules
-dist
-build
+#dist
+#build
 coverage
 
 # --- Version Control & IDE Metadata ---
@@ -38,7 +38,7 @@ yarn-error.log*
 
 # --- Frontend Specifics ---
 # Avoid copying heavy mobile assets if we are building backend
-apps/clients/mobile_app/build
+#apps/clients/mobile_app/build
 apps/clients/mobile_app/.dart_tool
 apps/clients/mobile_app/android
 apps/clients/mobile_app/ios

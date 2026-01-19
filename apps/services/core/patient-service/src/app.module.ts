@@ -7,7 +7,7 @@ import { PatientModule } from './patient.module';
   imports: [
      ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: 'apps/services/core/patient-service/.env', 
+      //envFilePath: 'apps/services/core/patient-service/.env', 
     }),
 
     TypeOrmModule.forRootAsync({

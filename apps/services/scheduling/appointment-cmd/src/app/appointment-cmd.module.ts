@@ -36,7 +36,7 @@ import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish
     // Loads environment variables from the specific service file
     ConfigModule.forRoot({ 
       isGlobal: true,
-      envFilePath: 'apps/services/scheduling/appointment-cmd/.env',
+      //envFilePath: 'apps/services/scheduling/appointment-cmd/.env',
     }),
 
     // 2. Architecture & Security Layers

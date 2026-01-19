@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # ----------------------------------------------------------------------------
+  # API GATEWAY
+  # ----------------------------------------------------------------------------
+  api-gateway:
+    image: local-api-gateway
+    container_name: test_gateway
+    ports:
+      - "3000:3000"
+    environment:
+      # Sobrescribimos para que apunte a los contenedores, no a localhost
+      - AUTH_SERVICE_URL=http://auth-service:3000
+      - PATIENT_SERVICE_URL=http://patient-service:3000
+    networks:
+      - dev_network
+
+  # ----------------------------------------------------------------------------
+  # AUTH SERVICE
+  # ----------------------------------------------------------------------------
+  auth-service:
+    image: local-auth-service
+    container_name: test_auth
+    env_file:
+      - apps/services/core/auth-service/.env
+    environment:
+      # PARCHE CRÍTICO:
+      # 1. host.docker.internal = "La IP de mi PC Windows anfitrión"
+      # 2. Redis y Kafka están en tu Windows, no en el contenedor.
+      - REDIS_HOST=host.docker.internal
+      - KAFKA_BROKERS=host.docker.internal:9092
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Necesario en Linux/algunos entornos Docker
+    networks:
+      - dev_network
+
+  # ----------------------------------------------------------------------------
+  # PATIENT SERVICE
+  # ----------------------------------------------------------------------------
+  patient-service:
+    image: local-patient-service
+    container_name: test_patient
+    env_file:
+      - apps/services/core/patient-service/.env
+    environment:
+      # PARCHE CRÍTICO: Forzamos la conexión al host
+      - REDIS_HOST=host.docker.internal
+      - KAFKA_BROKERS=host.docker.internal:9092
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - dev_network
+
+  # ----------------------------------------------------------------------------
+  # FRONTEND (Flutter)
+  # ----------------------------------------------------------------------------
+  frontend:
+    image: local-frontend
+    container_name: test_frontend
+    ports:
+      - "8080:80"
+    networks:
+      - dev_network
+
+networks:
+  dev_network:
+    driver: bridge

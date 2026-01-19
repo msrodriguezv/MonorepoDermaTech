@@ -7,7 +7,7 @@ import { AuthModule } from './infrastructure/auth.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: 'apps/services/core/auth-service/.env', 
+      //envFilePath: 'apps/services/core/auth-service/.env', 
     }),
 
     // DATABASE CONNECTION

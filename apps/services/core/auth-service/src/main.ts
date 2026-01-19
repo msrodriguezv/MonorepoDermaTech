@@ -1,12 +1,25 @@
+// -----------------------------------------------------------------------------
+// POLYFILL: Crypto Compatibility for Node.js v18 + Webpack
+// Context: Resolves "ReferenceError: crypto is not defined" within TypeORM.
+// -----------------------------------------------------------------------------
+import * as crypto from 'crypto';
+
+if (!global.crypto) {
+  // @ts-expect-error: Node.js 'crypto' differs slightly from the Web Crypto API.
+  // We suppress this specific type mismatch to allow the polyfill to work.
+  global.crypto = crypto;
+}
+// -----------------------------------------------------------------------------
+
 import { NestFactory } from '@nestjs/core';
-import { Logger, ValidationPipe, VersioningType } from '@nestjs/common'; // Added VersioningType
+import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const logger = new Logger('AuthService');
 
-   const requiredEnvs = [
+  const requiredEnvs = [
     'JWT_SECRET',
     'DATABASE_HOST',
     'DATABASE_PORT',
@@ -30,13 +43,13 @@ async function bootstrap() {
   // 1. Set Global Prefix
   app.setGlobalPrefix('api');
 
-  // 2. Enable URI Versioning (This adds /v1/ to the path automatically)
+  // 2. Enable URI Versioning
   app.enableVersioning({
     type: VersioningType.URI,
-    defaultVersion: '1', // Forces v1 for all controllers without explicit version
+    defaultVersion: '1',
   });
 
-  // Global Validation Pipe (DTO Validation)
+  // Global Validation Pipe
   app.useGlobalPipes(new ValidationPipe({
     whitelist: true,
     forbidNonWhitelisted: true,
@@ -45,15 +58,15 @@ async function bootstrap() {
 
   // CORS Configuration
   app.enableCors({
-    origin: true, // In production, replace with specific domain
+    origin: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });
 
-  // Good Documentation (Swagger/OpenAPI)
+  // Swagger Documentation
   const config = new DocumentBuilder()
     .setTitle('DermaTech Auth Service')
-    .setDescription('Microservice responsible for Authentication, Authorization and Identity Management.')
+    .setDescription('Microservice responsible for Authentication.')
     .setVersion('1.0')
     .addTag('auth')
     .addBearerAuth()
@@ -65,7 +78,6 @@ async function bootstrap() {
   const port = process.env.PORT || 3000;
   await app.listen(port);
   
-  // Updated log to reflect the real URL structure
   logger.log(`Auth Service is running on: http://localhost:${port}/api/v1/auth`);
   logger.log(`Swagger Docs available at: http://localhost:${port}/api/docs`);
 }
