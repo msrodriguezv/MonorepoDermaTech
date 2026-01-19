@@ -531,22 +531,30 @@ resource "aws_lb_target_group_attachment" "node_a_web" {
   target_group_arn = aws_lb_target_group.frontend.arn
   target_id        = "10.3.1.10" # Node A Private IP
   port             = 80
+  # REQUIRED for Peered VPC Targets:
+  availability_zone = "all"
 }
 
 resource "aws_lb_target_group_attachment" "node_b_web" {
   target_group_arn = aws_lb_target_group.frontend.arn
   target_id        = "10.4.1.10" # Node B Private IP
   port             = 80
+  # REQUIRED for Peered VPC Targets:
+  availability_zone = "all"
 }
 
 resource "aws_lb_target_group_attachment" "node_a_api" {
   target_group_arn = aws_lb_target_group.api.arn
   target_id        = "10.3.1.10"
   port             = 3000
+  # REQUIRED for Peered VPC Targets:
+  availability_zone = "all"
 }
 
 resource "aws_lb_target_group_attachment" "node_b_api" {
   target_group_arn = aws_lb_target_group.api.arn
   target_id        = "10.4.1.10"
   port             = 3000
+  # REQUIRED for Peered VPC Targets:
+  availability_zone = "all"
 }
