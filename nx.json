@@ -33,7 +33,10 @@
       "options": {
         "targetName": "test"
       },
-      "exclude": ["apps/services/scheduling/appointment-cmd-e2e/**/*"]
+      "exclude": [
+        "apps/services/scheduling/appointment-cmd-e2e/**/*",
+        "apps/services/clinical/history-service-e2e/**/*"
+      ]
     },
     {
       "plugin": "@nx/webpack/plugin",
