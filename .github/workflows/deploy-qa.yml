@@ -283,7 +283,7 @@ jobs:
       - uses: appleboy/ssh-action@master
         with:
           host: ${{ env.EVENTS_PUBLIC_IP }}
-          username: ubuntu
+          username: ec2-user
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: EVENTS_PRIVATE_IP, RABBITMQ_PASS
           script: |
@@ -343,7 +343,7 @@ jobs:
       - uses: appleboy/ssh-action@master
         with:
           host: ${{ env.STATE_PUBLIC_IP }}
-          username: ubuntu
+          username: ec2-user
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             sudo mkdir -p /data/redis /data/grafana /data/prometheus
@@ -378,7 +378,7 @@ jobs:
       - uses: appleboy/ssh-action@master
         with:
           host: ${{ matrix.node_ip }}
-          username: ubuntu
+          username: ec2-user
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: DOCKER_USERNAME, EVENTS_PRIVATE_IP, STATE_PRIVATE_IP
           script: |
