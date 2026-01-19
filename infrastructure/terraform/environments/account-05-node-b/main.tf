@@ -1,6 +1,7 @@
 # ==============================================================================
 # ENVIRONMENT: NODE B (Application Server 2)
 # Purpose: High Availability Replica (AZ 1b)
+# Specs: Injected into QA Hub via VPC Peering for master orchestration.
 # ==============================================================================
 terraform {
   backend "s3" {
@@ -41,11 +42,14 @@ module "compute" {
   public_subnet_id    = module.networking.public_subnet_id
   ami_id              = "ami-051f7e7f6c2f40dc1" 
   
-  # CONFIGURACIÓN ESPECÍFICA NODO B
+  # HIGH AVAILABILITY CONFIGURATION: NODE B
   availability_zone   = "us-east-1b" 
   private_ip_address  = "10.4.1.10"
-  gateway_allowed_ip  = var.qa_bastion_ip
   
-  # HARDCODED ALLOCATION ID (BLINDADO)
+  # SECURITY: Allow traffic from the entire QA VPC (ALB range)
+  # Essential for cross-account load balancing and internal microservices health checks.
+  gateway_allowed_ip  = var.qa_cidr
+  
+  # HARDCODED ALLOCATION ID (SHIELDED ELASTIC IP)
   eip_allocation_id   = "eipalloc-0f602e180348c4ad9" 
 }

@@ -195,7 +195,15 @@ jobs:
               -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
               -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
           fi
+          # --- EXTRACT ALB DNS FOR FINAL OUTPUT ---
+          ALB_DNS=$(terraform output -raw QA_ALB_DNS_NAME)
+          echo "ALB_URL=$ALB_DNS" > alb_dns.txt
           echo "🎉 GLOBAL INFRASTRUCTURE SUCCESSFULLY DEPLOYED"
+      - name: Upload ALB DNS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ALB_DNS
+          path: infrastructure/terraform/environments/account-01-qa/alb_dns.txt
 
   # ============================================================================
   # TRACK B: COMPILATION & DOCKER (PARALLEL PROCESS)
@@ -206,26 +214,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with: { node-version: 18, cache: 'npm' }
-      
       - name: Install Dependencies
         run: npm ci --legacy-peer-deps
-
       - name: Build Microservices (Nx)
         run: npx nx run-many --target=build --all --configuration=production
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with: { channel: 'stable' }
-      
       - name: Build Flutter Web
         run: |
           cd apps/clients/mobile_app
-          flutter build web --release
-
+          # --- INJECT INTERNAL API ROUTE TO RESOLVE LOCALHOST ISSUE ---
+          flutter build web --release --dart-define=API_URL=/api
       - name: Upload Dist Artifacts
         uses: actions/upload-artifact@v4
         with: { name: 'dist-files', path: 'dist', retention-days: 1 }
@@ -251,18 +254,15 @@ jobs:
             dockerfile: 'apps/clients/mobile_app/Dockerfile'
     steps:
       - uses: actions/checkout@v3
-      
       - uses: actions/download-artifact@v4
         with: { name: 'dist-files', path: 'dist' }
       - uses: actions/download-artifact@v4
         with: { name: 'flutter-build', path: 'apps/clients/mobile_app/build/web' }
-
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
-
       - name: Build and Push ${{ matrix.service }}
         uses: docker/build-push-action@v4
         with:
@@ -287,11 +287,9 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: EVENTS_PRIVATE_IP, RABBITMQ_PASS
           script: |
-            # --- INSTALL DOCKER COMPOSE ---
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-            # ------------------------------------
             sudo mkdir -p /data/kafka /data/zookeeper /data/rabbitmq /data/mosquitto/config
             sudo chmod -R 777 /data
             echo "listener 1883" | sudo tee /data/mosquitto/config/mosquitto.conf
@@ -351,11 +349,9 @@ jobs:
           username: ec2-user
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # --- INSTALL DOCKER COMPOSE ---
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-            # ------------------------------------
             sudo mkdir -p /data/redis /data/grafana /data/prometheus
             sudo chmod -R 777 /data
             cat <<EOF > docker-compose.yml
@@ -385,6 +381,8 @@ jobs:
       matrix:
         node_ip: [3.220.53.59, 54.86.159.130]
     steps:
+      - uses: actions/download-artifact@v4
+        with: { name: 'ALB_DNS', path: 'ALB_DNS' }
       - uses: appleboy/ssh-action@master
         with:
           host: ${{ matrix.node_ip }}
@@ -392,15 +390,11 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: DOCKER_USERNAME, EVENTS_PRIVATE_IP, STATE_PRIVATE_IP
           script: |
-            # --- INSTALL DOCKER COMPOSE ---
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-            # ------------------------------------
-            # Login Docker Hub
             echo "${{ secrets.DOCKER_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-            # Generate Docker Compose with Secrets Injection
             cat <<EOF > docker-compose.yml
             version: '3.8'
             services:
@@ -443,6 +437,10 @@ jobs:
                   - DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
                   - DATABASE_NAME=${{ secrets.DATABASE_NAME }}
             EOF
-            
             sudo docker compose pull
             sudo docker compose up -d --remove-orphans
+      - name: 🏁 Final Summary
+        run: |
+          ALB_DNS=$(cat ALB_DNS/alb_dns.txt)
+          echo "🎉 DEPLOYMENT COMPLETE"
+          echo "🌐 URL: http://$ALB_DNS"

@@ -8,6 +8,12 @@ variable "qa_cidr" {
   default     = "10.0.0.0/16"
 }
 
+# NEW: Range for the secondary subnet required by ALB
+variable "qa_public_subnet_b_cidr" {
+  description = "CIDR block for the secondary QA subnet (AZ 1b)"
+  default     = "10.0.2.0/24"
+}
+
 variable "events_cidr" {
   description = "CIDR block for Events VPC (for routing)"
   default     = "10.1.0.0/16"

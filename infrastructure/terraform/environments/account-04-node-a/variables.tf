@@ -9,9 +9,9 @@ variable "node_a_cidr" {
   default     = "10.3.0.0/16"
 }
 
-# --- Whitelisting CIDRs (Optional usage in SG logic) ---
+# --- Whitelisting CIDRs (Used for Security Group ingress rules) ---
 variable "qa_cidr" {
-  description = "CIDR block for QA VPC"
+  description = "CIDR block for QA VPC (Hub)"
   type        = string
   default     = "10.0.0.0/16"
 }
@@ -36,7 +36,7 @@ variable "node_b_cidr" {
 
 # --- Administrative Access ---
 variable "qa_bastion_ip" {
-  description = "Private IP of QA Bastion"
+  description = "Private IP of QA Bastion for direct management"
   type        = string
   default     = "10.0.1.59/32"
 }

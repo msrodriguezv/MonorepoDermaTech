@@ -1,6 +1,7 @@
 # ==============================================================================
 # ENVIRONMENT: NODE A (Application Server 1)
 # Purpose: Main application node hosting microservices in High Availability (AZ 1a)
+# Specs: Injected into QA Hub via VPC Peering for master orchestration.
 # ==============================================================================
 terraform {
   backend "s3" {
@@ -31,7 +32,7 @@ module "networking" {
 
 # ==============================================================================
 # 2. COMPUTE LAYER (APPLICATION WORKER)
-# Context: NestJS & Flutter Host
+# Context: NestJS Microservices & Flutter Web Host
 # ==============================================================================
 module "compute" {
   source              = "../../modules/aws-compute-app"
@@ -41,11 +42,14 @@ module "compute" {
   public_subnet_id    = module.networking.public_subnet_id
   ami_id              = "ami-051f7e7f6c2f40dc1" 
   
-  # CONFIGURACIÓN ESPECÍFICA NODO A (High Availability)
+  # HIGH AVAILABILITY CONFIGURATION: NODE A
   availability_zone   = "us-east-1a"
   private_ip_address  = "10.3.1.10"
-  gateway_allowed_ip  = var.qa_bastion_ip
   
-  # HARDCODED ALLOCATION ID (BLINDADO)
+  # SECURITY: Allow traffic from the entire QA VPC (ALB range)
+  # This enables the Load Balancer to perform health checks and route traffic.
+  gateway_allowed_ip  = var.qa_cidr
+  
+  # HARDCODED ALLOCATION ID (SHIELDED ELASTIC IP)
   eip_allocation_id   = "eipalloc-023185aa6f1f7bafb"
 }

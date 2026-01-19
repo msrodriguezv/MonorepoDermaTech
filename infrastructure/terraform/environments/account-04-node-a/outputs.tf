@@ -1,15 +1,15 @@
 # ==============================================================================
 # OUTPUTS: NODE A INFRASTRUCTURE
-# Used by QA Hub for routing injection
+# Used by QA Hub for routing injection and Peering orchestration
 # ==============================================================================
 
 output "NODE_A_PUBLIC_IP" { 
-  description = "Elastic IP attached to Node A"
+  description = "Elastic IP attached to Node A (For SSH/Maintenance)"
   value       = module.compute.public_ip 
 }
 
 output "NODE_A_PRIVATE_IP" { 
-  description = "Fixed Internal IP"
+  description = "Fixed Internal IP used by the Master Load Balancer"
   value       = "10.3.1.10" 
 }
 
@@ -19,6 +19,6 @@ output "vpc_id" {
 }
 
 output "route_table_id" {
-  description = "Public Route Table ID. CRITICAL: Used by QA Hub to inject return routes."
+  description = "Public Route Table ID used for peering route injection"
   value       = module.networking.public_route_table_id
 }
