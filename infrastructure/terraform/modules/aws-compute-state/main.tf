@@ -6,20 +6,31 @@
 # ==============================================================================
 
 # ==============================================================================
-# 1. SECURITY GROUP
+# 1. SSH KEY PAIR (INJECTED FOR GITHUB ACTIONS)
+# ==============================================================================
+resource "aws_key_pair" "deployer" {
+  key_name   = "${var.project_name}-${var.environment}-state-key"
+  public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDYqPfExDwWSxI3gOI/9Cdd2GeuOVLRaXw6vz5x1S0mgWc7p7BStBXWnsUIY7o8CeUoR9ZT28QiC9PiWhfsXmO3m6vsZqGUJl0UlY8N9P8n64ccCXPrD/ddKrzQV66mkN3MeBnFidUen4Zn6WdOhA92ljZm+MOpxQFznR4kyPwC57v39W9Lkc7s9i6sP+7Zj2eVf6Mlxh3IPHnGHWMFDFe/DFLEGtwEve0rJyZ+lDas6TFUzjwJ045WxBuFnrIWHJWNIBAqhsWxTdoB7JmDh6UqdAPO4iW147QoXaPN51jtQyOnECcO7/zgv07ChyJq2XwfyZggDxMNv9LAxVNadmw2pbfAtW+sRINyT4ArdVCX1I4se/2FmZJkEsKpP4QB39bDJzswPFKmOjQTNdeUO4ZGWF257FjcfvD3U//5RV+3EnixCJIVek3MVo2xejp+0V1ZgVfC2vwr6CmwyheuKloWyI08FBCa+GGEQG19E/+sOuRSxfMQx3GH2U0Ol5TBnbtsc9gIO6MrU8ZqkOOGKUyBrR3nr2w4ExXH0aJmfb8qAQkTPU2jTX+b2JSFcPtSkOb9RI3Sm2I9O8rxDpwpET1rquxZsm+Y000SaxY8PbOuFLK5lfLtnQ1sUbl+7wGHjTyJhDfQPKAmVn2wwj+b6SQdHZYN6qHsK7H9z5pG5DKW7w== ci-cd-key"
+}
+
+# ==============================================================================
+# 2. SECURITY GROUP
 # ==============================================================================
 resource "aws_security_group" "state_sg" {
   name        = "${var.project_name}-${var.environment}-sg"
   description = "Security Group for State & Monitoring"
   vpc_id      = var.vpc_id
 
-  # Admin Access (SSH, Grafana UI 3000, Prometheus UI 9090) from QA Bastion
+  # Admin Access (SSH) - TEMPORARY OPEN FOR GITHUB ACTIONS
   ingress {
+    description = "Allow SSH from GitHub Actions (Temporary)"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [var.gateway_allowed_ip] 
+    cidr_blocks = ["0.0.0.0/0"] 
   }
+
+  # Monitoring UI Access (Grafana 3000, Prometheus 9090) from QA Bastion only
   ingress {
     from_port   = 3000
     to_port     = 3000
@@ -52,7 +63,7 @@ resource "aws_security_group" "state_sg" {
 }
 
 # ==============================================================================
-# 2. DATA SOURCE: ELASTIC IP (BLINDADO POR ID)
+# 3. DATA SOURCE: ELASTIC IP (BLINDADO POR ID)
 # Terraform reads the existing IP. It will NEVER destroy it.
 # ==============================================================================
 data "aws_eip" "state_eip" {
@@ -60,7 +71,7 @@ data "aws_eip" "state_eip" {
 }
 
 # ==============================================================================
-# 3. PERSISTENT STORAGE (10GB)
+# 4. PERSISTENT STORAGE (10GB)
 # ==============================================================================
 resource "aws_ebs_volume" "state_data_volume" {
   availability_zone = var.availability_zone
@@ -79,16 +90,18 @@ resource "aws_ebs_volume" "state_data_volume" {
 }
 
 # ==============================================================================
-# 4. EC2 INSTANCE (STATE SERVER)
+# 5. EC2 INSTANCE (STATE SERVER)
 # ==============================================================================
 resource "aws_instance" "state_worker" {
-  ami             = var.ami_id
-  instance_type   = "t3.large" 
-  subnet_id       = var.public_subnet_id
-  key_name          = "vockey"
+  ami               = var.ami_id
+  instance_type     = "t3.large" 
+  subnet_id         = var.public_subnet_id
+  
+  # CRITICAL: Use the injected Key Pair
+  key_name          = aws_key_pair.deployer.key_name
   
   # CRITICAL: Fixed Private IP (10.2.1.100)
-  private_ip      = var.private_ip_address
+  private_ip        = var.private_ip_address
   
   availability_zone = var.availability_zone
   
@@ -104,6 +117,8 @@ resource "aws_instance" "state_worker" {
 
   tags = { Name = "${var.project_name}-${var.environment}-server" }
 
+  # MINIMAL USER DATA: Only OS prep, Docker install, and Disk mount.
+  # Service orchestration is handled by GitHub Actions.
   user_data = <<-EOF
     #!/bin/bash
     set -e
@@ -123,13 +138,21 @@ resource "aws_instance" "state_worker" {
     echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
 
     # --- PERSISTENT DISK MOUNTING ---
-    DATA_DISK="/dev/nvme1n1"
+    # Detect if it's nvme1n1 (Nitro) or xvdf (Legacy)
+    if [ -e /dev/nvme1n1 ]; then
+      DATA_DISK="/dev/nvme1n1"
+    else
+      DATA_DISK="/dev/xvdf"
+    fi
     MOUNT_POINT="/data"
     
-    while [ ! -b $DATA_DISK ]; do echo "Waiting for disk..."; sleep 5; done
+    # Wait for disk
+    while [ ! -b $DATA_DISK ]; do echo "Waiting for disk $DATA_DISK..."; sleep 5; done
     
     # Only format if new (Protects Data)
-    if ! blkid $DATA_DISK; then mkfs -t xfs $DATA_DISK; fi
+    if ! blkid $DATA_DISK; then 
+      mkfs -t xfs $DATA_DISK
+    fi
     
     mkdir -p $MOUNT_POINT
     mount $DATA_DISK $MOUNT_POINT
@@ -139,73 +162,19 @@ resource "aws_instance" "state_worker" {
     fi
     
     # --- DIRECTORIES & PERMISSIONS ---
+    # Ensure directories exist so Docker doesn't create them with root:root
     mkdir -p $MOUNT_POINT/redis_data $MOUNT_POINT/prometheus_data $MOUNT_POINT/grafana_data $MOUNT_POINT/prometheus_config
     
     # Set permissive permissions to avoid Docker boot loops on persistent volumes
-    # (Acceptable for this specific academic context)
+    # (Acceptable for this specific academic context to allow rapid GH Actions deployment)
     chmod -R 777 $MOUNT_POINT
 
-    # --- PROMETHEUS CONFIG ---
-    cat <<'PROMCONF' > $MOUNT_POINT/prometheus_config/prometheus.yml
-    global:
-      scrape_interval: 15s
-    scrape_configs:
-      - job_name: 'prometheus'
-        static_configs:
-          - targets: ['localhost:9090']
-    PROMCONF
-
-    # --- DOCKER COMPOSE ---
-    cat <<'COMPOSE' > /home/ec2-user/docker-compose.yml
-    version: '3.8'
-    services:
-      redis:
-        image: redis:alpine
-        container_name: redis
-        ports:
-          - "6379:6379"
-        # Redis persistence enabled + Password
-        command: redis-server --appendonly yes --requirepass "admin123"
-        volumes:
-          - $MOUNT_POINT/redis_data:/data
-        restart: always
-
-      prometheus:
-        image: prom/prometheus:latest
-        container_name: prometheus
-        ports:
-          - "9090:9090"
-        volumes:
-          - $MOUNT_POINT/prometheus_config/prometheus.yml:/etc/prometheus/prometheus.yml
-          - $MOUNT_POINT/prometheus_data:/prometheus
-        command:
-          - '--config.file=/etc/prometheus/prometheus.yml'
-          - '--storage.tsdb.path=/prometheus'
-        restart: always
-
-      grafana:
-        image: grafana/grafana:latest
-        container_name: grafana
-        ports:
-          - "3000:3000"
-        environment:
-          - GF_SECURITY_ADMIN_USER=admin
-          - GF_SECURITY_ADMIN_PASSWORD=admin
-        volumes:
-          - $MOUNT_POINT/grafana_data:/var/lib/grafana
-        depends_on:
-          - prometheus
-        restart: always
-    COMPOSE
-
-    # --- START SERVICES ---
-    cd /home/ec2-user
-    docker compose up -d
+    echo "✅ Instance Ready for GitHub Actions Deployment"
   EOF
 }
 
 # ==============================================================================
-# 5. ATTACHMENTS & ASSOCIATIONS
+# 6. ATTACHMENTS & ASSOCIATIONS
 # ==============================================================================
 resource "aws_volume_attachment" "state_ebs_att" {
   device_name  = "/dev/sdf"

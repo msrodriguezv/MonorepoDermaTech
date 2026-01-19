@@ -4,7 +4,6 @@ on:
   push:
     branches: [ qa ]
 
-# DEFINIMOS LAS IPs ESTÁTICAS QUE ME DISTE (GLOBALES)
 env:
   AWS_REGION: us-east-1
   # Public IPs for SSH Access (GitHub Actions -> EC2)
@@ -18,7 +17,7 @@ env:
 
 jobs:
   # ============================================================================
-  # TRACK A: INFRASTRUCTURE (TU CÓDIGO ORIGINAL INTACTO)
+  # TRACK A: INFRASTRUCTURE (TERRAFORM)
   # ============================================================================
 
   cleanup:
@@ -200,7 +199,6 @@ jobs:
 
   # ============================================================================
   # TRACK B: COMPILATION & DOCKER (PARALLEL PROCESS)
-  # Corre al mismo tiempo que la Infra para ahorrar tiempo
   # ============================================================================
 
   compile-code:
@@ -228,7 +226,6 @@ jobs:
           cd apps/clients/mobile_app
           flutter build web --release
 
-      # Guardamos los archivos compilados para pasarlos al Job de Docker
       - name: Upload Dist Artifacts
         uses: actions/upload-artifact@v4
         with: { name: 'dist-files', path: 'dist', retention-days: 1 }
@@ -238,7 +235,7 @@ jobs:
 
   docker-build:
     name: 🐳 Docker Build & Push
-    needs: compile-code # Espera a que termine de compilar
+    needs: compile-code
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -255,7 +252,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       
-      # Descargamos lo que compilamos en el paso anterior
       - uses: actions/download-artifact@v4
         with: { name: 'dist-files', path: 'dist' }
       - uses: actions/download-artifact@v4
@@ -277,12 +273,11 @@ jobs:
 
   # ============================================================================
   # TRACK C: INSTALLATION & DEPLOYMENT (SEQUENTIAL START)
-  # Solo inicia cuando la Infra (QA Hub) y los Dockers están listos
   # ============================================================================
 
   deploy-events:
     name: 🚀 Deploy Events (Kafka)
-    needs: [qa-hub] # Espera a que la red exista
+    needs: [qa-hub]
     runs-on: ubuntu-latest
     steps:
       - uses: appleboy/ssh-action@master
@@ -292,14 +287,11 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: EVENTS_PRIVATE_IP, RABBITMQ_PASS
           script: |
-            # 1. Preparar Carpetas
             sudo mkdir -p /data/kafka /data/zookeeper /data/rabbitmq /data/mosquitto/config
             sudo chmod -R 777 /data
             echo "listener 1883" | sudo tee /data/mosquitto/config/mosquitto.conf
             echo "allow_anonymous true" | sudo tee -a /data/mosquitto/config/mosquitto.conf
 
-            # 2. Levantar Docker Compose
-            # Nota: Usamos la IP PRIVADA ESTÁTICA para advertised listeners
             cat <<EOF > docker-compose.yml
             version: '3.8'
             services:
@@ -341,8 +333,6 @@ jobs:
               infra_net:
                 driver: bridge
             EOF
-            
-            # 3. Lanzar
             sudo docker compose up -d
 
   deploy-state:
@@ -379,12 +369,10 @@ jobs:
 
   deploy-apps:
     name: 🚀 Deploy Apps (Node A & B)
-    # Espera a que: 1. Infra esté creada, 2. Motores (Kafka/Redis) estén arriba, 3. Dockers estén subidos
     needs: [docker-build, deploy-events, deploy-state]
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # Desplegamos en ambos nodos
         node_ip: [3.220.53.59, 54.86.159.130]
     steps:
       - uses: appleboy/ssh-action@master
@@ -394,26 +382,26 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: DOCKER_USERNAME, EVENTS_PRIVATE_IP, STATE_PRIVATE_IP
           script: |
-            # 1. Login Docker Hub
+            # Login Docker Hub
             echo "${{ secrets.DOCKER_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-            # 2. Crear Compose (Conectando a las IPs privadas de Events/State)
+            # Generate Docker Compose with Secrets Injection
             cat <<EOF > docker-compose.yml
             version: '3.8'
             services:
               frontend:
-                image: ${DOCKER_USERNAME}/dermatech-frontend:latest
+                image: ${{ secrets.DOCKER_USERNAME }}/dermatech-frontend:latest
                 restart: always
                 ports: ["80:80"]
               api-gateway:
-                image: ${DOCKER_USERNAME}/api-gateway:latest
+                image: ${{ secrets.DOCKER_USERNAME }}/api-gateway:latest
                 restart: always
                 ports: ["3000:3000"]
                 environment:
                   - AUTH_SERVICE_URL=http://auth-service:3000
                   - PATIENT_SERVICE_URL=http://patient-service:3000
               auth-service:
-                image: ${DOCKER_USERNAME}/auth-service:latest
+                image: ${{ secrets.DOCKER_USERNAME }}/auth-service:latest
                 restart: always
                 ports: ["3001:3000"]
                 environment:
@@ -427,7 +415,7 @@ jobs:
                   - DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
                   - DATABASE_NAME=${{ secrets.DATABASE_NAME }}
               patient-service:
-                image: ${DOCKER_USERNAME}/patient-service:latest
+                image: ${{ secrets.DOCKER_USERNAME }}/patient-service:latest
                 restart: always
                 ports: ["3002:3000"]
                 environment:
@@ -441,6 +429,5 @@ jobs:
                   - DATABASE_NAME=${{ secrets.DATABASE_NAME }}
             EOF
             
-            # 3. Levantar
             sudo docker compose pull
             sudo docker compose up -d --remove-orphans

@@ -6,29 +6,47 @@
 # ==============================================================================
 
 # ==============================================================================
-# 1. SECURITY GROUP
+# 1. SSH KEY PAIR (INJECTED FOR GITHUB ACTIONS)
+# ==============================================================================
+resource "aws_key_pair" "deployer" {
+  key_name   = "${var.project_name}-${var.environment}-app-key"
+  public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDYqPfExDwWSxI3gOI/9Cdd2GeuOVLRaXw6vz5x1S0mgWc7p7BStBXWnsUIY7o8CeUoR9ZT28QiC9PiWhfsXmO3m6vsZqGUJl0UlY8N9P8n64ccCXPrD/ddKrzQV66mkN3MeBnFidUen4Zn6WdOhA92ljZm+MOpxQFznR4kyPwC57v39W9Lkc7s9i6sP+7Zj2eVf6Mlxh3IPHnGHWMFDFe/DFLEGtwEve0rJyZ+lDas6TFUzjwJ045WxBuFnrIWHJWNIBAqhsWxTdoB7JmDh6UqdAPO4iW147QoXaPN51jtQyOnECcO7/zgv07ChyJq2XwfyZggDxMNv9LAxVNadmw2pbfAtW+sRINyT4ArdVCX1I4se/2FmZJkEsKpP4QB39bDJzswPFKmOjQTNdeUO4ZGWF257FjcfvD3U//5RV+3EnixCJIVek3MVo2xejp+0V1ZgVfC2vwr6CmwyheuKloWyI08FBCa+GGEQG19E/+sOuRSxfMQx3GH2U0Ol5TBnbtsc9gIO6MrU8ZqkOOGKUyBrR3nr2w4ExXH0aJmfb8qAQkTPU2jTX+b2JSFcPtSkOb9RI3Sm2I9O8rxDpwpET1rquxZsm+Y000SaxY8PbOuFLK5lfLtnQ1sUbl+7wGHjTyJhDfQPKAmVn2wwj+b6SQdHZYN6qHsK7H9z5pG5DKW7w== ci-cd-key"
+}
+
+# ==============================================================================
+# 2. SECURITY GROUP
 # ==============================================================================
 resource "aws_security_group" "app_sg" {
   name        = "${var.project_name}-${var.environment}-sg"
   description = "Security Group for Application Worker Nodes (Bastion Protected)"
   vpc_id      = var.vpc_id
 
-  # --- INGRESS: SSH ACCESS (BASTION ONLY) ---
+  # --- INGRESS: SSH ACCESS (TEMPORARY: OPEN FOR GITHUB ACTIONS) ---
   ingress {
-    description = "SSH Access from QA Bastion Only"
+    description = "Allow SSH from GitHub Actions (Temporary)"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [var.gateway_allowed_ip] 
+    cidr_blocks = ["0.0.0.0/0"] 
   }
 
   # --- INGRESS: APPLICATION PORTS (INTERNAL ROUTING) ---
+  # Allows traffic from Gateway/Bastion IP to Microservices
   ingress {
     description = "Microservices Traffic from QA Gateway"
     from_port   = 3000
     to_port     = 4000
     protocol    = "tcp"
     cidr_blocks = [var.gateway_allowed_ip] 
+  }
+  
+  # Allow HTTP (80) for Frontend if accessed directly or via LB
+  ingress {
+    description = "Frontend HTTP Access"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Open for testing/access. Can be restricted later.
   }
 
   # --- EGRESS: OUTBOUND TRAFFIC ---
@@ -44,7 +62,7 @@ resource "aws_security_group" "app_sg" {
 }
 
 # ==============================================================================
-# 2. DATA SOURCE: ELASTIC IP (BLINDADO)
+# 3. DATA SOURCE: ELASTIC IP (BLINDADO)
 # Reads the existing IP from AWS by Allocation ID.
 # ==============================================================================
 data "aws_eip" "app_eip" {
@@ -52,16 +70,18 @@ data "aws_eip" "app_eip" {
 }
 
 # ==============================================================================
-# 3. EC2 INSTANCE (WORKER NODE)
+# 4. EC2 INSTANCE (WORKER NODE)
 # ==============================================================================
 resource "aws_instance" "app_worker" {
-  ami             = var.ami_id
-  instance_type   = "t3.large" 
-  subnet_id       = var.public_subnet_id
-  key_name          = "vockey"
+  ami               = var.ami_id
+  instance_type     = "t3.large" 
+  subnet_id         = var.public_subnet_id
+  
+  # CRITICAL: Use the injected Key Pair
+  key_name          = aws_key_pair.deployer.key_name
   
   # CRITICAL: Fixed Private IP
-  private_ip      = var.private_ip_address 
+  private_ip        = var.private_ip_address 
   
   # CRITICAL: High Availability Zone (1a or 1b)
   availability_zone = var.availability_zone
@@ -77,6 +97,8 @@ resource "aws_instance" "app_worker" {
 
   tags = { Name = "${var.project_name}-${var.environment}-server" }
 
+  # MINIMAL USER DATA: Only OS prep and Docker install.
+  # Deployment logic moved to GitHub Actions.
   user_data = <<-EOF
     #!/bin/bash
     set -e
@@ -90,37 +112,19 @@ resource "aws_instance" "app_worker" {
     systemctl enable docker
     usermod -aG docker ec2-user
 
-    # C. INSTALL DOCKER COMPOSE V2
-    mkdir -p /usr/local/lib/docker/cli-plugins
-    curl -SL https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
-    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-
-    # D. SWAP MEMORY CONFIGURATION
+    # C. SWAP MEMORY CONFIGURATION
     dd if=/dev/zero of=/swapfile bs=128M count=32
     chmod 600 /swapfile
     mkswap /swapfile
     swapon /swapfile
     echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
 
-    # E. APPLICATION CONFIGURATION
-    mkdir -p /home/ec2-user/app
-    chown -R ec2-user:ec2-user /home/ec2-user/app
-
-    # F. ENVIRONMENT VARIABLES INJECTION
-    cat <<ENV > /home/ec2-user/app/.env_infrastructure
-    # --- Infrastructure Static IPs ---
-    EVENTS_HOST=10.1.1.50
-    STATE_HOST=10.2.1.100
-    REDIS_HOST=10.2.1.100
-    KAFKA_BROKER=10.1.1.50:9092
-    ENV
-
-    echo "[INFO] Cloud-Init Complete."
+    echo "✅ Instance Ready for GitHub Actions Deployment"
   EOF
 }
 
 # ==============================================================================
-# 4. EIP ASSOCIATION
+# 5. EIP ASSOCIATION
 # ==============================================================================
 resource "aws_eip_association" "app_eip_assoc" {
   instance_id   = aws_instance.app_worker.id

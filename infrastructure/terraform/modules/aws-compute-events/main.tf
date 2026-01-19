@@ -6,19 +6,28 @@
 # ==============================================================================
 
 # ==============================================================================
-# 1. SECURITY GROUP
+# 1. SSH KEY PAIR (INJECTED FOR GITHUB ACTIONS)
+# ==============================================================================
+resource "aws_key_pair" "deployer" {
+  key_name   = "${var.project_name}-${var.environment}-events-key"
+  public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDYqPfExDwWSxI3gOI/9Cdd2GeuOVLRaXw6vz5x1S0mgWc7p7BStBXWnsUIY7o8CeUoR9ZT28QiC9PiWhfsXmO3m6vsZqGUJl0UlY8N9P8n64ccCXPrD/ddKrzQV66mkN3MeBnFidUen4Zn6WdOhA92ljZm+MOpxQFznR4kyPwC57v39W9Lkc7s9i6sP+7Zj2eVf6Mlxh3IPHnGHWMFDFe/DFLEGtwEve0rJyZ+lDas6TFUzjwJ045WxBuFnrIWHJWNIBAqhsWxTdoB7JmDh6UqdAPO4iW147QoXaPN51jtQyOnECcO7/zgv07ChyJq2XwfyZggDxMNv9LAxVNadmw2pbfAtW+sRINyT4ArdVCX1I4se/2FmZJkEsKpP4QB39bDJzswPFKmOjQTNdeUO4ZGWF257FjcfvD3U//5RV+3EnixCJIVek3MVo2xejp+0V1ZgVfC2vwr6CmwyheuKloWyI08FBCa+GGEQG19E/+sOuRSxfMQx3GH2U0Ol5TBnbtsc9gIO6MrU8ZqkOOGKUyBrR3nr2w4ExXH0aJmfb8qAQkTPU2jTX+b2JSFcPtSkOb9RI3Sm2I9O8rxDpwpET1rquxZsm+Y000SaxY8PbOuFLK5lfLtnQ1sUbl+7wGHjTyJhDfQPKAmVn2wwj+b6SQdHZYN6qHsK7H9z5pG5DKW7w== ci-cd-key"
+}
+
+# ==============================================================================
+# 2. SECURITY GROUP
 # ==============================================================================
 resource "aws_security_group" "events_sg" {
   name        = "${var.project_name}-${var.environment}-sg"
   description = "Security Group for Events Infrastructure"
   vpc_id      = var.vpc_id
 
-  # SSH Access from QA Bastion only
+  # SSH Access (TEMPORARY: OPEN TO WORLD FOR GITHUB ACTIONS)
   ingress {
+    description = "Allow SSH from GitHub Actions (Temporary)"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [var.gateway_allowed_ip] 
+    cidr_blocks = ["0.0.0.0/0"] 
   }
 
   # Messaging Ports (Internal Network)
@@ -43,7 +52,7 @@ resource "aws_security_group" "events_sg" {
 }
 
 # ==============================================================================
-# 2. DATA SOURCE: ELASTIC IP (BLINDADO POR ID)
+# 3. DATA SOURCE: ELASTIC IP (BLINDADO POR ID)
 # We use the immutable Allocation ID. Terraform reads it, never destroys it.
 # ==============================================================================
 data "aws_eip" "events_eip" {
@@ -51,7 +60,7 @@ data "aws_eip" "events_eip" {
 }
 
 # ==============================================================================
-# 3. PERSISTENT STORAGE (10GB)
+# 4. PERSISTENT STORAGE (10GB)
 # External volume that SURVIVES instance destruction.
 # ==============================================================================
 resource "aws_ebs_volume" "data_volume" {
@@ -71,19 +80,21 @@ resource "aws_ebs_volume" "data_volume" {
 }
 
 # ==============================================================================
-# 4. EC2 INSTANCE (EVENTS SERVER)
+# 5. EC2 INSTANCE (EVENTS SERVER)
 # ==============================================================================
 resource "aws_instance" "worker" {
-  ami             = var.ami_id
-  instance_type   = "t3.large" 
-  subnet_id       = var.public_subnet_id
-  key_name          = "vockey"
+  ami               = var.ami_id
+  instance_type     = "t3.large" 
+  subnet_id         = var.public_subnet_id
   
+  # CRITICAL: Use the injected Key Pair
+  key_name          = aws_key_pair.deployer.key_name
+   
   # CRITICAL: Fixed Private IP (10.1.1.50)
-  private_ip      = var.private_ip_address
-  
+  private_ip        = var.private_ip_address
+   
   availability_zone = var.availability_zone
-  
+   
   vpc_security_group_ids      = [aws_security_group.events_sg.id]
   user_data_replace_on_change = true
 
@@ -96,6 +107,8 @@ resource "aws_instance" "worker" {
 
   tags = { Name = "${var.project_name}-${var.environment}-server" }
 
+  # MINIMAL USER DATA: Only OS prep, Docker install, and Disk mount.
+  # Service orchestration is handled by GitHub Actions.
   user_data = <<-EOF
     #!/bin/bash
     set -e
@@ -116,14 +129,25 @@ resource "aws_instance" "worker" {
     echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
 
     # --- PERSISTENT DISK MOUNTING ---
-    DATA_DISK="/dev/nvme1n1"
+    # Note: On Nitro instances (like t3), EBS volumes appear as NVMe devices.
+    # We scan for the unformatted volume attached.
+    
     MOUNT_POINT="/data"
     
-    # Wait for AWS to attach the volume
-    while [ ! -b $DATA_DISK ]; do echo "Waiting for disk..."; sleep 5; done
+    # Simple logic: If /dev/nvme1n1 exists, use it. If not, try /dev/xvdf.
+    if [ -e /dev/nvme1n1 ]; then
+      DATA_DISK="/dev/nvme1n1"
+    else
+      DATA_DISK="/dev/xvdf"
+    fi
+    
+    # Wait for disk presence
+    while [ ! -b $DATA_DISK ]; do echo "Waiting for disk $DATA_DISK..."; sleep 5; done
 
     # Only format if it's a NEW disk (Protects Data)
-    if ! blkid $DATA_DISK; then mkfs -t xfs $DATA_DISK; fi
+    if ! blkid $DATA_DISK; then 
+      mkfs -t xfs $DATA_DISK
+    fi
     
     mkdir -p $MOUNT_POINT
     mount $DATA_DISK $MOUNT_POINT
@@ -133,115 +157,22 @@ resource "aws_instance" "worker" {
       echo "$DATA_DISK $MOUNT_POINT xfs defaults,nofail 0 2" >> /etc/fstab
     fi
     
-    # --- DIRECTORIES & PERMISSIONS (CRITICAL) ---
+    # --- PREPARE DIRECTORIES FOR DOCKER VOLUMES ---
+    # Ensure directories exist so Docker doesn't create them with root:root
     mkdir -p $MOUNT_POINT/kafka $MOUNT_POINT/zookeeper $MOUNT_POINT/rabbitmq
     mkdir -p $MOUNT_POINT/mosquitto/config $MOUNT_POINT/mosquitto/data $MOUNT_POINT/mosquitto/log
-
-    # RabbitMQ (UID 999) - Kafka/ZK (UID 1000 for Confluent/Bitnami often varies, setting permissive or specific)
-    # Using 1000:1000 for generic non-root users often used by containers
-    chown -R 1000:1000 $MOUNT_POINT/kafka $MOUNT_POINT/zookeeper
     
-    # RabbitMQ Official Image uses UID 999
-    chown -R 999:999 $MOUNT_POINT/rabbitmq
-    
-    # Mosquitto Official Image uses UID 1883
-    chown -R 1883:1883 $MOUNT_POINT/mosquitto
-    
-    # RabbitMQ Cookie Security (Prevents cluster startup failure)
-    echo "DERMATECH_SECRET_COOKIE" > $MOUNT_POINT/rabbitmq/.erlang.cookie
-    chown 999:999 $MOUNT_POINT/rabbitmq/.erlang.cookie
-    chmod 600 $MOUNT_POINT/rabbitmq/.erlang.cookie
+    # Set permissive permissions initially so containers can write.
+    # Specific UID chown can be done by the GitHub Actions script if needed,
+    # but 777 ensures no "Permission Denied" on startup during initial debugging.
+    chmod -R 777 $MOUNT_POINT
 
-    # Mosquitto Config Injection
-    cat <<MQTTCFG > $MOUNT_POINT/mosquitto/config/mosquitto.conf
-    persistence true
-    persistence_location /mosquitto/data/
-    log_dest file /mosquitto/log/mosquitto.log
-    listener 1883
-    allow_anonymous true
-    listener 9001
-    protocol websockets
-    MQTTCFG
-    
-    # Fix ownership of config file
-    chown 1883:1883 $MOUNT_POINT/mosquitto/config/mosquitto.conf
-
-    # Public IP Injection for Kafka Advertised Listeners
-    PUBLIC_IP=$(curl -s http://checkip.amazonaws.com)
-    echo "KAFKA_PUBLIC_IP=$PUBLIC_IP" > /home/ec2-user/.env
-    
-    # Docker Compose File Generation
-    cat <<COMPOSE > /home/ec2-user/docker-compose.yml
-    version: '3.8'
-    services:
-      zookeeper:
-        image: confluentinc/cp-zookeeper:7.5.0
-        container_name: zookeeper
-        environment:
-          ZOOKEEPER_CLIENT_PORT: 2181
-          ZOOKEEPER_TICK_TIME: 2000
-        volumes:
-          - $MOUNT_POINT/zookeeper:/var/lib/zookeeper/data
-        restart: always
-
-      kafka:
-        image: confluentinc/cp-kafka:7.5.0
-        container_name: kafka
-        depends_on:
-          zookeeper:
-            condition: service_started
-        ports:
-          - "9092:9092"
-        env_file: .env
-        volumes:
-          - $MOUNT_POINT/kafka:/var/lib/kafka/data
-        environment:
-          KAFKA_BROKER_ID: 1
-          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-          # Listeners: Internal (29092) and External (9092 via Public IP)
-          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://$${KAFKA_PUBLIC_IP}:9092
-          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-          KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-          KAFKA_HEAP_OPTS: "-Xmx2G -Xms2G"
-        restart: always
-
-      rabbitmq:
-        image: rabbitmq:3-management
-        container_name: rabbitmq
-        ports:
-          - "5672:5672"
-          - "15672:15672"
-        environment:
-          RABBITMQ_DEFAULT_USER: admin
-          RABBITMQ_DEFAULT_PASS: admin123
-          RABBITMQ_ERLANG_COOKIE: "DERMATECH_SECRET_COOKIE"
-        volumes:
-          - $MOUNT_POINT/rabbitmq:/var/lib/rabbitmq
-        restart: always
-
-      mosquitto:
-        image: eclipse-mosquitto
-        container_name: mqtt
-        ports:
-          - "1883:1883"
-          - "9001:9001"
-        volumes:
-          - $MOUNT_POINT/mosquitto/config:/mosquitto/config
-          - $MOUNT_POINT/mosquitto/data:/mosquitto/data
-          - $MOUNT_POINT/mosquitto/log:/mosquitto/log
-        restart: always
-    COMPOSE
-
-    # Start Stack
-    cd /home/ec2-user
-    docker compose up -d
+    echo "✅ Instance Ready for GitHub Actions Deployment"
   EOF
 }
 
 # ==============================================================================
-# 5. ATTACHMENTS & ASSOCIATIONS
+# 6. ATTACHMENTS & ASSOCIATIONS
 # ==============================================================================
 resource "aws_volume_attachment" "ebs_att" {
   device_name  = "/dev/sdf"
