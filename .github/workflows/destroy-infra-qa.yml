@@ -1,8 +1,8 @@
-name: "PROD: TURBO DESTROY Global Decommission"
+name: "QA: TURBO DESTROY DermaTech Global Decommission"
 
 on:
   push:
-     branches: [ developer ]
+    branches: [ developer ]
   workflow_dispatch:
 
 jobs:
@@ -18,17 +18,17 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       
-      - name: Restore Credentials (PROD)
+      - name: Restore Credentials
         run: |
           mkdir -p ~/.aws
-          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
       # --- CRITICAL: Terminate Orphan Instances First ---
       # This releases IPs and ENIs that might block VPC deletion
       - name: Force Terminate Orphan Instances
         run: |
           echo "🔥 PHASE 0: Terminating Orphan EC2 Instances..."
-          for profile in prod-dermatech prod-events-dermatech prod-state-dermatech prod-node-a-dermatech prod-node-b-dermatech; do
+          for profile in qa-dermatech events-dermatech state-dermatech node-a-dermatech node-b-dermatech; do
             echo "  Processing Profile: $profile"
             # Find running/stopped instances (exclude terminated)
             instance_ids=$(aws ec2 describe-instances \
@@ -52,7 +52,7 @@ jobs:
       - name: Delete VPC Peerings (Cross-Account Cleanup)
         run: |
           echo "🔥 PHASE 1: Deleting ALL Peering Connections..."
-          for profile in prod-dermatech prod-events-dermatech prod-state-dermatech prod-node-a-dermatech prod-node-b-dermatech; do
+          for profile in qa-dermatech events-dermatech state-dermatech node-a-dermatech node-b-dermatech; do
             echo "  Processing Profile: $profile"
             
             # Fetch active/pending peerings
@@ -74,7 +74,7 @@ jobs:
       - name: Delete Transit Gateway Attachments
         run: |
           echo "🔥 PHASE 2: Removing TGW Attachments..."
-          for profile in prod-dermatech prod-events-dermatech prod-state-dermatech prod-node-a-dermatech prod-node-b-dermatech; do
+          for profile in qa-dermatech events-dermatech state-dermatech node-a-dermatech node-b-dermatech; do
             echo "  Processing Profile: $profile"
             
             attachment_ids=$(aws ec2 describe-transit-gateway-attachments \
@@ -96,7 +96,7 @@ jobs:
       - name: Delete NAT Gateways
         run: |
           echo "🔥 PHASE 3: Removing NAT Gateways..."
-          for profile in prod-dermatech prod-events-dermatech prod-state-dermatech prod-node-a-dermatech prod-node-b-dermatech; do
+          for profile in qa-dermatech events-dermatech state-dermatech node-a-dermatech node-b-dermatech; do
             echo "  Processing Profile: $profile"
             
             nat_ids=$(aws ec2 describe-nat-gateways \
@@ -118,7 +118,7 @@ jobs:
       - name: Delete Network Interfaces (ENIs)
         run: |
           echo "🔥 PHASE 4: Detaching & Deleting Available ENIs..."
-          for profile in prod-dermatech prod-events-dermatech prod-state-dermatech prod-node-a-dermatech prod-node-b-dermatech; do
+          for profile in qa-dermatech events-dermatech state-dermatech node-a-dermatech node-b-dermatech; do
             echo "  Processing Profile: $profile"
             
             eni_ids=$(aws ec2 describe-network-interfaces \
@@ -143,11 +143,11 @@ jobs:
           sleep 60
 
   # ==========================================
-  # STEP 1: DESTROY PROD HUB (The Orchestrator)
+  # STEP 1: DESTROY QA HUB (The Orchestrator)
   # Must be destroyed first to release Peering locks on Spoke VPCs
   # ==========================================
   destroy-hub:
-    name: Destroy PROD Hub
+    name: Destroy QA Hub
     needs: break-dependencies
     runs-on: ubuntu-latest
     steps:
@@ -157,15 +157,15 @@ jobs:
       - name: Restore Credentials
         run: |
           mkdir -p ~/.aws
-          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
-      - name: Destroy PROD (Pass 1)
+      - name: Destroy QA (Pass 1)
         env:
-          AWS_PROFILE: prod-dermatech
+          AWS_PROFILE: qa-dermatech
           AWS_REGION: us-east-1
         continue-on-error: true
         run: |
-          cd infrastructure/terraform/environments-prod/account-01-prod
+          cd infrastructure/terraform/environments/account-01-qa
           terraform init -reconfigure
           # We pass empty strings to satisfy variable definitions without validation
           terraform destroy -auto-approve \
@@ -174,10 +174,10 @@ jobs:
 
       - name: Force Cleanup Residual Resources
         run: |
-          echo "🔨 Force cleaning residual Security Groups in PROD..."
+          echo "🔨 Force cleaning residual Security Groups in QA..."
           
           sg_ids=$(aws ec2 describe-security-groups \
-            --profile prod-dermatech \
+            --profile qa-dermatech \
             --region us-east-1 \
             --query 'SecurityGroups[?GroupName!=`default`].GroupId' \
             --output text 2>/dev/null || echo "")
@@ -185,17 +185,17 @@ jobs:
           for id in $sg_ids; do
             echo "  ❌ Deleting SG: $id"
             aws ec2 delete-security-group \
-              --profile prod-dermatech \
+              --profile qa-dermatech \
               --region us-east-1 \
               --group-id $id 2>/dev/null || true
           done
 
-      - name: Destroy PROD (Pass 2 - Final)
+      - name: Destroy QA (Pass 2 - Final)
         env:
-          AWS_PROFILE: prod-dermatech
+          AWS_PROFILE: qa-dermatech
           AWS_REGION: us-east-1
         run: |
-          cd infrastructure/terraform/environments-prod/account-01-prod
+          cd infrastructure/terraform/environments/account-01-qa
           terraform destroy -auto-approve \
             -var="events_vpc_id=" -var="state_vpc_id=" \
             -var="node_a_vpc_id=" -var="node_b_vpc_id=" || true
@@ -214,10 +214,10 @@ jobs:
         include:
           - account: 'Node A'
             path: 'account-04-node-a'
-            profile: 'prod-node-a-dermatech'
+            profile: 'node-a-dermatech'
           - account: 'Node B'
             path: 'account-05-node-b'
-            profile: 'prod-node-b-dermatech'
+            profile: 'node-b-dermatech'
     steps:
       - uses: actions/checkout@v3
       - uses: hashicorp/setup-terraform@v2
@@ -225,7 +225,7 @@ jobs:
       - name: Restore Credentials
         run: |
           mkdir -p ~/.aws
-          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
       - name: Destroy ${{ matrix.account }} (Pass 1)
         env:
@@ -233,7 +233,7 @@ jobs:
           AWS_REGION: us-east-1
         continue-on-error: true
         run: |
-          cd infrastructure/terraform/environments-prod/${{ matrix.path }}
+          cd infrastructure/terraform/environments/${{ matrix.path }}
           terraform init -reconfigure
           # CLEANED: No variables passed
           terraform destroy -auto-approve
@@ -260,7 +260,7 @@ jobs:
           AWS_PROFILE: ${{ matrix.profile }}
           AWS_REGION: us-east-1
         run: |
-          cd infrastructure/terraform/environments-prod/${{ matrix.path }}
+          cd infrastructure/terraform/environments/${{ matrix.path }}
           terraform destroy -auto-approve || true
 
   # ==========================================
@@ -276,10 +276,10 @@ jobs:
         include:
           - account: 'Events'
             path: 'account-02-events'
-            profile: 'prod-events-dermatech'
+            profile: 'events-dermatech'
           - account: 'State'
             path: 'account-03-state'
-            profile: 'prod-state-dermatech'
+            profile: 'state-dermatech'
     steps:
       - uses: actions/checkout@v3
       - uses: hashicorp/setup-terraform@v2
@@ -287,7 +287,7 @@ jobs:
       - name: Restore Credentials
         run: |
           mkdir -p ~/.aws
-          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
       - name: Destroy ${{ matrix.account }} (Pass 1)
         env:
@@ -295,7 +295,7 @@ jobs:
           AWS_REGION: us-east-1
         continue-on-error: true
         run: |
-          cd infrastructure/terraform/environments-prod/${{ matrix.path }}
+          cd infrastructure/terraform/environments/${{ matrix.path }}
           terraform init -reconfigure
           # CLEANED: No variables passed
           terraform destroy -auto-approve
@@ -322,7 +322,7 @@ jobs:
           AWS_PROFILE: ${{ matrix.profile }}
           AWS_REGION: us-east-1
         run: |
-          cd infrastructure/terraform/environments-prod/${{ matrix.path }}
+          cd infrastructure/terraform/environments/${{ matrix.path }}
           terraform destroy -auto-approve || true
 
   # ==========================================
@@ -336,12 +336,12 @@ jobs:
       - name: Restore Credentials
         run: |
           mkdir -p ~/.aws
-          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
       - name: Audit Remaining Resources
         run: |
           echo "🔍 Auditing potential leftover resources..."
-          for profile in prod-dermatech prod-events-dermatech prod-state-dermatech prod-node-a-dermatech prod-node-b-dermatech; do
+          for profile in qa-dermatech events-dermatech state-dermatech node-a-dermatech node-b-dermatech; do
             echo "------------------------------------------------"
             echo "Account Profile: $profile"
             vpc_count=$(aws ec2 describe-vpcs --profile $profile --region us-east-1 --query 'length(Vpcs[?!IsDefault])' 2>/dev/null || echo "0")

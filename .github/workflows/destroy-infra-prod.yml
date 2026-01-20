@@ -2,15 +2,15 @@ name: "PROD: TURBO DESTROY Global Decommission"
 
 on:
   push:
-     branches:
-      - developer
+    branches: [ developer ]
   workflow_dispatch:
 
 jobs:
   # ==========================================
   # STEP 0: BREAK ALL DEPENDENCIES (BRUTE FORCE)
-  # Uses AWS CLI to forcefully remove Peerings, ENIs, and Gateways
+  # Uses AWS CLI to forcefully remove Instances, Peerings, ENIs, and Gateways
   # preventing Terraform "Dependency Violation" locks.
+  # SAFE: Does NOT release Elastic IPs.
   # ==========================================
   break-dependencies:
     name: Break All Dependencies
