@@ -9,15 +9,16 @@ env:
   AWS_REGION: us-east-1
   
   # ============================================================================
-  # NETWORKING CONFIGURATION (QA ENVIRONMENT ONLY)
+  # NETWORKING CONFIGURATION (QA ENVIRONMENT)
   # ============================================================================
   
-  # QA BASTION HOST (The only Public Entry Point)
-  # CORRECTED IP: 100.52.22.97 (Source: User Data)
+  # QA BASTION HOST (The Single Point of Entry)
+  # This matches the Elastic IP assigned to the QA Hub/Bastion.
   QA_BASTION_PUBLIC_IP: 100.52.22.97
 
-  # QA PRIVATE IPs (Target Nodes)
-  # GitHub Actions will reach these via the Bastion Tunnel (100.52.22.97).
+  # QA PRIVATE IPs (Internal Targets)
+  # GitHub Actions will reach these services exclusively via the Bastion Tunnel.
+  # Direct public access to these nodes is bypassed for security compliance.
   EVENTS_PRIVATE_IP: 10.0.1.50
   STATE_PRIVATE_IP: 10.0.1.60
   NODE_A_PRIVATE_IP: 10.3.1.10
@@ -278,7 +279,8 @@ jobs:
 
   # ============================================================================
   # TRACK C: INSTALLATION & DEPLOYMENT (SECURE BASTION TUNNELING)
-  # Updated to use SSH ProxyCommand via QA Bastion (100.52.22.97)
+  # Uses SSH ProxyCommand via QA Bastion (100.52.22.97) to reach Private IPs.
+  # This enforces the "Single Entry Point" security requirement.
   # ============================================================================
 
   deploy-events:
@@ -402,7 +404,6 @@ jobs:
     strategy:
       matrix:
         # TARGETS: QA Private IPs of Node A and Node B
-        # Node A: 10.3.1.10 | Node B: 10.4.1.10
         node_ip: [10.3.1.10, 10.4.1.10]
     steps:
       - uses: actions/download-artifact@v4
