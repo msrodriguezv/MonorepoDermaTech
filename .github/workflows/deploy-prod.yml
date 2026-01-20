@@ -1,8 +1,8 @@
 name: "PROD: TURBO DEPLOY DermaTech Global Infrastructure"
 
 on:
-  push:
-    branches: [ developer ]
+  #push:
+    # branches: [ developer ]
   workflow_dispatch:
 
 env:
