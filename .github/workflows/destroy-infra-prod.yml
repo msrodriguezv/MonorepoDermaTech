@@ -1,8 +1,8 @@
 name: "PROD: TURBO DESTROY Global Decommission"
 
 on:
-  push:
-    branches: [ developer ]
+  #push:
+    #branches: [ developer ]
   workflow_dispatch:
 
 jobs:

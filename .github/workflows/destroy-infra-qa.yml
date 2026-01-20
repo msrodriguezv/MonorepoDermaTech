@@ -1,8 +1,8 @@
 name: "QA: TURBO DESTROY DermaTech Global Decommission"
 
 on:
-  push:
-    branches: [ developer ]
+  #push:
+    #branches: [ developer ]
   workflow_dispatch:
 
 jobs:
