@@ -1,0 +1,451 @@
+name: "PROD: TURBO DEPLOY DermaTech Global Infrastructure"
+
+on:
+  push:
+    branches: [ developer ]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  # --- PROD PUBLIC IPS (SSH Access GitHub -> EC2) ---
+  EVENTS_PUBLIC_IP: 72.44.33.174
+  STATE_PUBLIC_IP: 3.230.129.119
+  NODE_A_PUBLIC_IP: 3.86.75.213
+  NODE_B_PUBLIC_IP: 54.173.181.79
+  
+  # --- PROD PRIVATE IPS (Internal Service Communication) ---
+  # Espejo de las IPs privadas de QA pero en la red de Prod
+  EVENTS_PRIVATE_IP: 10.1.1.50
+  STATE_PRIVATE_IP: 10.2.1.60
+
+jobs:
+  # ============================================================================
+  # TRACK A: INFRASTRUCTURE (TERRAFORM)
+  # ============================================================================
+
+  cleanup:
+    name: Force Cleanup Orphaned Resources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Restore Credentials (PROD)
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+      - name: Delete All VPC Peering Connections
+        run: |
+          for profile in prod-dermatech prod-events-dermatech prod-state-dermatech prod-node-a-dermatech prod-node-b-dermatech; do
+            echo "🧹 Cleaning peerings for profile: $profile"
+            peering_ids=$(aws ec2 describe-vpc-peering-connections --profile $profile --region us-east-1 --filters "Name=status-code,Values=active,pending-acceptance" --query 'VpcPeeringConnections[*].VpcPeeringConnectionId' --output text 2>/dev/null || echo "")
+            for id in $peering_ids; do
+              echo "  ❌ Deleting peering: $id"
+              aws ec2 delete-vpc-peering-connection --profile $profile --region us-east-1 --vpc-peering-connection-id $id || true
+            done
+          done
+      - name: Delete Network Interfaces (ENIs)
+        run: |
+          for profile in prod-dermatech prod-events-dermatech prod-state-dermatech prod-node-a-dermatech prod-node-b-dermatech; do
+            echo "🧹 Cleaning ENIs for: $profile"
+            eni_ids=$(aws ec2 describe-network-interfaces --profile $profile --region us-east-1 --query 'NetworkInterfaces[?Status==`available`].NetworkInterfaceId' --output text 2>/dev/null || echo "")
+            for id in $eni_ids; do
+              echo "  ❌ Deleting ENI: $id"
+              aws ec2 delete-network-interface --profile $profile --region us-east-1 --network-interface-id $id || true
+            done
+          done
+      - name: Wait for AWS Propagation
+        run: sleep 30
+
+  base-layer:
+    name: Deploy Base (${{ matrix.account }})
+    needs: cleanup
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - account: 'Events'
+            path: 'account-02-events'
+            profile: 'prod-events-dermatech'
+            output_var: 'VPC_EVENTS'
+          - account: 'State'
+            path: 'account-03-state'
+            profile: 'prod-state-dermatech'
+            output_var: 'VPC_STATE'
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
+      - name: Restore Credentials (PROD)
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+      - name: Deploy ${{ matrix.account }}
+        env:
+          AWS_PROFILE: ${{ matrix.profile }}
+          AWS_REGION: us-east-1
+        run: |
+          cd infrastructure/terraform/environments-prod/${{ matrix.path }}
+          terraform init -reconfigure
+          if ! terraform apply -auto-approve; then
+            echo "⚠️ First attempt failed. Executing destroy..."
+            terraform destroy -auto-approve || true
+            sleep 20
+            terraform apply -auto-approve
+          fi
+          VPC_ID=$(terraform output -raw vpc_id)
+          echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
+          echo "✅ VPC Created: $VPC_ID"
+      - name: Upload VPC ID Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output_var }}
+          path: infrastructure/terraform/environments-prod/${{ matrix.path }}/vpc_id.txt
+          retention-days: 1
+
+  nodes-layer:
+    name: Deploy Node (${{ matrix.account }})
+    needs: base-layer
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - account: 'Node A'
+            path: 'account-04-node-a'
+            profile: 'prod-node-a-dermatech'
+            output_var: 'VPC_NODE_A'
+          - account: 'Node B'
+            path: 'account-05-node-b'
+            profile: 'prod-node-b-dermatech'
+            output_var: 'VPC_NODE_B'
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
+      - name: Restore Credentials (PROD)
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+      - name: Deploy ${{ matrix.account }}
+        env:
+          AWS_PROFILE: ${{ matrix.profile }}
+          AWS_REGION: us-east-1
+        run: |
+          cd infrastructure/terraform/environments-prod/${{ matrix.path }}
+          terraform init -reconfigure
+          if ! terraform apply -auto-approve; then
+            echo "⚠️ First attempt failed. Executing destroy..."
+            terraform destroy -auto-approve || true
+            sleep 20
+            terraform apply -auto-approve
+          fi
+          VPC_ID=$(terraform output -raw vpc_id)
+          echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
+          echo "✅ VPC Created: $VPC_ID"
+      - name: Upload VPC ID Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output_var }}
+          path: infrastructure/terraform/environments-prod/${{ matrix.path }}/vpc_id.txt
+          retention-days: 1
+
+  prod-hub:
+    name: Deploy PROD Hub (Orchestrator)
+    needs: [base-layer, nodes-layer]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
+      - name: Restore Credentials (PROD)
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with: { name: 'VPC_EVENTS', path: 'VPC_EVENTS' }
+      - uses: actions/download-artifact@v4
+        with: { name: 'VPC_STATE', path: 'VPC_STATE' }
+      - uses: actions/download-artifact@v4
+        with: { name: 'VPC_NODE_A', path: 'VPC_NODE_A' }
+      - uses: actions/download-artifact@v4
+        with: { name: 'VPC_NODE_B', path: 'VPC_NODE_B' }
+      - name: Extract VPC IDs
+        run: |
+          EVENTS_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_EVENTS/vpc_id.txt | head -n 1)
+          STATE_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_STATE/vpc_id.txt | head -n 1)
+          NODE_A_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_NODE_A/vpc_id.txt | head -n 1)
+          NODE_B_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_NODE_B/vpc_id.txt | head -n 1)
+          echo "VPC_EVENTS=$EVENTS_ID" >> $GITHUB_ENV
+          echo "VPC_STATE=$STATE_ID" >> $GITHUB_ENV
+          echo "VPC_NODE_A=$NODE_A_ID" >> $GITHUB_ENV
+          echo "VPC_NODE_B=$NODE_B_ID" >> $GITHUB_ENV
+      - name: Deploy PROD Hub
+        env:
+          AWS_PROFILE: prod-dermatech
+          AWS_REGION: us-east-1
+        run: |
+          cd infrastructure/terraform/environments-prod/account-01-prod
+          terraform init -reconfigure
+          if ! terraform apply -auto-approve \
+            -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
+            -var="state_vpc_id=${{ env.VPC_STATE }}" \
+            -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
+            -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"; then
+            echo "⚠️ First attempt failed. Executing destroy..."
+            terraform destroy -auto-approve -var="events_vpc_id=null" -var="state_vpc_id=null" -var="node_a_vpc_id=null" -var="node_b_vpc_id=null" || true
+            sleep 20
+            terraform apply -auto-approve \
+              -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
+              -var="state_vpc_id=${{ env.VPC_STATE }}" \
+              -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
+              -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
+          fi
+          # --- EXTRACT ALB DNS FOR FINAL OUTPUT ---
+          ALB_DNS=$(terraform output -raw PROD_ALB_DNS_NAME)
+          echo "ALB_URL=$ALB_DNS" > alb_dns.txt
+          echo "🎉 GLOBAL INFRASTRUCTURE SUCCESSFULLY DEPLOYED (PROD)"
+      - name: Upload ALB DNS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ALB_DNS
+          path: infrastructure/terraform/environments-prod/account-01-prod/alb_dns.txt
+
+  # ============================================================================
+  # TRACK B: COMPILATION & DOCKER (PARALLEL PROCESS)
+  # ============================================================================
+
+  compile-code:
+    name: 🛠️ Compile Source Code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with: { node-version: 18, cache: 'npm' }
+      - name: Install Dependencies
+        run: npm ci --legacy-peer-deps
+      - name: Build Microservices (Nx)
+        run: npx nx run-many --target=build --all --configuration=production
+      - uses: subosito/flutter-action@v2
+        with: { channel: 'stable' }
+      - name: Build Flutter Web
+        run: |
+          cd apps/clients/mobile_app
+          # INJECT INTERNAL API ROUTE (PROD)
+          flutter build web --release --dart-define=API_URL=/api
+      - uses: actions/upload-artifact@v4
+        with: { name: 'dist-files', path: 'dist', retention-days: 1 }
+      - uses: actions/upload-artifact@v4
+        with: { name: 'flutter-build', path: 'apps/clients/mobile_app/build/web', retention-days: 1 }
+
+  docker-build:
+    name: 🐳 Docker Build & Push
+    needs: compile-code
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: 'auth-service'
+            dockerfile: 'apps/services/core/auth-service/Dockerfile'
+          - service: 'patient-service'
+            dockerfile: 'apps/services/core/patient-service/Dockerfile'
+          - service: 'api-gateway'
+            dockerfile: 'apps/services/api-gateway/Dockerfile'
+          - service: 'dermatech-frontend'
+            dockerfile: 'apps/clients/mobile_app/Dockerfile'
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/download-artifact@v4
+        with: { name: 'dist-files', path: 'dist' }
+      - uses: actions/download-artifact@v4
+        with: { name: 'flutter-build', path: 'apps/clients/mobile_app/build/web' }
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Build and Push ${{ matrix.service }}
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:latest
+
+  # ============================================================================
+  # TRACK C: INSTALLATION & DEPLOYMENT (SEQUENTIAL START)
+  # ============================================================================
+
+  deploy-events:
+    name: 🚀 Deploy Events (Kafka)
+    needs: [prod-hub]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@master
+        with:
+          # Usamos IP Pública de PROD
+          host: ${{ env.EVENTS_PUBLIC_IP }}
+          username: ec2-user
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: EVENTS_PRIVATE_IP, RABBITMQ_PASS
+          script: |
+            sudo mkdir -p /usr/local/lib/docker/cli-plugins
+            sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+            sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            sudo mkdir -p /data/kafka /data/zookeeper /data/rabbitmq /data/mosquitto/config
+            sudo chmod -R 777 /data
+            echo "listener 1883" | sudo tee /data/mosquitto/config/mosquitto.conf
+            echo "allow_anonymous true" | sudo tee -a /data/mosquitto/config/mosquitto.conf
+
+            cat <<EOF > docker-compose.yml
+            version: '3.8'
+            services:
+              zookeeper:
+                image: confluentinc/cp-zookeeper:7.5.0
+                restart: always
+                environment: { ZOOKEEPER_CLIENT_PORT: 2181 }
+                volumes: ["/data/zookeeper:/var/lib/zookeeper/data"]
+                networks: [infra_net]
+              kafka:
+                image: confluentinc/cp-kafka:7.5.0
+                restart: always
+                depends_on: [zookeeper]
+                ports: ["9092:9092"]
+                volumes: ["/data/kafka:/var/lib/kafka/data"]
+                environment:
+                  KAFKA_BROKER_ID: 1
+                  KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+                  KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+                  # USAMOS LA IP PRIVADA DE PROD
+                  KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${EVENTS_PRIVATE_IP}:9092
+                  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+                networks: [infra_net]
+              rabbitmq:
+                image: rabbitmq:3.12-management-alpine
+                restart: always
+                ports: ["5672:5672", "15672:15672"]
+                volumes: ["/data/rabbitmq:/var/lib/rabbitmq"]
+                environment:
+                  RABBITMQ_DEFAULT_USER: admin
+                  RABBITMQ_DEFAULT_PASS: ${{ secrets.RABBITMQ_PASS }}
+                networks: [infra_net]
+              mosquitto:
+                image: eclipse-mosquitto:2.0
+                restart: always
+                ports: ["1883:1883", "9001:9001"]
+                volumes: ["/data/mosquitto/config:/mosquitto/config"]
+                networks: [infra_net]
+            networks:
+              infra_net:
+                driver: bridge
+            EOF
+            sudo docker compose up -d
+
+  deploy-state:
+    name: 🚀 Deploy State (Redis)
+    needs: [prod-hub]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@master
+        with:
+          # Usamos IP Pública de PROD
+          host: ${{ env.STATE_PUBLIC_IP }}
+          username: ec2-user
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            sudo mkdir -p /usr/local/lib/docker/cli-plugins
+            sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+            sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            sudo mkdir -p /data/redis /data/grafana /data/prometheus
+            sudo chmod -R 777 /data
+            cat <<EOF > docker-compose.yml
+            version: '3.8'
+            services:
+              redis:
+                image: redis:7.2-alpine
+                restart: always
+                ports: ["6379:6379"]
+                command: redis-server --appendonly yes --requirepass ${{ secrets.REDIS_PASSWORD }}
+                volumes: ["/data/redis:/data"]
+              grafana:
+                image: grafana/grafana:latest
+                restart: always
+                ports: ["3000:3000"]
+                environment:
+                  GF_SECURITY_ADMIN_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }}
+                volumes: ["/data/grafana:/var/lib/grafana"]
+            EOF
+            sudo docker compose up -d
+
+  deploy-apps:
+    name: 🚀 Deploy Apps (Node A & B)
+    needs: [docker-build, deploy-events, deploy-state]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # IPs Públicas de PROD para Nodos A y B
+        node_ip: [3.86.75.213, 54.173.181.79]
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: 'ALB_DNS', path: 'ALB_DNS' }
+      - uses: appleboy/ssh-action@master
+        with:
+          host: ${{ matrix.node_ip }}
+          username: ec2-user
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          # Inyectamos IPs privadas de PROD para las variables de entorno de los contenedores
+          envs: DOCKER_USERNAME, EVENTS_PRIVATE_IP, STATE_PRIVATE_IP
+          script: |
+            sudo mkdir -p /usr/local/lib/docker/cli-plugins
+            sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+            sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            echo "${{ secrets.DOCKER_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+            cat <<EOF > docker-compose.yml
+            version: '3.8'
+            services:
+              frontend:
+                image: ${{ secrets.DOCKER_USERNAME }}/dermatech-frontend:latest
+                restart: always
+                ports: ["80:80"]
+              api-gateway:
+                image: ${{ secrets.DOCKER_USERNAME }}/api-gateway:latest
+                restart: always
+                ports: ["3000:3000"]
+                environment:
+                  - AUTH_SERVICE_URL=http://auth-service:3000
+                  - PATIENT_SERVICE_URL=http://patient-service:3000
+              auth-service:
+                image: ${{ secrets.DOCKER_USERNAME }}/auth-service:latest
+                restart: always
+                ports: ["3001:3000"]
+                environment:
+                  - NODE_ENV=production
+                  - KAFKA_BROKERS=${EVENTS_PRIVATE_IP}:9092
+                  - REDIS_HOST=${STATE_PRIVATE_IP}
+                  - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+                  - JWT_SECRET=${{ secrets.JWT_SECRET }}
+                  - DATABASE_HOST=${{ secrets.DATABASE_HOST }}
+                  - DATABASE_USER=${{ secrets.DATABASE_USER }}
+                  - DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+                  - DATABASE_NAME=${{ secrets.DATABASE_NAME }}
+              patient-service:
+                image: ${{ secrets.DOCKER_USERNAME }}/patient-service:latest
+                restart: always
+                ports: ["3002:3000"]
+                environment:
+                  - NODE_ENV=production
+                  - KAFKA_BROKERS=${EVENTS_PRIVATE_IP}:9092
+                  - REDIS_HOST=${STATE_PRIVATE_IP}
+                  - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+                  - DATABASE_HOST=${{ secrets.DATABASE_HOST }}
+                  - DATABASE_USER=${{ secrets.DATABASE_USER }}
+                  - DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+                  - DATABASE_NAME=${{ secrets.DATABASE_NAME }}
+            EOF
+            sudo docker compose pull
+            sudo docker compose up -d --remove-orphans
+      - name: 🏁 Final Summary
+        run: |
+          ALB_DNS=$(cat ALB_DNS/alb_dns.txt)
+          echo "🎉 PROD DEPLOYMENT COMPLETE"
+          echo "🌐 URL: http://$ALB_DNS"
