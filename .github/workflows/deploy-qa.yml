@@ -434,16 +434,22 @@ jobs:
                   # --- CRITICAL: USING WORKFLOW ENV VARS FOR CORRECT IPs ---
                   - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
                   - KAFKA_CLIENT_ID=auth-service
+                  - KAFKA_GROUP_ID=${{ secrets.KAFKA_GROUP_ID }}
                   - RABBITMQ_HOST=${{ env.EVENTS_PRIVATE_IP }}
                   - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
                   - REDIS_PORT=6379
                   - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
                   # --- SECRETS INJECTION ---
                   - JWT_SECRET=${{ secrets.JWT_SECRET }}
+                  - JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}
+                  - JWT_REFRESH_EXPIRES_IN=${{ secrets.JWT_REFRESH_EXPIRES_IN }}
+                  - JWT_EXPIRES_IN=${{ secrets.JWT_EXPIRES_IN }}
+                  - DATABASE_PORT=${{ secrets.DATABASE_PORT }}
                   - DATABASE_HOST=${{ secrets.DATABASE_HOST }}
                   - DATABASE_USER=${{ secrets.DATABASE_USER }}
                   - DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
                   - DATABASE_NAME=${{ secrets.DATABASE_NAME }}
+                  - DATABASE_SYNC=${{ secrets.DATABASE_SYNC }}
               patient-service:
                 image: ${{ secrets.DOCKER_USERNAME }}/patient-service:latest
                 restart: always
@@ -451,12 +457,17 @@ jobs:
                 environment:
                   - NODE_ENV=production
                   - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+                  - KAFKA_CLIENT_ID=auth-service
+                  - KAFKA_GROUP_ID=${{ secrets.KAFKA_GROUP_ID }}
                   - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
                   - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+                  - DATABASE_PORT=${{ secrets.DATABASE_PORT }}
                   - DATABASE_HOST=${{ secrets.DATABASE_HOST }}
                   - DATABASE_USER=${{ secrets.DATABASE_USER }}
                   - DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
                   - DATABASE_NAME=${{ secrets.DATABASE_NAME }}
+                  - DATABASE_SYNC=${{ secrets.DATABASE_SYNC }}
+                  
             EOF
             sudo docker compose pull
             sudo docker compose up -d --remove-orphans
