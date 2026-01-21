@@ -117,7 +117,7 @@ class _AuthCheckScreenState extends State<AuthCheckScreen> {
             // Branding Logo
             // Ensure you have an asset at 'assets/images/logo.png'
             // If not, this Icon serves as a placeholder.
-            const Icon(Icons.local_hospital_rounded, size: 80, color: Color(0xFF0D47A1)),
+            const Icon(Icons.local_hospital_rounded, size: 90, color: Color(0xFF0D47A1)),
             const SizedBox(height: 24),
             
             // Loading Indicator
