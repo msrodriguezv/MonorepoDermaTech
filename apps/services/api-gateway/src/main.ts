@@ -14,10 +14,10 @@ async function bootstrap() {
   });
 
   // ===========================================================================
-  // CORRECCIÓN DE RUTAS (PATH REWRITE)
-  // Objetivo: Eliminar '/api/v1' antes de enviar al microservicio.
-  // Entrada: /api/v1/auth/login  --->  Salida: /auth/login
-  // Esto asegura que coincida con @Controller('auth') en el microservicio.
+  // CORRECCIÓN APLICADA:
+  // Se eliminó 'pathRewrite' en Auth y Patient.
+  // Ahora el Gateway pasa la URL completa ('/api/v1/auth/...') al microservicio,
+  // coincidiendo con el Global Prefix que tienen configurado tus servicios NestJS.
   // ===========================================================================
 
   // --- AUTH SERVICE ---
@@ -26,9 +26,6 @@ async function bootstrap() {
     createProxyMiddleware({
       target: process.env.AUTH_SERVICE_URL || 'http://auth-service:3000',
       changeOrigin: true,
-      pathRewrite: {
-        '^/api/v1/auth': '/auth', // Reemplazamos el prefijo largo por el del controlador
-      },
     }),
   );
 
@@ -38,20 +35,18 @@ async function bootstrap() {
     createProxyMiddleware({
       target: process.env.PATIENT_SERVICE_URL || 'http://patient-service:3000',
       changeOrigin: true,
-      pathRewrite: {
-        '^/api/v1/patient': '/patient', // Aseguramos que llegue limpio al controlador
-      },
     }),
   );
 
-  // --- AI AGENT (Mantenemos tu configuración original si es Python/Flask) ---
+  // --- AI AGENT ---
+  // Mantenemos la reescritura aquí porque Flask/Python usualmente espera la raíz '/'
   app.use(
     '/api/ai',
     createProxyMiddleware({
       target: process.env.AI_SERVICE_URL || 'http://ai-agent:5000',
       changeOrigin: true,
       pathRewrite: {
-        '^/api/ai': '', // Flask suele esperar la raíz '/'
+        '^/api/ai': '', // Flask recibe la ruta limpia desde la raíz
       },
     }),
   );
