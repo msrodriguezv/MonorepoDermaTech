@@ -12,13 +12,10 @@ env:
   # NETWORKING CONFIGURATION (QA ENVIRONMENT)
   # ============================================================================
   
-  # QA BASTION HOST (The Single Point of Entry)
-  # This matches the Elastic IP assigned to the QA Hub/Bastion.
+  # QA BASTION HOST
   QA_BASTION_PUBLIC_IP: 100.52.22.97
 
-  # QA PRIVATE IPs (Internal Targets)
-  # GitHub Actions will reach these services exclusively via the Bastion Tunnel.
-  # Direct public access to these nodes is bypassed for security compliance.
+  # QA PRIVATE IPs (Internal Targets - CORRECT VALUES)
   EVENTS_PRIVATE_IP: 10.1.1.50
   STATE_PRIVATE_IP: 10.2.1.100
   NODE_A_PRIVATE_IP: 10.3.1.10
@@ -28,7 +25,6 @@ jobs:
   # ============================================================================
   # TRACK A: INFRASTRUCTURE (TERRAFORM)
   # ============================================================================
-
   cleanup:
     name: Force Cleanup Orphaned Resources
     runs-on: ubuntu-latest
@@ -204,7 +200,6 @@ jobs:
               -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
               -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
           fi
-          # --- EXTRACT ALB DNS FOR FINAL OUTPUT ---
           ALB_DNS=$(terraform output -raw QA_ALB_DNS_NAME)
           echo "ALB_URL=$ALB_DNS" > alb_dns.txt
           echo "🎉 GLOBAL INFRASTRUCTURE SUCCESSFULLY DEPLOYED"
@@ -235,8 +230,8 @@ jobs:
       - name: Build Flutter Web
         run: |
           cd apps/clients/mobile_app
-          # --- INJECT INTERNAL API ROUTE TO RESOLVE LOCALHOST ISSUE ---
-          flutter build web --release --dart-define=API_URL=/api
+          # Ensure API URL uses versioning
+          flutter build web --release --dart-define=API_URL=/api/v1
       - uses: actions/upload-artifact@v4
         with: { name: 'dist-files', path: 'dist', retention-days: 1 }
       - uses: actions/upload-artifact@v4
@@ -279,8 +274,6 @@ jobs:
 
   # ============================================================================
   # TRACK C: INSTALLATION & DEPLOYMENT (SECURE BASTION TUNNELING)
-  # Uses SSH ProxyCommand via QA Bastion (100.52.22.97) to reach Private IPs.
-  # This enforces the "Single Entry Point" security requirement.
   # ============================================================================
 
   deploy-events:
@@ -290,17 +283,14 @@ jobs:
     steps:
       - uses: appleboy/ssh-action@master
         with:
-          # TARGET: QA Private IP of Events Node (10.0.1.50)
           host: ${{ env.EVENTS_PRIVATE_IP }}
           username: ec2-user
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          
-          # JUMPBOX: Public IP of QA Bastion (100.52.22.97)
           proxy_host: ${{ env.QA_BASTION_PUBLIC_IP }}
           proxy_username: ec2-user
           proxy_key: ${{ secrets.SSH_PRIVATE_KEY }}
-          
-          envs: EVENTS_PRIVATE_IP, RABBITMQ_PASS
+          # Inject IPs as ENV vars to be used in script
+          envs: EVENTS_PRIVATE_IP
           script: |
             echo "✅ SECURITY CHECK: Connected via QA Bastion Tunnel"
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
@@ -330,7 +320,8 @@ jobs:
                   KAFKA_BROKER_ID: 1
                   KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
                   KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
-                  KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${EVENTS_PRIVATE_IP}:9092
+                  # USE INJECTED IP FOR ADVERTISED LISTENER
+                  KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${{ env.EVENTS_PRIVATE_IP }}:9092
                   KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
                 networks: [infra_net]
               rabbitmq:
@@ -361,16 +352,12 @@ jobs:
     steps:
       - uses: appleboy/ssh-action@master
         with:
-          # TARGET: QA Private IP of State Node (10.0.1.60)
           host: ${{ env.STATE_PRIVATE_IP }}
           username: ec2-user
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          
-          # JUMPBOX: Public IP of QA Bastion (100.52.22.97)
           proxy_host: ${{ env.QA_BASTION_PUBLIC_IP }}
           proxy_username: ec2-user
           proxy_key: ${{ secrets.SSH_PRIVATE_KEY }}
-          
           script: |
             echo "✅ SECURITY CHECK: Connected via QA Bastion Tunnel"
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
@@ -403,24 +390,20 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # TARGETS: QA Private IPs of Node A and Node B
         node_ip: [10.3.1.10, 10.4.1.10]
     steps:
       - uses: actions/download-artifact@v4
         with: { name: 'ALB_DNS', path: 'ALB_DNS' }
       - uses: appleboy/ssh-action@master
         with:
-          # TARGET: Private IP from Matrix
           host: ${{ matrix.node_ip }}
           username: ec2-user
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          
-          # JUMPBOX: Public IP of QA Bastion (100.52.22.97)
           proxy_host: ${{ env.QA_BASTION_PUBLIC_IP }}
           proxy_username: ec2-user
           proxy_key: ${{ secrets.SSH_PRIVATE_KEY }}
           
-          envs: DOCKER_USERNAME, EVENTS_PRIVATE_IP, STATE_PRIVATE_IP
+          # Inject secrets and IPs
           script: |
             echo "✅ SECURITY CHECK: Connected via QA Bastion Tunnel"
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
@@ -448,9 +431,14 @@ jobs:
                 ports: ["3001:3000"]
                 environment:
                   - NODE_ENV=production
-                  - KAFKA_BROKERS=${EVENTS_PRIVATE_IP}:9092
-                  - REDIS_HOST=${STATE_PRIVATE_IP}
+                  # --- CRITICAL: USING WORKFLOW ENV VARS FOR CORRECT IPs ---
+                  - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+                  - KAFKA_CLIENT_ID=auth-service
+                  - RABBITMQ_HOST=${{ env.EVENTS_PRIVATE_IP }}
+                  - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
+                  - REDIS_PORT=6379
                   - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+                  # --- SECRETS INJECTION ---
                   - JWT_SECRET=${{ secrets.JWT_SECRET }}
                   - DATABASE_HOST=${{ secrets.DATABASE_HOST }}
                   - DATABASE_USER=${{ secrets.DATABASE_USER }}
@@ -462,8 +450,8 @@ jobs:
                 ports: ["3002:3000"]
                 environment:
                   - NODE_ENV=production
-                  - KAFKA_BROKERS=${EVENTS_PRIVATE_IP}:9092
-                  - REDIS_HOST=${STATE_PRIVATE_IP}
+                  - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+                  - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
                   - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
                   - DATABASE_HOST=${{ secrets.DATABASE_HOST }}
                   - DATABASE_USER=${{ secrets.DATABASE_USER }}

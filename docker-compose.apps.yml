@@ -35,15 +35,20 @@ services:
     environment:
       - PORT=3000
       - NODE_ENV=production
-      # Connecting to EVENTS Account (Private IP)
-      - KAFKA_BROKERS=10.0.1.50:9092
+      
+      # --- EVENTS ACCOUNT (CORRECTED IPs) ---
+      # Kafka & RabbitMQ are on Events Node (10.1.1.50)
+      - KAFKA_BROKERS=10.1.1.50:9092
       - KAFKA_CLIENT_ID=auth-service
-      - RABBITMQ_HOST=10.0.1.50
-      # Connecting to STATE Account (Private IP)
-      - REDIS_HOST=10.0.1.60
+      - RABBITMQ_HOST=10.1.1.50
+      
+      # --- STATE ACCOUNT (CORRECTED IPs) ---
+      # Redis is on State Node (10.2.1.100 - CONFIRMED VIA AWS CONSOLE)
+      - REDIS_HOST=10.2.1.100
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD}
-      # Security Credentials (Injected via .env file or GH Actions)
+      
+      # --- SECRETS ---
       - JWT_SECRET=${JWT_SECRET}
       - DATABASE_HOST=${DATABASE_HOST}
       - DATABASE_USER=${DATABASE_USER}
@@ -62,11 +67,17 @@ services:
     environment:
       - PORT=3000
       - NODE_ENV=production
-      - KAFKA_BROKERS=10.0.1.50:9092
-      - REDIS_HOST=10.0.1.60
+      
+      # --- EVENTS & STATE ---
+      - KAFKA_BROKERS=10.1.1.50:9092
+      - REDIS_HOST=10.2.1.100
       - REDIS_PASSWORD=${REDIS_PASSWORD}
+      
+      # --- DATABASE ---
       - DATABASE_HOST=${DATABASE_HOST}
+      - DATABASE_USER=${DATABASE_USER}
       - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - DATABASE_NAME=${DATABASE_NAME}
     networks:
       - app_net
 
