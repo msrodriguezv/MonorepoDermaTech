@@ -8,7 +8,16 @@
 # ==============================================================================
 
 # ==============================================================================
-# 1. SECURITY GROUP
+# 1. SSH KEY PAIR (INJECTED FOR GITHUB ACTIONS)
+# Inyectamos la llave pública correcta para que GitHub Actions pueda entrar.
+# ==============================================================================
+resource "aws_key_pair" "deployer" {
+  key_name   = "clave-maestra-final-v2"
+  public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDHfNX1CHq9xvO5DiUcm0Id1wpjLK/htvEaATxEeBIt4cbLJ5kn+IAUhhB/gvK/BEkHXZnLeZ1/+d/NEAQmFjTDtMEK1bEO1qlPLxMrgIxBbDzAVlvZ+ADBSFRQ94LXq73swJvej9z9jLnjKDSiGu5m3FoJbJnuYTmWN/DociUWZ2ADg/xnnBDJUgn13/mBf9L5tH8HWRrve8wqxgaqLn4F/97O2ClcGI5r3SSR5m+GaVeV4al8UiALK0ZXWvzjA3/gStY61tZuj1HD6xWAJ3wIvPgdWOrU7bzVt7DmzBJhNSnRO3fOwGbVpvM8cCslv41Nos9VPuC5A887PdcxGOIKjn6GN1WlXxctk9ORrJekJUFHr5KDPNLjl/i5wijgdoRfufhSuQflluYiZCnnvYJMGBsg9XHNSORb9FeOugEARtlrVUhAfkiHcbFNVUvpE8twpvevCNydA2eWF6GngV79PL2NEmnVXes2iAUgTKYbCgNAmcCs2rxVT8oZGDQBrHTDnRj9mfvTEWR5GDJho46bd/nT/AfyJWLHdhhttrA8Pqwk66CKgi7PSVXdCqSv3lJ/5JmOMyuSb/8c9r5yWwBBnmKTZsCS5OE9ca5f5tNe296g00W5SOiUvpRAPvAHIgjjYIVJgd3qQSGTMSLj8vlsVZ/jyBXrO/pR6/aMhCAk/w== github-actions"
+}
+
+# ==============================================================================
+# 2. SECURITY GROUP
 # ==============================================================================
 resource "aws_security_group" "gateway_sg" {
   name        = "${var.project_name}-${var.environment}-gateway-sg"
@@ -54,7 +63,7 @@ resource "aws_security_group" "gateway_sg" {
 }
 
 # ==============================================================================
-# 2. DATA SOURCE: ELASTIC IP (SHIELDED BY ID)
+# 3. DATA SOURCE: ELASTIC IP (SHIELDED BY ID)
 # We use the immutable Allocation ID. Terraform reads it, never destroys it.
 # ==============================================================================
 data "aws_eip" "gateway_eip" {
@@ -62,7 +71,7 @@ data "aws_eip" "gateway_eip" {
 }
 
 # ==============================================================================
-# 3. EBS VOLUME (EXTERNAL PERSISTENCE 10GB)
+# 4. EBS VOLUME (EXTERNAL PERSISTENCE 10GB)
 # This volume survives instance destruction (prevent_destroy enabled)
 # ==============================================================================
 resource "aws_ebs_volume" "gateway_data" {
@@ -82,20 +91,24 @@ resource "aws_ebs_volume" "gateway_data" {
 }
 
 # ==============================================================================
-# 4. EC2 INSTANCE (BASTION & PROXY)
+# 5. EC2 INSTANCE (BASTION & PROXY)
 # ==============================================================================
 resource "aws_instance" "gateway" {
-  ami             = var.ami_id
+  ami               = var.ami_id
   
   # BUDGET CORRECTION: t3.medium ($0.0416/hr) vs t3.large ($0.0832/hr)
   # t3.medium (2 vCPU, 4GB RAM) is sufficient for Nginx/Bastion duties.
-  instance_type   = "t3.medium"
+  instance_type     = "t3.medium"
   
-  subnet_id       = var.public_subnet_id
-  key_name          = "vockey"
+  subnet_id         = var.public_subnet_id
+  
+  # ----------------------------------------------------------------------------
+  # CORRECCIÓN CRÍTICA: USAR LA LLAVE MAESTRA, NO 'vockey'
+  # ----------------------------------------------------------------------------
+  key_name          = aws_key_pair.deployer.key_name
   
   # CRITICAL: Fixed Private IP for Peering Routes
-  private_ip      = var.bastion_private_ip
+  private_ip        = var.bastion_private_ip
   
   # Ensure instance is in the same AZ as the EBS Volume
   availability_zone = var.availability_zone
@@ -203,7 +216,7 @@ resource "aws_instance" "gateway" {
 }
 
 # ==============================================================================
-# 5. ATTACHMENTS & ASSOCIATIONS
+# 6. ATTACHMENTS & ASSOCIATIONS
 # ==============================================================================
 resource "aws_volume_attachment" "gateway_data_attach" {
   device_name  = "/dev/sdf"
@@ -220,7 +233,7 @@ resource "aws_eip_association" "eip_assoc" {
 }
 
 # ==============================================================================
-# 6. OUTPUTS
+# 7. OUTPUTS
 # ==============================================================================
 output "final_public_ip" { 
   value = data.aws_eip.gateway_eip.public_ip 
