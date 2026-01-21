@@ -127,15 +127,15 @@ class _AuthCheckScreenState extends State<AuthCheckScreen> {
             ),
             const SizedBox(height: 16),
             
-            // User Feedback
-            const Text(
-              "Verifying session...",
-              style: TextStyle(
-                color: Colors.grey,
-                fontSize: 14,
-                letterSpacing: 1.2,
-              ),
-            ),
+            // // User Feedback
+            // const Text(
+            //   "Verifying session...",
+            //   style: TextStyle(
+            //     color: Colors.grey,
+            //     fontSize: 14,
+            //     letterSpacing: 1.2,
+            //   ),
+            // ),
           ],
         ),
       ),

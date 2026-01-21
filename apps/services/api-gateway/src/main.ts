@@ -14,42 +14,44 @@ async function bootstrap() {
   });
 
   // ===========================================================================
-  // CORRECCIÓN CRÍTICA:
-  // 1. Apuntamos a la versión v1 (para coincidir con el Frontend)
-  // 2. ELIMINAMOS 'pathRewrite'. El microservicio (Auth) ya tiene configurado
-  //    el prefijo global '/api/v1', así que necesita recibir la URL completa.
+  // CORRECCIÓN DE RUTAS (PATH REWRITE)
+  // Objetivo: Eliminar '/api/v1' antes de enviar al microservicio.
+  // Entrada: /api/v1/auth/login  --->  Salida: /auth/login
+  // Esto asegura que coincida con @Controller('auth') en el microservicio.
   // ===========================================================================
 
   // --- AUTH SERVICE ---
   app.use(
-    '/api/v1/auth', // <--- Ajustado para escuchar la versión v1
+    '/api/v1/auth',
     createProxyMiddleware({
       target: process.env.AUTH_SERVICE_URL || 'http://auth-service:3000',
       changeOrigin: true,
-      // pathRewrite ELIMINADO: Pasamos la ruta tal cual llega
+      pathRewrite: {
+        '^/api/v1/auth': '/auth', // Reemplazamos el prefijo largo por el del controlador
+      },
     }),
   );
 
   // --- PATIENT SERVICE ---
   app.use(
-    '/api/v1/patient', // <--- Ajustado para escuchar la versión v1
+    '/api/v1/patient',
     createProxyMiddleware({
       target: process.env.PATIENT_SERVICE_URL || 'http://patient-service:3000',
       changeOrigin: true,
-      // pathRewrite ELIMINADO
+      pathRewrite: {
+        '^/api/v1/patient': '/patient', // Aseguramos que llegue limpio al controlador
+      },
     }),
   );
 
-  // --- AI AGENT ---
-  // El AI Agent (Python) suele ser diferente. Si Flask no tiene prefijo /api/ai,
-  // aquí SÍ mantenemos el pathRewrite. Depende de tu código Python.
+  // --- AI AGENT (Mantenemos tu configuración original si es Python/Flask) ---
   app.use(
     '/api/ai',
     createProxyMiddleware({
       target: process.env.AI_SERVICE_URL || 'http://ai-agent:5000',
       changeOrigin: true,
       pathRewrite: {
-        '^/api/ai': '', // Flask probablemente espera '/' en lugar de '/api/ai'
+        '^/api/ai': '', // Flask suele esperar la raíz '/'
       },
     }),
   );
