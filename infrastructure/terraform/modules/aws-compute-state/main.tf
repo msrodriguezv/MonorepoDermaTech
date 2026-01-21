@@ -21,13 +21,13 @@ resource "aws_security_group" "state_sg" {
   description = "Security Group for State & Monitoring"
   vpc_id      = var.vpc_id
 
-  # Admin Access (SSH) - TEMPORARY OPEN FOR GITHUB ACTIONS
+  # Admin Access (SSH) 
   ingress {
-    description = "Allow SSH from GitHub Actions (Temporary)"
+    description = "Allow SSH from QA Bastion (Internal Peering)"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = [var.gateway_allowed_ip]
   }
 
   # Monitoring UI Access (Grafana 3000, Prometheus 9090) from QA Bastion only
