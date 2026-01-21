@@ -14,39 +14,39 @@ resource "aws_key_pair" "deployer" {
 }
 
 # ==============================================================================
-# 2. SECURITY GROUP (CORREGIDO)
+# 2. SECURITY GROUP
 # ==============================================================================
 resource "aws_security_group" "state_sg" {
   name        = "${var.project_name}-${var.environment}-sg"
   description = "Security Group for State & Monitoring"
   vpc_id      = var.vpc_id
 
-  # ----------------------------------------------------------------------------
-  # REGLA BLINDADA: SSH DESDE BASTION (INTERNAL PEERING)
-  # Usamos var.gateway_allowed_ip que contiene la IP privada del Bastion (10.0.1.59)
-  # ----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# ROBUST RULE: SSH FROM ENTIRE QA NETWORK (HUB)
+# ----------------------------------------------------------------------------
   ingress {
-    description = "Allow SSH strictly from QA Bastion via Peering"
+    description = "Allow SSH from QA Network (Bastion)"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [var.gateway_allowed_ip]
+    cidr_blocks = ["10.0.0.0/16"] 
   }
 
-  # Monitoring UI Access (Grafana 3000, Prometheus 9090) from QA Bastion only
+  # Monitoring UI Access (Grafana 3000, Prometheus 9090)
+  # Permitimos toda la red QA para evitar timeouts en el túnel
   ingress {
-    description = "Allow Grafana UI from QA Bastion"
+    description = "Allow Grafana UI from QA Network"
     from_port   = 3000
     to_port     = 3000
     protocol    = "tcp"
-    cidr_blocks = [var.gateway_allowed_ip] 
+    cidr_blocks = ["10.0.0.0/16"] 
   }
   ingress {
-    description = "Allow Prometheus UI from QA Bastion"
+    description = "Allow Prometheus UI from QA Network"
     from_port   = 9090
     to_port     = 9090
     protocol    = "tcp"
-    cidr_blocks = [var.gateway_allowed_ip] 
+    cidr_blocks = ["10.0.0.0/16"] 
   }
 
   # Redis Access (6379) from App Nodes (Internal Only)

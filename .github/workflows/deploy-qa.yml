@@ -20,7 +20,7 @@ env:
   # GitHub Actions will reach these services exclusively via the Bastion Tunnel.
   # Direct public access to these nodes is bypassed for security compliance.
   EVENTS_PRIVATE_IP: 10.1.1.50
-  STATE_PRIVATE_IP: 10.2.1.60
+  STATE_PRIVATE_IP: 10.2.1.100
   NODE_A_PRIVATE_IP: 10.3.1.10
   NODE_B_PRIVATE_IP: 10.4.1.10
 

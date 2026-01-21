@@ -22,16 +22,15 @@ resource "aws_security_group" "events_sg" {
   description = "Security Group for Events Infrastructure"
   vpc_id      = var.vpc_id
 
-  # ----------------------------------------------------------------------------
-  # REGLA PROFESIONAL: SSH DESDE BASTION QA ÚNICAMENTE
-  # Sustituye a la regla 0.0.0.0/0. Solo entra la IP privada del Bastion (10.0.1.59).
-  # ----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# ROBUST RULE: SSH FROM ENTIRE QA NETWORK (HUB)
+# ----------------------------------------------------------------------------
   ingress {
-    description = "Allow SSH from QA Bastion (Internal Peering)"
+    description = "Allow SSH from QA Network (Bastion)"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [var.gateway_allowed_ip] 
+    cidr_blocks = ["10.0.0.0/16"] 
   }
 
   # Messaging Ports (Internal Network - Node A, Node B, State)
