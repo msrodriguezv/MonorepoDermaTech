@@ -3,17 +3,19 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Doctor } from './doctor.entity';
 
 /**
- * Enum representing the lifecycle of an appointment.
+ * Enum representing the lifecycle of an appointment within the clinical workflow.
  */
 export enum AppointmentStatus {
-  SCHEDULED = 'SCHEDULED',
-  COMPLETED = 'COMPLETED',
-  CANCELLED = 'CANCELLED',
-  NO_SHOW = 'NO_SHOW',
+  SCHEDULED = 'SCHEDULED',                   // Initial state: Appointment booked
+  WAITING_FOR_DOCTOR = 'WAITING_FOR_DOCTOR', // Triage completed, patient waiting for doctor
+  COMPLETED = 'COMPLETED',                   // Consultation finished successfully
+  CANCELLED = 'CANCELLED',                   // Appointment cancelled by user or admin
+  NO_SHOW = 'NO_SHOW',                       // Patient did not attend
+  REFERRED = 'REFERRED',                     // Patient referred to an external institution
 }
 
 @Entity('appointments')
-@Index(['doctorId', 'startTime']) // Composite index for quick overlap checks
+@Index(['doctorId', 'startTime']) // Composite index for optimized overlap checks
 export class Appointment {
   
   @ApiProperty({ example: 'b5e4c3a2-uuid...', description: 'Unique Appointment ID' })
@@ -21,8 +23,8 @@ export class Appointment {
   id: string;
 
   /**
-   * Foreign Key to the Doctor Entity.
-   * We use @ManyToOne because a Doctor has many Appointments.
+   * Foreign Key referencing the Doctor entity.
+   * Established via ManyToOne relationship.
    */
   @ApiProperty({ example: 'd19283-uuid...', description: 'Assigned Doctor ID' })
   @Column({ name: 'doctor_id' })
@@ -34,10 +36,9 @@ export class Appointment {
 
   /**
    * Reference to the Patient (Student) via their Auth User ID.
-   * We don't join strictly with a Patient entity table here to keep services decoupled (Microservices pattern),
-   * but we store the ID to know who booked it.
+   * Decoupled reference to maintain microservices independence.
    */
-  @ApiProperty({ example: 'student-uuid...', description: 'Student User ID (Auth)' })
+  @ApiProperty({ example: 'student-uuid...', description: 'Student User ID (Auth System)' })
   @Column({ name: 'student_user_id' })
   studentId: string;
 
@@ -56,6 +57,14 @@ export class Appointment {
     default: AppointmentStatus.SCHEDULED 
   })
   status: AppointmentStatus;
+
+  /**
+   * Clinical notes added by the nurse during the triage process.
+   * Stores vital signs or preliminary observations.
+   */
+  @ApiProperty({ example: 'BP: 120/80, Weight: 70kg, No fever.', description: 'Triage notes added by the nurse' })
+  @Column({ name: 'nurse_notes', type: 'text', nullable: true })
+  nurseNotes: string;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

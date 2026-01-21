@@ -8,7 +8,6 @@ import { AppModule } from './app/app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   
-  // 0. Configuration Service Extraction
   const configService = app.get(ConfigService);
 
   // 1. API Versioning & Prefix

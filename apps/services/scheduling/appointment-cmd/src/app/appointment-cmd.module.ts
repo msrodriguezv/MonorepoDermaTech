@@ -3,51 +3,33 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { CqrsModule } from '@nestjs/cqrs';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ClientsModule, Transport } from '@nestjs/microservices';
-
-// Shared Library Import (Security & Guards)
+ 
 import { SharedAuthModule } from '@dermatech/shared-guards';
-
-// Local Entities
 import { Doctor } from './entities/doctor.entity';
 import { Appointment } from './entities/appointment.entity';
-
-// Controllers (Entry Points)
 import { DoctorController } from './controllers/doctor.controller';
 import { AppointmentController } from './controllers/appointment.controller';
-
-// Command Handlers (Business Logic / Write Model)
 import { BookAppointmentHandler } from './cqrs/commands/handlers/book-appointment.handler';
 import { CreateDoctorHandler } from './cqrs/commands/handlers/create-doctor.handler';
-
-// Event Handlers (Infrastructure Bridge / Kafka Producer)
+import { TriagePatientHandler } from './cqrs/commands/handlers/triage-patient.handler'; 
+import { GetClinicalQueueHandler } from './cqrs/queries/handlers/get-clinical-queue.handler'; 
+// --- EVENT HANDLERS (Infrastructure Bridge) ---
 import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish-appointment-created.handler';
 
-/**
- * AppointmentCmdModule
- * * Responsibility: 
- * - Orchestrates the "Write Side" of the Scheduling Domain.
- * - Configures Database persistence (Postgres).
- * - Configures Message Broker connection (Kafka).
- * - Registers CQRS Handlers (Commands & Events).
- */
+
 @Module({
   imports: [
-    // 1. Global Configuration
-    // Loads environment variables from the specific service file
     ConfigModule.forRoot({ 
       isGlobal: true,
-      //envFilePath: 'apps/services/scheduling/appointment-cmd/.env',
     }),
 
-    // 2. Architecture & Security Layers
-    CqrsModule,       // Enables Command/Event Bus
+    CqrsModule,       // Enables Command/Event/Query Bus
     SharedAuthModule, // Imports JWT Strategies and Guards
 
     // 3. Kafka Configuration (Event Output)
-    // Registers the Kafka Client to emit Integration Events (e.g., to Availability Query Service)
     ClientsModule.registerAsync([
       {
-        name: 'KAFKA_SERVICE_APPOINTMENT', // Injection Token used in PublishAppointmentCreatedHandler
+        name: 'KAFKA_SERVICE_APPOINTMENT', 
         imports: [ConfigModule],
         inject: [ConfigService],
         useFactory: (config: ConfigService) => ({
@@ -59,7 +41,7 @@ import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish
               retry: { retries: 10, initialRetryTime: 300 },
             },
             producer: {
-              idempotent: true, // not duplicates
+              idempotent: true, 
               allowAutoTopicCreation: config.get<string>('NODE_ENV') !== 'production',
             },
             consumer: {
@@ -73,7 +55,6 @@ import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish
     ]),
 
     // 4. Database Persistence Layer
-    // Asynchronous configuration ensures Env Vars are loaded before connection
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -85,7 +66,7 @@ import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish
         password: config.get<string>('DB_PASSWORD', 'DermaTechTesis2025PS'),
         database: config.get<string>('DB_NAME', 'postgres'),
         autoLoadEntities: true,
-        synchronize: true, // WARNING: Set to false in Production
+        synchronize: true, 
       }),
     }),
     
@@ -94,12 +75,16 @@ import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish
   ],
   controllers: [
     DoctorController, 
-    AppointmentController
+    AppointmentController // Contains the endpoints for Triage and Queues
   ],
   providers: [
-    // --- Command Handlers (Input Logic) ---
+    // --- Command Handlers (Input Logic / Write) ---
     CreateDoctorHandler, 
     BookAppointmentHandler,
+    TriagePatientHandler,  
+
+    // --- Query Handlers (Read Logic / Views) ---
+    GetClinicalQueueHandler,  
 
     // --- Event Handlers (Output Logic / Bridge) ---
     PublishAppointmentCreatedHandler 
