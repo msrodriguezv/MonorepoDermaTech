@@ -6,7 +6,7 @@
 # ==============================================================================
 
 # ==============================================================================
-# 1. SSH KEY PAIR (INJECTED FOR GITHUB ACTIONS)
+# 1. SSH KEY PAIR
 # ==============================================================================
 resource "aws_key_pair" "deployer" {
   key_name   = "clave-maestra-final-v2"
@@ -14,16 +14,19 @@ resource "aws_key_pair" "deployer" {
 }
 
 # ==============================================================================
-# 2. SECURITY GROUP
+# 2. SECURITY GROUP (CORREGIDO)
 # ==============================================================================
 resource "aws_security_group" "state_sg" {
   name        = "${var.project_name}-${var.environment}-sg"
   description = "Security Group for State & Monitoring"
   vpc_id      = var.vpc_id
 
-  # Admin Access (SSH) 
+  # ----------------------------------------------------------------------------
+  # REGLA BLINDADA: SSH DESDE BASTION (INTERNAL PEERING)
+  # Usamos var.gateway_allowed_ip que contiene la IP privada del Bastion (10.0.1.59)
+  # ----------------------------------------------------------------------------
   ingress {
-    description = "Allow SSH from QA Bastion (Internal Peering)"
+    description = "Allow SSH strictly from QA Bastion via Peering"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
@@ -32,12 +35,14 @@ resource "aws_security_group" "state_sg" {
 
   # Monitoring UI Access (Grafana 3000, Prometheus 9090) from QA Bastion only
   ingress {
+    description = "Allow Grafana UI from QA Bastion"
     from_port   = 3000
     to_port     = 3000
     protocol    = "tcp"
     cidr_blocks = [var.gateway_allowed_ip] 
   }
   ingress {
+    description = "Allow Prometheus UI from QA Bastion"
     from_port   = 9090
     to_port     = 9090
     protocol    = "tcp"
@@ -52,6 +57,7 @@ resource "aws_security_group" "state_sg" {
     cidr_blocks = var.app_nodes_ips
   }
 
+  # Outbound Traffic (Allow All)
   egress {
     from_port   = 0
     to_port     = 0
@@ -63,15 +69,14 @@ resource "aws_security_group" "state_sg" {
 }
 
 # ==============================================================================
-# 3. DATA SOURCE: ELASTIC IP (BLINDADO POR ID)
-# Terraform reads the existing IP. It will NEVER destroy it.
+# 3. DATA SOURCE: ELASTIC IP
 # ==============================================================================
 data "aws_eip" "state_eip" {
   id = var.eip_allocation_id
 }
 
 # ==============================================================================
-# 4. PERSISTENT STORAGE (10GB)
+# 4. PERSISTENT STORAGE (10GB) - PROTEGIDO
 # ==============================================================================
 resource "aws_ebs_volume" "state_data_volume" {
   availability_zone = var.availability_zone
@@ -97,28 +102,21 @@ resource "aws_instance" "state_worker" {
   instance_type     = "t3.large" 
   subnet_id         = var.public_subnet_id
   
-  # CRITICAL: Use the injected Key Pair
   key_name          = aws_key_pair.deployer.key_name
-  
-  # CRITICAL: Fixed Private IP (10.2.1.100)
   private_ip        = var.private_ip_address
-  
   availability_zone = var.availability_zone
   
   vpc_security_group_ids      = [aws_security_group.state_sg.id]
   user_data_replace_on_change = true
 
-  # ROOT VOLUME (25GB for Docker/System)
   root_block_device {
-    volume_size           = 25
-    volume_type           = "gp3"
+    volume_size            = 25
+    volume_type            = "gp3"
     delete_on_termination = true
   }
 
   tags = { Name = "${var.project_name}-${var.environment}-server" }
 
-  # MINIMAL USER DATA: Only OS prep, Docker install, and Disk mount.
-  # Service orchestration is handled by GitHub Actions.
   user_data = <<-EOF
     #!/bin/bash
     set -e
@@ -130,7 +128,7 @@ resource "aws_instance" "state_worker" {
     systemctl enable docker
     usermod -aG docker ec2-user
 
-    # --- SWAP SETUP (Crucial for Prometheus/Java stability) ---
+    # --- SWAP SETUP ---
     dd if=/dev/zero of=/swapfile bs=128M count=32
     chmod 600 /swapfile
     mkswap /swapfile
@@ -138,7 +136,6 @@ resource "aws_instance" "state_worker" {
     echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
 
     # --- PERSISTENT DISK MOUNTING ---
-    # Detect if it's nvme1n1 (Nitro) or xvdf (Legacy)
     if [ -e /dev/nvme1n1 ]; then
       DATA_DISK="/dev/nvme1n1"
     else
@@ -146,10 +143,8 @@ resource "aws_instance" "state_worker" {
     fi
     MOUNT_POINT="/data"
     
-    # Wait for disk
     while [ ! -b $DATA_DISK ]; do echo "Waiting for disk $DATA_DISK..."; sleep 5; done
     
-    # Only format if new (Protects Data)
     if ! blkid $DATA_DISK; then 
       mkfs -t xfs $DATA_DISK
     fi
@@ -161,12 +156,9 @@ resource "aws_instance" "state_worker" {
       echo "$DATA_DISK $MOUNT_POINT xfs defaults,nofail 0 2" >> /etc/fstab
     fi
     
-    # --- DIRECTORIES & PERMISSIONS ---
-    # Ensure directories exist so Docker doesn't create them with root:root
+    # --- DIRECTORIES ---
     mkdir -p $MOUNT_POINT/redis_data $MOUNT_POINT/prometheus_data $MOUNT_POINT/grafana_data $MOUNT_POINT/prometheus_config
     
-    # Set permissive permissions to avoid Docker boot loops on persistent volumes
-    # (Acceptable for this specific academic context to allow rapid GH Actions deployment)
     chmod -R 777 $MOUNT_POINT
 
     echo "✅ Instance Ready for GitHub Actions Deployment"
