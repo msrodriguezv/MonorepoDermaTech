@@ -54,6 +54,6 @@ async function bootstrap() {
   const PORT = process.env.PORT || 3000;
   await app.listen(PORT);
   
-  logger.log(`🚀 API Gateway running on port ${PORT}`);
+  logger.log(`🚀 API Gateway FINAL FIX running on port ${PORT}`);
 }
 bootstrap();
