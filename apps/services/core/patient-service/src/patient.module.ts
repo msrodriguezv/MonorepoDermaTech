@@ -11,7 +11,6 @@ import { PatientEventController } from './patient/controllers/patient-event.cont
 
 // Domain Services (Business Logic)
 import { PatientService } from './patient/services/patient.service';
-import { StorageService } from './patient/integration/storage.service';
 
 // CQRS Handlers (Application Layer)
 import { CreatePatientRootHandler } from './patient/cqrs/commands/handlers/create-patient-root.handler';
@@ -55,7 +54,6 @@ export const QueryHandlers = [
   providers: [
     // Domain Services
     PatientService,
-    StorageService,
     // --- QUERY HANDLERS ---
     GetPatientProfileHandler,
     GetAllPatientsHandler,

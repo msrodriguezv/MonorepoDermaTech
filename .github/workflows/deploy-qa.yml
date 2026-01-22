@@ -461,12 +461,12 @@ jobs:
                   - KAFKA_GROUP_ID=${{ secrets.KAFKA_GROUP_ID }}
                   - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
                   - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
-                  - DATABASE_PORT=${{ secrets.DATABASE_PORT }}
-                  - DATABASE_HOST=${{ secrets.DATABASE_HOST }}
-                  - DATABASE_USER=${{ secrets.DATABASE_USER }}
-                  - DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
-                  - DATABASE_NAME=${{ secrets.DATABASE_NAME }}
-                  - DATABASE_SYNC=${{ secrets.DATABASE_SYNC }}
+                  - DB_PORT=${{ secrets.DATABASE_PORT }}
+                  - DB_HOST=${{ secrets.DATABASE_HOST }}
+                  - DB_USER=${{ secrets.DATABASE_USER }}
+                  - DB_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+                  - DB_NAME=${{ secrets.DATABASE_NAME }}
+                  - DB_SYNC=${{ secrets.DATABASE_SYNC }}
                   
             EOF
             sudo docker compose pull
