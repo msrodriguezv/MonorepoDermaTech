@@ -7,7 +7,7 @@ terraform {
 }
 
 # ==============================================================================
-# PROVIDERS CONFIGURATION (MULTI-ACCOUNT ORCHESTRATION)
+# PROVIDERS CONFIGURATION (PROD MULTI-ACCOUNT)
 # ==============================================================================
 
 # 1. Default Provider (PROD Hub Account)
@@ -48,8 +48,7 @@ locals {
   project_name = "dermatech"
   environment  = "prod"
   ami_id       = "ami-051f7e7f6c2f40dc1" # Amazon Linux 2023
-   
-  # Validation: Ensure all VPC IDs are present before attempting peerings
+  
   deploy_connectivity = (
     var.events_vpc_id != "" &&
     var.state_vpc_id != "" &&
@@ -66,14 +65,11 @@ module "networking" {
   region             = "us-east-1"
   project_name       = local.project_name
   environment        = local.environment
-  vpc_cidr           = var.prod_cidr              
+  vpc_cidr           = var.prod_cidr             
   public_subnet_cidr = "10.0.1.0/24"
   availability_zone  = "us-east-1a"            
 }
 
-# --- SURGICAL ADDITION: SECONDARY SUBNET FOR ALB COMPLIANCE ---
-# Note: AWS ALB requires at least two subnets in different AZs within the Hub VPC.
-# Using variable injection to maintain consistency with global networking ranges.
 resource "aws_subnet" "public_b_alb" {
   vpc_id                  = module.networking.vpc_id
   cidr_block              = var.prod_public_subnet_b_cidr
@@ -92,22 +88,23 @@ resource "aws_route_table_association" "public_b_assoc" {
 }
 
 # ==============================================================================
-# 2. GATEWAY / BASTION LAYER
+# 2. GATEWAY / BASTION LAYER (PROD DATA INJECTED)
 # ==============================================================================
 module "gateway" {
-  source             = "../../modules/aws-gateway-node"
-  project_name       = local.project_name
-  environment        = local.environment
-  vpc_id             = module.networking.vpc_id
-  ami_id             = local.ami_id
-  public_subnet_id   = module.networking.public_subnet_id
-  availability_zone  = "us-east-1a"
+  source              = "../../modules/aws-gateway-node"
+  project_name        = local.project_name
+  environment         = local.environment
+  vpc_id              = module.networking.vpc_id
+  ami_id              = local.ami_id
+  public_subnet_id    = module.networking.public_subnet_id
+  availability_zone   = "us-east-1a"
 
-  # Fixed Private IP for Internal Network Consistency
-  bastion_private_ip = "10.0.1.59"
-   
-  # Shielded Elastic IP (Cloudflare) - PROD ID
-  eip_allocation_id  = "eipalloc-054a2c5b06cb85f2f"
+  # Prod Networking Data
+  bastion_private_ip  = "10.0.1.59"
+  eip_allocation_id   = "eipalloc-054a2c5b06cb85f2f"
+
+  # Hybrid Bridge Connection
+  alb_dns_name        = aws_lb.main_alb.dns_name 
 }
 
 # ==============================================================================
@@ -425,7 +422,6 @@ resource "aws_route" "state_to_node_b" {
 
 # ==============================================================================
 # 7. MASTER PROXY LAYER (APPLICATION LOAD BALANCER)
-# Purpose: Orchestrates cross-account traffic and resolves frontend connectivity.
 # ==============================================================================
 
 # A. SECURITY GROUP FOR ALB
@@ -459,7 +455,7 @@ resource "aws_lb" "main_alb" {
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
-   
+  
   # References both Hub Subnets to satisfy Multi-AZ requirements.
   subnets            = [module.networking.public_subnet_id, aws_subnet.public_b_alb.id]
 
@@ -467,13 +463,12 @@ resource "aws_lb" "main_alb" {
 }
 
 # C. TARGET GROUPS (CROSS-ACCOUNT ROUTING VIA IP)
-# Node A and B Frontend (Port 80)
 resource "aws_lb_target_group" "frontend" {
   name        = "tg-prod-frontend"
   port        = 80
   protocol    = "HTTP"
   vpc_id      = module.networking.vpc_id
-  target_type = "ip" # Required for peering IP target routing
+  target_type = "ip"
 
   health_check {
     path = "/health"
@@ -481,7 +476,6 @@ resource "aws_lb_target_group" "frontend" {
   }
 }
 
-# Node A and B API Gateway (Port 3000)
 resource "aws_lb_target_group" "api" {
   name        = "tg-prod-api-gateway"
   port        = 3000
@@ -501,14 +495,12 @@ resource "aws_lb_listener" "http" {
   port              = "80"
   protocol          = "HTTP"
 
-  # Default: Forward to Flutter Frontend
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.frontend.arn
   }
 }
 
-# API Routing Rule (Path-based)
 resource "aws_lb_listener_rule" "api_routing" {
   listener_arn = aws_lb_listener.http.arn
   priority     = 10
@@ -525,21 +517,18 @@ resource "aws_lb_listener_rule" "api_routing" {
   }
 }
 
-# E. TARGET ATTACHMENTS (MAPPING NODES BY PRIVATE IP)
-# These link the ALB in PROD with the Servers in Node A/B via Peering
+# E. TARGET ATTACHMENTS (PROD NODES)
 resource "aws_lb_target_group_attachment" "node_a_web" {
   target_group_arn  = aws_lb_target_group.frontend.arn
-  target_id         = "10.3.1.10" # Node A Private IP (Prod)
+  target_id         = "10.3.1.10" # Node A PROD IP
   port              = 80
-  # REQUIRED for Peered VPC Targets:
   availability_zone = "all"
 }
 
 resource "aws_lb_target_group_attachment" "node_b_web" {
   target_group_arn  = aws_lb_target_group.frontend.arn
-  target_id         = "10.4.1.10" # Node B Private IP (Prod)
+  target_id         = "10.4.1.10" # Node B PROD IP
   port              = 80
-  # REQUIRED for Peered VPC Targets:
   availability_zone = "all"
 }
 
@@ -547,7 +536,6 @@ resource "aws_lb_target_group_attachment" "node_a_api" {
   target_group_arn  = aws_lb_target_group.api.arn
   target_id         = "10.3.1.10"
   port              = 3000
-  # REQUIRED for Peered VPC Targets:
   availability_zone = "all"
 }
 
@@ -555,6 +543,5 @@ resource "aws_lb_target_group_attachment" "node_b_api" {
   target_group_arn  = aws_lb_target_group.api.arn
   target_id         = "10.4.1.10"
   port              = 3000
-  # REQUIRED for Peered VPC Targets:
   availability_zone = "all"
 }

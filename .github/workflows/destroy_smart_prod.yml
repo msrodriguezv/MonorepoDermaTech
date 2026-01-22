@@ -1,0 +1,87 @@
+name: "PROD: SMART RECYCLE (Instances EC2 Only - Preserve Network)"
+
+on:
+  # push:
+  #   branches: [ developer ]
+  workflow_dispatch:
+
+jobs:
+  recycle-compute-only:
+    name: Recycle PROD Instances (Keep Network Alive)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Restore Credentials (PROD)
+        run: |
+          mkdir -p ~/.aws
+          # Usamos el secreto de producción para las credenciales
+          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+
+      # ------------------------------------------------------------------------
+      # SOLO BORRAMOS LAS INSTANCIAS (Capa de Cómputo)
+      # Se protegen VPC, ALB, Peerings y Gateways de Producción
+      # ------------------------------------------------------------------------
+      
+      - name: 🔥 Terminate Instances (PROD Hub & Spokes)
+        run: |
+          echo "♻️ Iniciando Reciclaje de Computo en PRODUCCIÓN (Smart Mode)..."
+          
+          # Lista de perfiles de PRODUCCIÓN proporcionados
+          PROD_PROFILES="prod-dermatech prod-events-dermatech prod-state-dermatech prod-node-a-dermatech prod-node-b-dermatech"
+          
+          for profile in $PROD_PROFILES; do
+            echo "------------------------------------------------"
+            echo "🔎 Buscando instancias en perfil: $profile"
+            
+            # Buscar IDs de instancias que NO estén terminadas (running, stopped, etc.)
+            ids=$(aws ec2 describe-instances \
+              --profile $profile \
+              --region us-east-1 \
+              --filters "Name=instance-state-name,Values=running,stopped,stopping,pending" \
+              --query 'Reservations[*].Instances[*].InstanceId' \
+              --output text 2>/dev/null || echo "")
+            
+            if [ -n "$ids" ] && [ "$ids" != "None" ]; then
+              echo " ☠️ INSTANCIAS DETECTADAS: $ids"
+              echo " 💀 Terminando instancias en $profile..."
+              aws ec2 terminate-instances \
+                --profile $profile \
+                --region us-east-1 \
+                --instance-ids $ids
+            else
+              echo " ✅ No hay instancias activas para reciclar en $profile."
+            fi
+          done
+          
+          echo "------------------------------------------------"
+          echo "⏳ Esperando 15s para que AWS actualice los estados..."
+          sleep 15
+          echo "🎉 RECICLAJE DE PRODUCCIÓN COMPLETADO."
+          echo "🌐 NOTA: La infraestructura de Red y el Load Balancer siguen intactos."
+
+  # ============================================================================
+  # AUDITORÍA DE VERIFICACIÓN
+  # ============================================================================
+  verify-prod-status:
+    name: Verify PROD Persistence
+    needs: [recycle-compute-only]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restore Credentials (PROD)
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+
+      - name: 🔍 Audit Resources
+        run: |
+          echo "📊 Resumen de Recursos en Producción tras Reciclaje:"
+          PROD_PROFILES="prod-dermatech prod-events-dermatech prod-state-dermatech prod-node-a-dermatech prod-node-b-dermatech"
+          
+          for profile in $PROD_PROFILES; do
+            echo "Account: $profile"
+            vpc_count=$(aws ec2 describe-vpcs --profile $profile --region us-east-1 --query 'length(Vpcs[?!IsDefault])' 2>/dev/null || echo "0")
+            instance_count=$(aws ec2 describe-instances --profile $profile --region us-east-1 --filters "Name=instance-state-name,Values=running,pending" --query 'length(Reservations[*].Instances[*])' 2>/dev/null || echo "0")
+            echo "   VPCs Activas: $vpc_count (Debe ser > 0)"
+            echo "   EC2 Activas:  $instance_count (Debe ser 0)"
+          done

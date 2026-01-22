@@ -14,7 +14,7 @@ output "route_table_id" {
 }
 
 output "state_public_ip" { 
-  description = "Elastic IP attached to the State Server"
+  description = "Elastic IP attached to the State Server (PROD)"
   value       = module.compute.public_ip 
 }
 

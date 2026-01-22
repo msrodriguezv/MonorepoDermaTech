@@ -1,6 +1,6 @@
 # ==============================================================================
 # MODULE VARIABLES: AWS COMPUTE APP
-# Context: Application Workers (Node A & Node B)
+# Context: Application Workers (Node A & Node B) - PROD
 # ==============================================================================
 
 variable "region" {
@@ -40,7 +40,7 @@ variable "private_ip_address" {
 }
 
 variable "gateway_allowed_ip" {
-  description = "The Elastic IP (CIDR) of the Gateway/Bastion (QA or PROD)"
+  description = "The Elastic IP (CIDR) of the QA or PROD Gateway/Bastion"
   type        = string
 }
 

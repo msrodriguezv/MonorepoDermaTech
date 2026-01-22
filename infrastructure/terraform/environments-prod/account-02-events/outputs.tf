@@ -14,7 +14,7 @@ output "route_table_id" {
 }
 
 output "events_public_ip" { 
-  description = "Elastic IP attached to the Messaging Server"
+  description = "Elastic IP attached to the Messaging Server (PROD)"
   value       = module.compute.public_ip 
 }
 

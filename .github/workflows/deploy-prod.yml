@@ -1,63 +1,67 @@
-name: "PROD: TURBO DEPLOY DermaTech Global Infrastructure"
+name: "PROD: V2. TURBO DEPLOY DermaTech Global Infrastructure"
 
 on:
-  #push:
-    # branches: [ developer ]
+  push:
+    branches: [ qa ]
   workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1
-  # --- PROD PUBLIC IPS (SSH Access GitHub -> EC2) ---
-  EVENTS_PUBLIC_IP: 72.44.33.174
-  STATE_PUBLIC_IP: 3.230.129.119
-  NODE_A_PUBLIC_IP: 3.86.75.213
-  NODE_B_PUBLIC_IP: 54.173.181.79
   
-  # --- PROD PRIVATE IPS (Internal Service Communication) ---
-  # Espejo de las IPs privadas de QA pero en la red de Prod
+  # ============================================================================
+  # NETWORKING CONFIGURATION (PROD ENVIRONMENT)
+  # ============================================================================
+  
+  # PROD BASTION HOST
+  PROD_BASTION_PUBLIC_IP: 100.50.124.78
+
+  # PROD PRIVATE IPs (Internal Targets)
   EVENTS_PRIVATE_IP: 10.1.1.50
   STATE_PRIVATE_IP: 10.2.1.60
+  NODE_A_PRIVATE_IP: 10.3.1.10
+  NODE_B_PRIVATE_IP: 10.4.1.10
 
 jobs:
   # ============================================================================
-  # TRACK A: INFRASTRUCTURE (TERRAFORM)
+  # DIAGNÓSTICO: Verificar conectividad SSH
   # ============================================================================
-
-  cleanup:
-    name: Force Cleanup Orphaned Resources
+  
+  test-bastion-connection:
+    name: 🔍 Test Bastion SSH Connection (PROD)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - name: Restore Credentials (PROD)
+      - name: Check Bastion Reachability
         run: |
-          mkdir -p ~/.aws
-          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
-      - name: Delete All VPC Peering Connections
+          echo "🔍 Testing connection to PROD bastion: ${{ env.PROD_BASTION_PUBLIC_IP }}"
+          
+          # Test if port 22 is open
+          timeout 10 bash -c "cat < /dev/null > /dev/tcp/${{ env.PROD_BASTION_PUBLIC_IP }}/22" && echo "✅ Port 22 is OPEN" || echo "❌ Port 22 is CLOSED or FILTERED"
+          
+          # Show GitHub Actions runner IP
+          echo "📍 GitHub Runner IP:"
+          curl -s https://api.ipify.org
+          echo ""
+          
+      - name: Test SSH Connection (verbose)
         run: |
-          for profile in prod-dermatech prod-events-dermatech prod-state-dermatech prod-node-a-dermatech prod-node-b-dermatech; do
-            echo "🧹 Cleaning peerings for profile: $profile"
-            peering_ids=$(aws ec2 describe-vpc-peering-connections --profile $profile --region us-east-1 --filters "Name=status-code,Values=active,pending-acceptance" --query 'VpcPeeringConnections[*].VpcPeeringConnectionId' --output text 2>/dev/null || echo "")
-            for id in $peering_ids; do
-              echo "  ❌ Deleting peering: $id"
-              aws ec2 delete-vpc-peering-connection --profile $profile --region us-east-1 --vpc-peering-connection-id $id || true
-            done
-          done
-      - name: Delete Network Interfaces (ENIs)
-        run: |
-          for profile in prod-dermatech prod-events-dermatech prod-state-dermatech prod-node-a-dermatech prod-node-b-dermatech; do
-            echo "🧹 Cleaning ENIs for: $profile"
-            eni_ids=$(aws ec2 describe-network-interfaces --profile $profile --region us-east-1 --query 'NetworkInterfaces[?Status==`available`].NetworkInterfaceId' --output text 2>/dev/null || echo "")
-            for id in $eni_ids; do
-              echo "  ❌ Deleting ENI: $id"
-              aws ec2 delete-network-interface --profile $profile --region us-east-1 --network-interface-id $id || true
-            done
-          done
-      - name: Wait for AWS Propagation
-        run: sleep 30
+          # Create SSH key file
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
+          chmod 600 ~/.ssh/bastion_key
+          
+          # Test SSH with verbose output
+          ssh -vvv -i ~/.ssh/bastion_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=10 \
+            ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} \
+            "echo '✅ SSH CONNECTION SUCCESSFUL TO PROD BASTION'" || echo "❌ SSH FAILED"
+
+  # ============================================================================
+  # TRACK A: INFRASTRUCTURE (TERRAFORM - PERSISTENT ARCHITECTURE)
+  # ============================================================================
 
   base-layer:
-    name: Deploy Base (${{ matrix.account }})
-    needs: cleanup
+    name: Deploy Base PROD (${{ matrix.account }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -85,15 +89,11 @@ jobs:
         run: |
           cd infrastructure/terraform/environments-prod/${{ matrix.path }}
           terraform init -reconfigure
-          if ! terraform apply -auto-approve; then
-            echo "⚠️ First attempt failed. Executing destroy..."
-            terraform destroy -auto-approve || true
-            sleep 20
-            terraform apply -auto-approve
-          fi
+          terraform apply -auto-approve
+          
           VPC_ID=$(terraform output -raw vpc_id)
           echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
-          echo "✅ VPC Created: $VPC_ID"
+          echo "✅ VPC Verified/Created in PROD: $VPC_ID"
       - name: Upload VPC ID Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -102,7 +102,7 @@ jobs:
           retention-days: 1
 
   nodes-layer:
-    name: Deploy Node (${{ matrix.account }})
+    name: Deploy Node PROD (${{ matrix.account }})
     needs: base-layer
     runs-on: ubuntu-latest
     strategy:
@@ -131,15 +131,11 @@ jobs:
         run: |
           cd infrastructure/terraform/environments-prod/${{ matrix.path }}
           terraform init -reconfigure
-          if ! terraform apply -auto-approve; then
-            echo "⚠️ First attempt failed. Executing destroy..."
-            terraform destroy -auto-approve || true
-            sleep 20
-            terraform apply -auto-approve
-          fi
+          terraform apply -auto-approve
+          
           VPC_ID=$(terraform output -raw vpc_id)
           echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
-          echo "✅ VPC Created: $VPC_ID"
+          echo "✅ VPC Verified/Created in PROD: $VPC_ID"
       - name: Upload VPC ID Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -184,24 +180,17 @@ jobs:
         run: |
           cd infrastructure/terraform/environments-prod/account-01-prod
           terraform init -reconfigure
-          if ! terraform apply -auto-approve \
+          
+          terraform apply -auto-approve \
             -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
             -var="state_vpc_id=${{ env.VPC_STATE }}" \
             -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
-            -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"; then
-            echo "⚠️ First attempt failed. Executing destroy..."
-            terraform destroy -auto-approve -var="events_vpc_id=null" -var="state_vpc_id=null" -var="node_a_vpc_id=null" -var="node_b_vpc_id=null" || true
-            sleep 20
-            terraform apply -auto-approve \
-              -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
-              -var="state_vpc_id=${{ env.VPC_STATE }}" \
-              -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
-              -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
-          fi
-          # --- EXTRACT ALB DNS FOR FINAL OUTPUT ---
+            -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
+
           ALB_DNS=$(terraform output -raw PROD_ALB_DNS_NAME)
           echo "ALB_URL=$ALB_DNS" > alb_dns.txt
-          echo "🎉 GLOBAL INFRASTRUCTURE SUCCESSFULLY DEPLOYED (PROD)"
+          echo "🎉 GLOBAL PROD INFRASTRUCTURE SUCCESSFULLY DEPLOYED"
+          echo "::notice title=PROD ALB DNS::The Load Balancer DNS is: $ALB_DNS"
       - name: Upload ALB DNS Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -213,7 +202,7 @@ jobs:
   # ============================================================================
 
   compile-code:
-    name: 🛠️ Compile Source Code
+    name: 🛠️ Compile Source Code (PROD)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -229,15 +218,14 @@ jobs:
       - name: Build Flutter Web
         run: |
           cd apps/clients/mobile_app
-          # INJECT INTERNAL API ROUTE (PROD)
-          flutter build web --release --dart-define=API_URL=/api
+          flutter build web --release --dart-define=API_URL=/api/v1
       - uses: actions/upload-artifact@v4
         with: { name: 'dist-files', path: 'dist', retention-days: 1 }
       - uses: actions/upload-artifact@v4
         with: { name: 'flutter-build', path: 'apps/clients/mobile_app/build/web', retention-days: 1 }
 
   docker-build:
-    name: 🐳 Docker Build & Push
+    name: 🐳 Docker Build & Push (PROD)
     needs: compile-code
     runs-on: ubuntu-latest
     strategy:
@@ -272,180 +260,299 @@ jobs:
           tags: ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:latest
 
   # ============================================================================
-  # TRACK C: INSTALLATION & DEPLOYMENT (SEQUENTIAL START)
+  # TRACK C: INSTALLATION & DEPLOYMENT (SECURE BASTION TUNNELING)
   # ============================================================================
 
   deploy-events:
-    name: 🚀 Deploy Events (Kafka)
-    needs: [prod-hub]
+    name: 🚀 Deploy Events (Via PROD Bastion)
+    needs: [prod-hub, test-bastion-connection]
     runs-on: ubuntu-latest
     steps:
-      - uses: appleboy/ssh-action@master
-        with:
-          # Usamos IP Pública de PROD
-          host: ${{ env.EVENTS_PUBLIC_IP }}
-          username: ec2-user
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: EVENTS_PRIVATE_IP, RABBITMQ_PASS
-          script: |
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
+          chmod 600 ~/.ssh/bastion_key
+          
+      - name: Deploy via SSH Tunnel
+        run: |
+          cat > ~/.ssh/config <<EOF
+          Host bastion
+            HostName ${{ env.PROD_BASTION_PUBLIC_IP }}
+            User ec2-user
+            IdentityFile ~/.ssh/bastion_key
+            StrictHostKeyChecking no
+            
+          Host events-server
+            HostName ${{ env.EVENTS_PRIVATE_IP }}
+            User ec2-user
+            IdentityFile ~/.ssh/bastion_key
+            ProxyJump bastion
+            StrictHostKeyChecking no
+          EOF
+          
+          ssh events-server << 'ENDSSH'
+            echo "✅ SECURITY CHECK: Connected via PROD Bastion Tunnel"
+            
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            
             sudo mkdir -p /data/kafka /data/zookeeper /data/rabbitmq /data/mosquitto/config
             sudo chmod -R 777 /data
+            
             echo "listener 1883" | sudo tee /data/mosquitto/config/mosquitto.conf
             echo "allow_anonymous true" | sudo tee -a /data/mosquitto/config/mosquitto.conf
 
-            cat <<EOF > docker-compose.yml
-            version: '3.8'
-            services:
-              zookeeper:
-                image: confluentinc/cp-zookeeper:7.5.0
-                restart: always
-                environment: { ZOOKEEPER_CLIENT_PORT: 2181 }
-                volumes: ["/data/zookeeper:/var/lib/zookeeper/data"]
-                networks: [infra_net]
-              kafka:
-                image: confluentinc/cp-kafka:7.5.0
-                restart: always
-                depends_on: [zookeeper]
-                ports: ["9092:9092"]
-                volumes: ["/data/kafka:/var/lib/kafka/data"]
-                environment:
-                  KAFKA_BROKER_ID: 1
-                  KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-                  KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
-                  # USAMOS LA IP PRIVADA DE PROD
-                  KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${EVENTS_PRIVATE_IP}:9092
-                  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-                networks: [infra_net]
-              rabbitmq:
-                image: rabbitmq:3.12-management-alpine
-                restart: always
-                ports: ["5672:5672", "15672:15672"]
-                volumes: ["/data/rabbitmq:/var/lib/rabbitmq"]
-                environment:
-                  RABBITMQ_DEFAULT_USER: admin
-                  RABBITMQ_DEFAULT_PASS: ${{ secrets.RABBITMQ_PASS }}
-                networks: [infra_net]
-              mosquitto:
-                image: eclipse-mosquitto:2.0
-                restart: always
-                ports: ["1883:1883", "9001:9001"]
-                volumes: ["/data/mosquitto/config:/mosquitto/config"]
-                networks: [infra_net]
-            networks:
-              infra_net:
-                driver: bridge
-            EOF
+            cat > docker-compose.yml <<'EOF'
+          version: '3.8'
+          services:
+            zookeeper:
+              image: confluentinc/cp-zookeeper:7.5.0
+              restart: always
+              environment: 
+                ZOOKEEPER_CLIENT_PORT: 2181
+              volumes: 
+                - /data/zookeeper:/var/lib/zookeeper/data
+              networks: 
+                - infra_net
+                
+            kafka:
+              image: confluentinc/cp-kafka:7.5.0
+              restart: always
+              depends_on: 
+                - zookeeper
+              ports: 
+                - "9092:9092"
+              volumes: 
+                - /data/kafka:/var/lib/kafka/data
+              environment:
+                KAFKA_BROKER_ID: 1
+                KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+                KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+                KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${{ env.EVENTS_PRIVATE_IP }}:9092
+                KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+              networks: 
+                - infra_net
+                
+            rabbitmq:
+              image: rabbitmq:3.12-management-alpine
+              restart: always
+              ports: 
+                - "5672:5672"
+                - "15672:15672"
+              volumes: 
+                - /data/rabbitmq:/var/lib/rabbitmq
+              environment:
+                RABBITMQ_DEFAULT_USER: admin
+                RABBITMQ_DEFAULT_PASS: ${{ secrets.RABBITMQ_PASS }}
+              networks: 
+                - infra_net
+                
+            mosquitto:
+              image: eclipse-mosquitto:2.0
+              restart: always
+              ports: 
+                - "1883:1883"
+                - "9001:9001"
+              volumes: 
+                - /data/mosquitto/config:/mosquitto/config
+              networks: 
+                - infra_net
+                
+          networks:
+            infra_net:
+              driver: bridge
+          EOF
+            
             sudo docker compose up -d
+            echo "✅ Events PROD services deployed successfully"
+          ENDSSH
 
   deploy-state:
-    name: 🚀 Deploy State (Redis)
-    needs: [prod-hub]
+    name: 🚀 Deploy State (Via PROD Bastion)
+    needs: [prod-hub, test-bastion-connection]
     runs-on: ubuntu-latest
     steps:
-      - uses: appleboy/ssh-action@master
-        with:
-          # Usamos IP Pública de PROD
-          host: ${{ env.STATE_PUBLIC_IP }}
-          username: ec2-user
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
+          chmod 600 ~/.ssh/bastion_key
+          
+      - name: Deploy via SSH Tunnel
+        run: |
+          cat > ~/.ssh/config <<EOF
+          Host bastion
+            HostName ${{ env.PROD_BASTION_PUBLIC_IP }}
+            User ec2-user
+            IdentityFile ~/.ssh/bastion_key
+            StrictHostKeyChecking no
+            
+          Host state-server
+            HostName ${{ env.STATE_PRIVATE_IP }}
+            User ec2-user
+            IdentityFile ~/.ssh/bastion_key
+            ProxyJump bastion
+            StrictHostKeyChecking no
+          EOF
+          
+          ssh state-server << 'ENDSSH'
+            echo "✅ SECURITY CHECK: Connected via PROD Bastion Tunnel"
+            
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
             sudo mkdir -p /data/redis /data/grafana /data/prometheus
             sudo chmod -R 777 /data
-            cat <<EOF > docker-compose.yml
-            version: '3.8'
-            services:
-              redis:
-                image: redis:7.2-alpine
-                restart: always
-                ports: ["6379:6379"]
-                command: redis-server --appendonly yes --requirepass ${{ secrets.REDIS_PASSWORD }}
-                volumes: ["/data/redis:/data"]
-              grafana:
-                image: grafana/grafana:latest
-                restart: always
-                ports: ["3000:3000"]
-                environment:
-                  GF_SECURITY_ADMIN_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }}
-                volumes: ["/data/grafana:/var/lib/grafana"]
-            EOF
+            
+            cat > docker-compose.yml <<'EOF'
+          version: '3.8'
+          services:
+            redis:
+              image: redis:7.2-alpine
+              restart: always
+              ports: 
+                - "6379:6379"
+              command: redis-server --appendonly yes --requirepass ${{ secrets.REDIS_PASSWORD }}
+              volumes: 
+                - /data/redis:/data
+                
+            grafana:
+              image: grafana/grafana:latest
+              restart: always
+              ports: 
+                - "3000:3000"
+              environment:
+                GF_SECURITY_ADMIN_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }}
+              volumes: 
+                - /data/grafana:/var/lib/grafana
+          EOF
+            
             sudo docker compose up -d
+            echo "✅ State PROD services deployed successfully"
+          ENDSSH
 
   deploy-apps:
-    name: 🚀 Deploy Apps (Node A & B)
+    name: 🚀 Deploy Apps (Via PROD Bastion)
     needs: [docker-build, deploy-events, deploy-state]
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # IPs Públicas de PROD para Nodos A y B
-        node_ip: [3.86.75.213, 54.173.181.79]
+        include:
+          - node_ip: 10.3.1.10
+            node_name: node-a
+          - node_ip: 10.4.1.10
+            node_name: node-b
     steps:
       - uses: actions/download-artifact@v4
         with: { name: 'ALB_DNS', path: 'ALB_DNS' }
-      - uses: appleboy/ssh-action@master
-        with:
-          host: ${{ matrix.node_ip }}
-          username: ec2-user
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          # Inyectamos IPs privadas de PROD para las variables de entorno de los contenedores
-          envs: DOCKER_USERNAME, EVENTS_PRIVATE_IP, STATE_PRIVATE_IP
-          script: |
+        
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
+          chmod 600 ~/.ssh/bastion_key
+          
+      - name: Deploy to PROD ${{ matrix.node_name }}
+        run: |
+          cat > ~/.ssh/config <<EOF
+          Host bastion
+            HostName ${{ env.PROD_BASTION_PUBLIC_IP }}
+            User ec2-user
+            IdentityFile ~/.ssh/bastion_key
+            StrictHostKeyChecking no
+            
+          Host ${{ matrix.node_name }}
+            HostName ${{ matrix.node_ip }}
+            User ec2-user
+            IdentityFile ~/.ssh/bastion_key
+            ProxyJump bastion
+            StrictHostKeyChecking no
+          EOF
+          
+          ssh ${{ matrix.node_name }} << 'ENDSSH'
+            echo "✅ SECURITY CHECK: Connected via PROD Bastion Tunnel"
+            
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            
             echo "${{ secrets.DOCKER_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-            cat <<EOF > docker-compose.yml
-            version: '3.8'
-            services:
-              frontend:
-                image: ${{ secrets.DOCKER_USERNAME }}/dermatech-frontend:latest
-                restart: always
-                ports: ["80:80"]
-              api-gateway:
-                image: ${{ secrets.DOCKER_USERNAME }}/api-gateway:latest
-                restart: always
-                ports: ["3000:3000"]
-                environment:
-                  - AUTH_SERVICE_URL=http://auth-service:3000
-                  - PATIENT_SERVICE_URL=http://patient-service:3000
-              auth-service:
-                image: ${{ secrets.DOCKER_USERNAME }}/auth-service:latest
-                restart: always
-                ports: ["3001:3000"]
-                environment:
-                  - NODE_ENV=production
-                  - KAFKA_BROKERS=${EVENTS_PRIVATE_IP}:9092
-                  - REDIS_HOST=${STATE_PRIVATE_IP}
-                  - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
-                  - JWT_SECRET=${{ secrets.JWT_SECRET }}
-                  - DATABASE_HOST=${{ secrets.DATABASE_HOST }}
-                  - DATABASE_USER=${{ secrets.DATABASE_USER }}
-                  - DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
-                  - DATABASE_NAME=${{ secrets.DATABASE_NAME }}
-              patient-service:
-                image: ${{ secrets.DOCKER_USERNAME }}/patient-service:latest
-                restart: always
-                ports: ["3002:3000"]
-                environment:
-                  - NODE_ENV=production
-                  - KAFKA_BROKERS=${EVENTS_PRIVATE_IP}:9092
-                  - REDIS_HOST=${STATE_PRIVATE_IP}
-                  - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
-                  - DATABASE_HOST=${{ secrets.DATABASE_HOST }}
-                  - DATABASE_USER=${{ secrets.DATABASE_USER }}
-                  - DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
-                  - DATABASE_NAME=${{ secrets.DATABASE_NAME }}
-            EOF
+            cat > docker-compose.yml <<'EOF'
+          version: '3.8'
+          services:
+            frontend:
+              image: ${{ secrets.DOCKER_USERNAME }}/dermatech-frontend:latest
+              restart: always
+              ports: 
+                - "80:80"
+                
+            api-gateway:
+              image: ${{ secrets.DOCKER_USERNAME }}/api-gateway:latest
+              restart: always
+              ports: 
+                - "3000:3000"
+              environment:
+                - AUTH_SERVICE_URL=http://auth-service:3000
+                - PATIENT_SERVICE_URL=http://patient-service:3000
+                
+            auth-service:
+              image: ${{ secrets.DOCKER_USERNAME }}/auth-service:latest
+              restart: always
+              ports: 
+                - "3001:3000"
+              environment:
+                - NODE_ENV=production
+                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+                - KAFKA_CLIENT_ID=auth-service
+                - KAFKA_GROUP_ID=${{ secrets.KAFKA_GROUP_ID }}
+                - RABBITMQ_HOST=${{ env.EVENTS_PRIVATE_IP }}
+                - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
+                - REDIS_PORT=6379
+                - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+                - JWT_SECRET=${{ secrets.JWT_SECRET }}
+                - JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}
+                - JWT_REFRESH_EXPIRES_IN=${{ secrets.JWT_REFRESH_EXPIRES_IN }}
+                - JWT_EXPIRES_IN=${{ secrets.JWT_EXPIRES_IN }}
+                - DATABASE_PORT=${{ secrets.DATABASE_PORT }}
+                - DATABASE_HOST=${{ secrets.DATABASE_HOST }}
+                - DATABASE_USER=${{ secrets.DATABASE_USER }}
+                - DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+                - DATABASE_NAME=${{ secrets.DATABASE_NAME }}
+                - DATABASE_SYNC=${{ secrets.DATABASE_SYNC }}
+                
+            patient-service:
+              image: ${{ secrets.DOCKER_USERNAME }}/patient-service:latest
+              restart: always
+              ports: 
+                - "3002:3000"
+              environment:
+                - NODE_ENV=production
+                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+                - KAFKA_CLIENT_ID=patient-service
+                - KAFKA_GROUP_ID=${{ secrets.KAFKA_GROUP_ID }}
+                - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
+                - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+                - DB_PORT=${{ secrets.DATABASE_PORT }}
+                - DB_HOST=${{ secrets.DATABASE_HOST }}
+                - DB_USER=${{ secrets.DATABASE_USER }}
+                - DB_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+                - DB_NAME=${{ secrets.DATABASE_NAME }}
+                - DB_SYNC=${{ secrets.DATABASE_SYNC }}
+          EOF
+            
             sudo docker compose pull
             sudo docker compose up -d --remove-orphans
-      - name: 🏁 Final Summary
+            
+            echo "✅ Applications deployed successfully on PROD ${{ matrix.node_name }}"
+          ENDSSH
+          
+      - name: 🏁 Final PROD Summary
+        if: matrix.node_name == 'node-a'
         run: |
-          ALB_DNS=$(cat ALB_DNS/alb_dns.txt)
-          echo "🎉 PROD DEPLOYMENT COMPLETE"
-          echo "🌐 URL: http://$ALB_DNS"
+          ALB_DNS=$(cat ALB_DNS/alb_dns.txt | grep -o 'ALB_URL=.*' | cut -d'=' -f2)
+          echo "🎉 PROD DEPLOYMENT COMPLETE (SECURE TUNNEL)"
+          echo "🌐 URL DEL LOAD BALANCER PROD: http://$ALB_DNS"
+          echo "::notice title=Deployment Complete::PROD Application available at http://$ALB_DNS"

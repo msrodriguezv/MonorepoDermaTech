@@ -8,7 +8,7 @@ variable "prod_cidr" {
   default     = "10.0.0.0/16"
 }
 
-# NEW: Range for the secondary subnet required by ALB
+# Range for the secondary subnet required by ALB (Multi-AZ)
 variable "prod_public_subnet_b_cidr" {
   description = "CIDR block for the secondary PROD subnet (AZ 1b)"
   default     = "10.0.2.0/24"
@@ -60,7 +60,8 @@ variable "node_b_vpc_id" {
   default     = ""
 }
 
-# --- AWS Account IDs (For Peering Authentication - PROD) ---
+# --- AWS Account IDs (Updated for PROD Accounts) ---
+# IDs proporcionados para el entorno de Producción
 variable "prod_account_id"   { default = "905418440925" }
 variable "events_account_id" { default = "138424274847" }
 variable "state_account_id"  { default = "322919475477" }

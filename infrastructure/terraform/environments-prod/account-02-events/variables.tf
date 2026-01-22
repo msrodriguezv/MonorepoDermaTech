@@ -41,7 +41,7 @@ variable "prod_bastion_ip" {
   default     = "10.0.1.59/32"
 }
 
-# --- AWS Account Identifiers ---
+# --- AWS Account Identifiers (PROD) ---
 variable "events_account_id" {
   description = "Account ID for Events (Self - PROD)"
   type        = string

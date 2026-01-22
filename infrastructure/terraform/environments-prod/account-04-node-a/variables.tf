@@ -9,7 +9,7 @@ variable "node_a_cidr" {
   default     = "10.3.0.0/16"
 }
 
-# --- Whitelisting CIDRs (Used for Security Group ingress rules) ---
+# --- Whitelisting CIDRs (Security Group Rules) ---
 variable "prod_cidr" {
   description = "CIDR block for PROD Hub VPC (ALB Traffic)"
   type        = string

@@ -1,6 +1,6 @@
 # ==============================================================================
 # MODULE: AWS GATEWAY NODE
-# Purpose: Public Entry Point (Bastion + Nginx Reverse Proxy)
+# Purpose: Public Entry Point (Bastion + Nginx Reverse Proxy Bridge)
 # Cost Optimization: t3.medium (Fits within $45 budget for 15 days)
 # Storage: 
 #   - Root: 25GB (Required for Docker Images/Logs)
@@ -8,7 +8,15 @@
 # ==============================================================================
 
 # ==============================================================================
-# 1. SECURITY GROUP
+# 1. SSH KEY PAIR (INJECTED FOR GITHUB ACTIONS)
+# ==============================================================================
+resource "aws_key_pair" "deployer" {
+  key_name   = "clave-maestra-final-v2"
+  public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDHfNX1CHq9xvO5DiUcm0Id1wpjLK/htvEaATxEeBIt4cbLJ5kn+IAUhhB/gvK/BEkHXZnLeZ1/+d/NEAQmFjTDtMEK1bEO1qlPLxMrgIxBbDzAVlvZ+ADBSFRQ94LXq73swJvej9z9jLnjKDSiGu5m3FoJbJnuYTmWN/DociUWZ2ADg/xnnBDJUgn13/mBf9L5tH8HWRrve8wqxgaqLn4F/97O2ClcGI5r3SSR5m+GaVeV4al8UiALK0ZXWvzjA3/gStY61tZuj1HD6xWAJ3wIvPgdWOrU7bzVt7DmzBJhNSnRO3fOwGbVpvM8cCslv41Nos9VPuC5A887PdcxGOIKjn6GN1WlXxctk9ORrJekJUFHr5KDPNLjl/i5wijgdoRfufhSuQflluYiZCnnvYJMGBsg9XHNSORb9FeOugEARtlrVUhAfkiHcbFNVUvpE8twpvevCNydA2eWF6GngV79PL2NEmnVXes2iAUgTKYbCgNAmcCs2rxVT8oZGDQBrHTDnRj9mfvTEWR5GDJho46bd/nT/AfyJWLHdhhttrA8Pqwk66CKgi7PSVXdCqSv3lJ/5JmOMyuSb/8c9r5yWwBBnmKTZsCS5OE9ca5f5tNe296g00W5SOiUvpRAPvAHIgjjYIVJgd3qQSGTMSLj8vlsVZ/jyBXrO/pR6/aMhCAk/w== github-actions"
+}
+
+# ==============================================================================
+# 2. SECURITY GROUP
 # ==============================================================================
 resource "aws_security_group" "gateway_sg" {
   name        = "${var.project_name}-${var.environment}-gateway-sg"
@@ -23,7 +31,7 @@ resource "aws_security_group" "gateway_sg" {
     cidr_blocks = ["0.0.0.0/0"]
     description = "Public HTTP"
   }
-   
+    
   # Public HTTPS
   ingress {
     from_port   = 443
@@ -42,7 +50,7 @@ resource "aws_security_group" "gateway_sg" {
     description = "SSH Administration"
   }
 
-  # Outbound Rule (Allow all traffic out)
+  # Outbound Rule
   egress {
     from_port   = 0
     to_port     = 0
@@ -54,57 +62,44 @@ resource "aws_security_group" "gateway_sg" {
 }
 
 # ==============================================================================
-# 2. DATA SOURCE: ELASTIC IP (SHIELDED BY ID)
-# We use the immutable Allocation ID. Terraform reads it, never destroys it.
+# 3. DATA SOURCE: ELASTIC IP (SHIELDED BY ID)
 # ==============================================================================
 data "aws_eip" "gateway_eip" {
   id = var.eip_allocation_id
 }
 
 # ==============================================================================
-# 3. EBS VOLUME (EXTERNAL PERSISTENCE 10GB)
-# This volume survives instance destruction (prevent_destroy enabled)
+# 4. EBS VOLUME (EXTERNAL PERSISTENCE 10GB)
 # ==============================================================================
 resource "aws_ebs_volume" "gateway_data" {
   availability_zone = var.availability_zone
   size              = 10
   type              = "gp3"
   encrypted         = true
-   
+    
   tags = {
     Name      = "${var.project_name}-${var.environment}-gateway-data"
     ManagedBy = "terraform"
   }
-   
+    
   lifecycle {
     prevent_destroy = true # CRITICAL: PROTECTS PERSISTENT DATA
   }
 }
 
 # ==============================================================================
-# 4. EC2 INSTANCE (BASTION & PROXY)
+# 5. EC2 INSTANCE (BASTION & PROXY)
 # ==============================================================================
 resource "aws_instance" "gateway" {
-  ami               = var.ami_id
-   
-  # BUDGET CORRECTION: t3.medium ($0.0416/hr) vs t3.large ($0.0832/hr)
-  # t3.medium (2 vCPU, 4GB RAM) is sufficient for Nginx/Bastion duties.
-  instance_type     = "t3.medium"
-   
-  subnet_id         = var.public_subnet_id
-  key_name          = "vockey"
-   
-  # CRITICAL: Fixed Private IP for Peering Routes
-  private_ip        = var.bastion_private_ip
-   
-  # Ensure instance is in the same AZ as the EBS Volume
+  ami           = var.ami_id
+  instance_type = "t3.medium"
+  subnet_id     = var.public_subnet_id
+  key_name      = aws_key_pair.deployer.key_name
+  private_ip    = var.bastion_private_ip
   availability_zone = var.availability_zone
-   
-  vpc_security_group_ids      = [aws_security_group.gateway_sg.id]
+  vpc_security_group_ids = [aws_security_group.gateway_sg.id]
   user_data_replace_on_change = true
 
-  # ROOT VOLUME CONFIGURATION (25GB Base for Docker)
-  # This volume IS destroyed with the instance.
   root_block_device {
     volume_size = 25
     volume_type = "gp3"
@@ -114,6 +109,9 @@ resource "aws_instance" "gateway" {
     }
   }
 
+  # ----------------------------------------------------------------------------
+  # USER DATA: HYBRID BRIDGE CONFIGURATION (PROD)
+  # ----------------------------------------------------------------------------
   user_data = <<-EOF
               #!/bin/bash
               set -e
@@ -121,32 +119,27 @@ resource "aws_instance" "gateway" {
               # --- INSTALLATION ---
               dnf update -y
               dnf install -y nginx git docker htop
-              systemctl start nginx
-              systemctl enable nginx
               systemctl start docker
               systemctl enable docker
               usermod -aG docker ec2-user
               
               # --- MOUNT PERSISTENT DISK (10GB) ---
-              # On Nitro Instances (t3 family), /dev/sdf maps to /dev/nvme1n1
               DATA_DISK="/dev/nvme1n1"
               MOUNT_POINT="/mnt/data"
               
-              # Wait for disk attachment
               while [ ! -b $DATA_DISK ]; do echo "Waiting for disk..."; sleep 5; done
-
-              # Only format if no filesystem exists (Protects Data on Re-creation)
               if ! blkid $DATA_DISK; then mkfs -t ext4 $DATA_DISK; fi
               
               mkdir -p $MOUNT_POINT
               mount $DATA_DISK $MOUNT_POINT
               
-              # Add to fstab for automatic mounting on reboot
               if ! grep -qs "$MOUNT_POINT" /etc/fstab; then
                 echo "$DATA_DISK $MOUNT_POINT ext4 defaults,nofail 0 2" >> /etc/fstab
               fi
 
-              # --- NGINX CONFIGURATION (Reverse Proxy) ---
+              # --- NGINX CONFIGURATION (THE BRIDGE) ---
+              # Fixed IP (Bastion) -> ALB DNS -> Backend Nodes
+              
               cat <<EOT > /etc/nginx/nginx.conf
               user nginx;
               worker_processes auto;
@@ -159,30 +152,23 @@ resource "aws_instance" "gateway" {
                   include /etc/nginx/mime.types;
                   default_type application/octet-stream;
                   
-                  # Upstream to App Nodes (Internal IPs)
-                  # Traffic flows through Peering Connections
-                  upstream backend_cluster {
-                      least_conn;
-                      # Node A (Account 04)
-                      server 10.3.1.10:3000 max_fails=3 fail_timeout=30s;
-                      # Node B (Account 05)
-                      server 10.4.1.10:3000 max_fails=3 fail_timeout=30s;
+                  # UPSTREAM: Points to the AWS Application Load Balancer
+                  upstream aws_alb {
+                      server ${var.alb_dns_name};
                   }
                   
                   server {
                       listen 80;
                       server_name _;
                       
-                      # Health Check Endpoint
                       location /health {
                           access_log off;
-                          return 200 "OK\n";
+                          return 200 "OK - PROD Bridge Active\n";
                           add_header Content-Type text/plain;
                       }
                       
-                      # Main Proxy Logic
                       location / {
-                          proxy_pass http://backend_cluster;
+                          proxy_pass http://aws_alb;
                           proxy_set_header Host \$host;
                           proxy_set_header X-Real-IP \$remote_addr;
                           proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -195,22 +181,21 @@ resource "aws_instance" "gateway" {
               }
               EOT
               
-              systemctl restart nginx
-              echo "Gateway Setup Complete"
+              systemctl start nginx
+              systemctl enable nginx
+              echo "Gateway Bridge Setup Complete"
               EOF
 
   tags = { Name = "${var.project_name}-${var.environment}-gateway" }
 }
 
 # ==============================================================================
-# 5. ATTACHMENTS & ASSOCIATIONS
+# 6. ATTACHMENTS & ASSOCIATIONS
 # ==============================================================================
 resource "aws_volume_attachment" "gateway_data_attach" {
   device_name  = "/dev/sdf"
   volume_id    = aws_ebs_volume.gateway_data.id
   instance_id  = aws_instance.gateway.id
-   
-  # Force detach ensures terraform can re-attach volume if instance is recreated
   force_detach = true 
 }
 
@@ -219,9 +204,6 @@ resource "aws_eip_association" "eip_assoc" {
   allocation_id = data.aws_eip.gateway_eip.id
 }
 
-# ==============================================================================
-# 6. OUTPUTS
-# ==============================================================================
 output "final_public_ip" { 
   value = data.aws_eip.gateway_eip.public_ip 
 }

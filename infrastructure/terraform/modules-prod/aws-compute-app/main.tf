@@ -1,6 +1,6 @@
 # ==============================================================================
 # MODULE: AWS COMPUTE APP (WORKER NODES)
-# Context: Node A (1a) & Node B (1b) - PROD / QA
+# Context: Node A (1a) & Node B (1b) - PROD
 # Purpose: Hosts NestJS Microservices and Flutter Frontend via Docker
 # Specs: t3.large (8GB RAM) | 25GB Root
 # ==============================================================================
@@ -14,33 +14,34 @@ resource "aws_key_pair" "deployer" {
 }
 
 # ==============================================================================
-# 2. SECURITY GROUP
+# 2. SECURITY GROUP (BLINDADO)
 # ==============================================================================
 resource "aws_security_group" "app_sg" {
   name        = "${var.project_name}-${var.environment}-sg"
   description = "Security Group for Application Worker Nodes (Bastion Protected)"
   vpc_id      = var.vpc_id
 
-  # --- INGRESS: SSH ACCESS (TEMPORARY: OPEN FOR GITHUB ACTIONS) ---
+# ----------------------------------------------------------------------------
+# ROBUST RULE: SSH FROM ENTIRE PROD NETWORK (HUB)
+# ----------------------------------------------------------------------------
   ingress {
-    description = "Allow SSH from GitHub Actions (Temporary)"
+    description = "Allow SSH strictly from PROD Network (Bastion)"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["10.0.0.0/16"] 
   }
 
   # --- INGRESS: APPLICATION PORTS (INTERNAL ROUTING) ---
-  # Allows traffic from Gateway/Bastion IP to Microservices
   ingress {
-    description = "Microservices Traffic from Gateway"
+    description = "Microservices Traffic from PROD Gateway"
     from_port   = 3000
     to_port     = 4000
     protocol    = "tcp"
-    cidr_blocks = [var.gateway_allowed_ip] 
+    cidr_blocks = ["10.0.0.0/16"] # Sincronizado con lógica de QA
   }
    
-  # Allow HTTP (80) for Frontend if accessed directly or via LB
+  # Allow HTTP (80) for Frontend
   ingress {
     description = "Frontend HTTP Access"
     from_port   = 80
@@ -63,7 +64,6 @@ resource "aws_security_group" "app_sg" {
 
 # ==============================================================================
 # 3. DATA SOURCE: ELASTIC IP (BLINDADO)
-# Reads the existing IP from AWS by Allocation ID.
 # ==============================================================================
 data "aws_eip" "app_eip" {
   id = var.eip_allocation_id
@@ -76,29 +76,22 @@ resource "aws_instance" "app_worker" {
   ami               = var.ami_id
   instance_type     = "t3.large" 
   subnet_id         = var.public_subnet_id
-   
-  # CRITICAL: Use the injected Key Pair
+  
   key_name          = aws_key_pair.deployer.key_name
-   
-  # CRITICAL: Fixed Private IP
   private_ip        = var.private_ip_address 
-   
-  # CRITICAL: High Availability Zone (1a or 1b)
   availability_zone = var.availability_zone
    
   vpc_security_group_ids      = [aws_security_group.app_sg.id]
   user_data_replace_on_change = true
 
   root_block_device {
-    volume_size           = 25
-    volume_type           = "gp3"
+    volume_size            = 25
+    volume_type            = "gp3"
     delete_on_termination = true
   }
 
   tags = { Name = "${var.project_name}-${var.environment}-server" }
 
-  # MINIMAL USER DATA: Only OS prep and Docker install.
-  # Deployment logic moved to GitHub Actions.
   user_data = <<-EOF
     #!/bin/bash
     set -e

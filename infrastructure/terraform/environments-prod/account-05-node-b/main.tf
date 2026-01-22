@@ -32,7 +32,7 @@ module "networking" {
 
 # ==============================================================================
 # 2. COMPUTE LAYER (APPLICATION WORKER)
-# Context: NestJS & Flutter Host Replica
+# Context: NestJS & Flutter Host Replica (PROD)
 # ==============================================================================
 module "compute" {
   source              = "../../modules/aws-compute-app"
