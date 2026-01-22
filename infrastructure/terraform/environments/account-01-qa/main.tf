@@ -10,34 +10,29 @@ terraform {
 # PROVIDERS CONFIGURATION (MULTI-ACCOUNT ORCHESTRATION)
 # ==============================================================================
 
-# 1. Default Provider (QA Account)
 provider "aws" {
   region  = "us-east-1"
   profile = "qa-dermatech" 
 }
 
-# 2. Events Account Provider
 provider "aws" {
   alias   = "events"
   region  = "us-east-1"
   profile = "events-dermatech"
 }
 
-# 3. State Account Provider
 provider "aws" {
   alias   = "state"
   region  = "us-east-1"
   profile = "state-dermatech"
 }
 
-# 4. Node A Account Provider
 provider "aws" {
   alias   = "node_a"
   region  = "us-east-1"
   profile = "node-a-dermatech"
 }
 
-# 5. Node B Account Provider
 provider "aws" {
   alias   = "node_b"
   region  = "us-east-1"
@@ -49,7 +44,6 @@ locals {
   environment  = "qa"
   ami_id       = "ami-051f7e7f6c2f40dc1" # Amazon Linux 2023
   
-  # Validation: Ensure all VPC IDs are present before attempting peerings
   deploy_connectivity = (
     var.events_vpc_id != "" &&
     var.state_vpc_id != "" &&
@@ -71,12 +65,9 @@ module "networking" {
   availability_zone  = "us-east-1a"            
 }
 
-# --- SURGICAL ADDITION: SECONDARY SUBNET FOR ALB COMPLIANCE ---
-# Note: AWS ALB requires at least two subnets in different AZs within the Hub VPC.
-# Using variable injection to maintain consistency with global networking ranges.
 resource "aws_subnet" "public_b_alb" {
   vpc_id                  = module.networking.vpc_id
-  cidr_block              = var.qa_public_subnet_b_cidr # Switched to variable for consistency
+  cidr_block              = var.qa_public_subnet_b_cidr 
   map_public_ip_on_launch = true
   availability_zone       = "us-east-1b"
 
@@ -92,7 +83,7 @@ resource "aws_route_table_association" "public_b_assoc" {
 }
 
 # ==============================================================================
-# 2. GATEWAY / BASTION LAYER
+# 2. GATEWAY / BASTION LAYER (CORREGIDO)
 # ==============================================================================
 module "gateway" {
   source              = "../../modules/aws-gateway-node"
@@ -102,12 +93,11 @@ module "gateway" {
   ami_id              = local.ami_id
   public_subnet_id    = module.networking.public_subnet_id
   availability_zone   = "us-east-1a"
-
-  # Fixed Private IP for Internal Network Consistency
   bastion_private_ip  = "10.0.1.59"
-  
-  # Shielded Elastic IP (Cloudflare)
   eip_allocation_id   = "eipalloc-04a19075ece27ac49"
+
+  # CORRECCIÓN: Pasamos el DNS del Load Balancer para el puente Nginx
+  alb_dns_name        = aws_lb.main_alb.dns_name 
 }
 
 # ==============================================================================
@@ -151,7 +141,7 @@ data "aws_route_table" "node_b_rt" {
 }
 
 # ==============================================================================
-# 4. ADMIN CONNECTIVITY: QA HUB <-> ALL SPOKES
+# 4. PEERINGS & ROUTES (Mantenemos tu configuración original)
 # ==============================================================================
 
 # --- A. QA <-> EVENTS ---
@@ -167,7 +157,7 @@ resource "aws_vpc_peering_connection_accepter" "events_accept_qa" {
   provider                  = aws.events
   count                     = local.deploy_connectivity ? 1 : 0
   vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_events[0].id
-  auto_accept                = true
+  auto_accept               = true
 }
 resource "aws_route" "qa_route_events" {
   count                     = local.deploy_connectivity ? 1 : 0
@@ -195,7 +185,7 @@ resource "aws_vpc_peering_connection_accepter" "state_accept_qa" {
   provider                  = aws.state
   count                     = local.deploy_connectivity ? 1 : 0
   vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_state[0].id
-  auto_accept                = true
+  auto_accept               = true
 }
 resource "aws_route" "qa_route_state" {
   count                     = local.deploy_connectivity ? 1 : 0
@@ -223,7 +213,7 @@ resource "aws_vpc_peering_connection_accepter" "node_a_accept_qa" {
   provider                  = aws.node_a
   count                     = local.deploy_connectivity ? 1 : 0
   vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_node_a[0].id
-  auto_accept                = true
+  auto_accept               = true
 }
 resource "aws_route" "qa_route_node_a" {
   count                     = local.deploy_connectivity ? 1 : 0
@@ -251,7 +241,7 @@ resource "aws_vpc_peering_connection_accepter" "node_b_accept_qa" {
   provider                  = aws.node_b
   count                     = local.deploy_connectivity ? 1 : 0
   vpc_peering_connection_id = aws_vpc_peering_connection.qa_to_node_b[0].id
-  auto_accept                = true
+  auto_accept               = true
 }
 resource "aws_route" "qa_route_node_b" {
   count                     = local.deploy_connectivity ? 1 : 0
@@ -268,7 +258,7 @@ resource "aws_route" "node_b_route_qa" {
 }
 
 # ==============================================================================
-# 5. CONNECTIVITY: EVENTS <-> STATE (BACKEND SYNC)
+# 5. CONNECTIVITY: SPOKES (Mantenemos tus peerings originales)
 # ==============================================================================
 resource "aws_vpc_peering_connection" "events_to_state" {
   provider      = aws.events
@@ -282,7 +272,7 @@ resource "aws_vpc_peering_connection_accepter" "state_accept_events" {
   provider                  = aws.state
   count                     = local.deploy_connectivity ? 1 : 0
   vpc_peering_connection_id = aws_vpc_peering_connection.events_to_state[0].id
-  auto_accept                = true
+  auto_accept               = true
 }
 resource "aws_route" "events_route_state" {
   provider                  = aws.events
@@ -299,10 +289,6 @@ resource "aws_route" "state_route_events" {
   vpc_peering_connection_id = aws_vpc_peering_connection.events_to_state[0].id
 }
 
-# ==============================================================================
-# 6. CONNECTIVITY: APP NODES <-> BACKEND
-# ==============================================================================
-
 # --- A. NODE A -> EVENTS ---
 resource "aws_vpc_peering_connection" "node_a_events" {
   provider      = aws.node_a
@@ -316,7 +302,7 @@ resource "aws_vpc_peering_connection_accepter" "events_accept_node_a" {
   provider                  = aws.events
   count                     = local.deploy_connectivity ? 1 : 0
   vpc_peering_connection_id = aws_vpc_peering_connection.node_a_events[0].id
-  auto_accept                = true
+  auto_accept               = true
 }
 resource "aws_route" "node_a_to_events" {
   provider = aws.node_a
@@ -346,7 +332,7 @@ resource "aws_vpc_peering_connection_accepter" "state_accept_node_a" {
   provider                  = aws.state
   count                     = local.deploy_connectivity ? 1 : 0
   vpc_peering_connection_id = aws_vpc_peering_connection.node_a_state[0].id
-  auto_accept                = true
+  auto_accept               = true
 }
 resource "aws_route" "node_a_to_state" {
   provider = aws.node_a
@@ -376,7 +362,7 @@ resource "aws_vpc_peering_connection_accepter" "events_accept_node_b" {
   provider                  = aws.events
   count                     = local.deploy_connectivity ? 1 : 0
   vpc_peering_connection_id = aws_vpc_peering_connection.node_b_events[0].id
-  auto_accept                = true
+  auto_accept               = true
 }
 resource "aws_route" "node_b_to_events" {
   provider = aws.node_b
@@ -406,7 +392,7 @@ resource "aws_vpc_peering_connection_accepter" "state_accept_node_b" {
   provider                  = aws.state
   count                     = local.deploy_connectivity ? 1 : 0
   vpc_peering_connection_id = aws_vpc_peering_connection.node_b_state[0].id
-  auto_accept                = true
+  auto_accept               = true
 }
 resource "aws_route" "node_b_to_state" {
   provider = aws.node_b
@@ -425,10 +411,8 @@ resource "aws_route" "state_to_node_b" {
 
 # ==============================================================================
 # 7. MASTER PROXY LAYER (APPLICATION LOAD BALANCER)
-# Purpose: Orchestrates cross-account traffic and resolves frontend connectivity.
 # ==============================================================================
 
-# A. SECURITY GROUP FOR ALB
 resource "aws_security_group" "alb_sg" {
   name        = "${local.project_name}-${local.environment}-alb-sg"
   description = "Global Entry Point for Web Traffic"
@@ -453,27 +437,22 @@ resource "aws_security_group" "alb_sg" {
   tags = { Name = "${local.project_name}-${local.environment}-alb-sg" }
 }
 
-# B. LOAD BALANCER RESOURCE
 resource "aws_lb" "main_alb" {
   name               = "${local.project_name}-${local.environment}-alb"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
-  
-  # References both Hub Subnets to satisfy Multi-AZ requirements.
   subnets            = [module.networking.public_subnet_id, aws_subnet.public_b_alb.id]
 
   tags = { Name = "${local.project_name}-${local.environment}-alb" }
 }
 
-# C. TARGET GROUPS (CROSS-ACCOUNT ROUTING VIA IP)
-# Node A and B Frontend (Port 80)
 resource "aws_lb_target_group" "frontend" {
   name        = "tg-qa-frontend"
   port        = 80
   protocol    = "HTTP"
   vpc_id      = module.networking.vpc_id
-  target_type = "ip" # Required for peering IP target routing
+  target_type = "ip"
 
   health_check {
     path = "/health"
@@ -481,7 +460,6 @@ resource "aws_lb_target_group" "frontend" {
   }
 }
 
-# Node A and B API Gateway (Port 3000)
 resource "aws_lb_target_group" "api" {
   name        = "tg-qa-api-gateway"
   port        = 3000
@@ -495,20 +473,17 @@ resource "aws_lb_target_group" "api" {
   }
 }
 
-# D. LISTENER AND ROUTING RULES
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.main_alb.arn
   port              = "80"
   protocol          = "HTTP"
 
-  # Default: Forward to Flutter Frontend
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.frontend.arn
   }
 }
 
-# API Routing Rule (Path-based)
 resource "aws_lb_listener_rule" "api_routing" {
   listener_arn = aws_lb_listener.http.arn
   priority     = 10
@@ -525,21 +500,17 @@ resource "aws_lb_listener_rule" "api_routing" {
   }
 }
 
-# E. TARGET ATTACHMENTS (MAPPING NODES BY PRIVATE IP)
-# These link the ALB in QA with the Servers in Node A/B via Peering
 resource "aws_lb_target_group_attachment" "node_a_web" {
   target_group_arn = aws_lb_target_group.frontend.arn
-  target_id        = "10.3.1.10" # Node A Private IP
+  target_id        = "10.3.1.10"
   port             = 80
-  # REQUIRED for Peered VPC Targets:
   availability_zone = "all"
 }
 
 resource "aws_lb_target_group_attachment" "node_b_web" {
   target_group_arn = aws_lb_target_group.frontend.arn
-  target_id        = "10.4.1.10" # Node B Private IP
+  target_id        = "10.4.1.10"
   port             = 80
-  # REQUIRED for Peered VPC Targets:
   availability_zone = "all"
 }
 
@@ -547,7 +518,6 @@ resource "aws_lb_target_group_attachment" "node_a_api" {
   target_group_arn = aws_lb_target_group.api.arn
   target_id        = "10.3.1.10"
   port             = 3000
-  # REQUIRED for Peered VPC Targets:
   availability_zone = "all"
 }
 
@@ -555,6 +525,5 @@ resource "aws_lb_target_group_attachment" "node_b_api" {
   target_group_arn = aws_lb_target_group.api.arn
   target_id        = "10.4.1.10"
   port             = 3000
-  # REQUIRED for Peered VPC Targets:
   availability_zone = "all"
 }

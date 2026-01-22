@@ -1,0 +1,46 @@
+name: "QA: SMART RECYCLE (Instances EC2 Only - Preserve Network)"
+
+on:
+    #push:
+        #branches: [ qa ]
+    workflow_dispatch:
+
+jobs:
+  recycle-compute-only:
+    name: Recycle QA Instances (Keep Network Alive)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Restore Credentials
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+
+      # ------------------------------------------------------------------------
+      # SOLO BORRAMOS LAS INSTANCIAS (Capa 2)
+      # Protegemos VPC, ALB, Peerings, Gateways (Capa 1)
+      # ------------------------------------------------------------------------
+      
+      - name: 🔥 Terminate Instances (QA & Nodes)
+        run: |
+          echo "♻️ Iniciando Reciclaje de Computo (Smart Mode)..."
+          
+          # Lista de perfiles donde viven las apps
+          for profile in qa-dermatech node-a-dermatech node-b-dermatech events-dermatech state-dermatech; do
+            echo "🔎 Buscando instancias en perfil: $profile"
+            
+            # Buscar instancias que NO estén terminadas
+            ids=$(aws ec2 describe-instances --profile $profile --region us-east-1 --filters "Name=instance-state-name,Values=running,stopped,stopping,pending" --query 'Reservations[*].Instances[*].InstanceId' --output text 2>/dev/null || echo "")
+            
+            if [ -n "$ids" ]; then
+              echo " ☠️ Terminando instancias: $ids"
+              aws ec2 terminate-instances --profile $profile --region us-east-1 --instance-ids $ids
+            else
+              echo " ✅ No hay instancias activas en este perfil."
+            fi
+          done
+          
+          echo "⏳ Esperando a que AWS procese la terminación..."
+          sleep 10
+          echo "✅ Reciclaje Completado. La Red y el Load Balancer siguen vivos."

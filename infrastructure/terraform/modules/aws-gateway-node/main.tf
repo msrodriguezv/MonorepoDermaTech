@@ -1,6 +1,6 @@
 # ==============================================================================
 # MODULE: AWS GATEWAY NODE
-# Purpose: Public Entry Point (Bastion + Nginx Reverse Proxy)
+# Purpose: Public Entry Point (Bastion + Nginx Reverse Proxy Bridge)
 # Cost Optimization: t3.medium (Fits within $45 budget for 15 days)
 # Storage: 
 #   - Root: 25GB (Required for Docker Images/Logs)
@@ -9,7 +9,6 @@
 
 # ==============================================================================
 # 1. SSH KEY PAIR (INJECTED FOR GITHUB ACTIONS)
-# Inyectamos la llave pública correcta para que GitHub Actions pueda entrar.
 # ==============================================================================
 resource "aws_key_pair" "deployer" {
   key_name   = "clave-maestra-final-v2"
@@ -32,7 +31,7 @@ resource "aws_security_group" "gateway_sg" {
     cidr_blocks = ["0.0.0.0/0"]
     description = "Public HTTP"
   }
-  
+   
   # Public HTTPS
   ingress {
     from_port   = 443
@@ -64,7 +63,6 @@ resource "aws_security_group" "gateway_sg" {
 
 # ==============================================================================
 # 3. DATA SOURCE: ELASTIC IP (SHIELDED BY ID)
-# We use the immutable Allocation ID. Terraform reads it, never destroys it.
 # ==============================================================================
 data "aws_eip" "gateway_eip" {
   id = var.eip_allocation_id
@@ -72,19 +70,18 @@ data "aws_eip" "gateway_eip" {
 
 # ==============================================================================
 # 4. EBS VOLUME (EXTERNAL PERSISTENCE 10GB)
-# This volume survives instance destruction (prevent_destroy enabled)
 # ==============================================================================
 resource "aws_ebs_volume" "gateway_data" {
   availability_zone = var.availability_zone
   size              = 10
   type              = "gp3"
   encrypted         = true
-  
+   
   tags = {
     Name      = "${var.project_name}-${var.environment}-gateway-data"
     ManagedBy = "terraform"
   }
-  
+   
   lifecycle {
     prevent_destroy = true # CRITICAL: PROTECTS PERSISTENT DATA
   }
@@ -94,30 +91,15 @@ resource "aws_ebs_volume" "gateway_data" {
 # 5. EC2 INSTANCE (BASTION & PROXY)
 # ==============================================================================
 resource "aws_instance" "gateway" {
-  ami               = var.ami_id
-  
-  # BUDGET CORRECTION: t3.medium ($0.0416/hr) vs t3.large ($0.0832/hr)
-  # t3.medium (2 vCPU, 4GB RAM) is sufficient for Nginx/Bastion duties.
-  instance_type     = "t3.medium"
-  
-  subnet_id         = var.public_subnet_id
-  
-  # ----------------------------------------------------------------------------
-  # CORRECCIÓN CRÍTICA: USAR LA LLAVE MAESTRA, NO 'vockey'
-  # ----------------------------------------------------------------------------
-  key_name          = aws_key_pair.deployer.key_name
-  
-  # CRITICAL: Fixed Private IP for Peering Routes
-  private_ip        = var.bastion_private_ip
-  
-  # Ensure instance is in the same AZ as the EBS Volume
+  ami           = var.ami_id
+  instance_type = "t3.medium"
+  subnet_id     = var.public_subnet_id
+  key_name      = aws_key_pair.deployer.key_name
+  private_ip    = var.bastion_private_ip
   availability_zone = var.availability_zone
-  
-  vpc_security_group_ids      = [aws_security_group.gateway_sg.id]
+  vpc_security_group_ids = [aws_security_group.gateway_sg.id]
   user_data_replace_on_change = true
 
-  # ROOT VOLUME CONFIGURATION (25GB Base for Docker)
-  # This volume IS destroyed with the instance.
   root_block_device {
     volume_size = 25
     volume_type = "gp3"
@@ -127,6 +109,9 @@ resource "aws_instance" "gateway" {
     }
   }
 
+  # ----------------------------------------------------------------------------
+  # USER DATA: HYBRID BRIDGE CONFIGURATION
+  # ----------------------------------------------------------------------------
   user_data = <<-EOF
               #!/bin/bash
               set -e
@@ -134,14 +119,11 @@ resource "aws_instance" "gateway" {
               # --- INSTALLATION ---
               dnf update -y
               dnf install -y nginx git docker htop
-              systemctl start nginx
-              systemctl enable nginx
               systemctl start docker
               systemctl enable docker
               usermod -aG docker ec2-user
               
               # --- MOUNT PERSISTENT DISK (10GB) ---
-              # On Nitro Instances (t3 family), /dev/sdf maps to /dev/nvme1n1
               DATA_DISK="/dev/nvme1n1"
               MOUNT_POINT="/mnt/data"
               
@@ -159,7 +141,10 @@ resource "aws_instance" "gateway" {
                 echo "$DATA_DISK $MOUNT_POINT ext4 defaults,nofail 0 2" >> /etc/fstab
               fi
 
-              # --- NGINX CONFIGURATION (Reverse Proxy) ---
+              # --- NGINX CONFIGURATION (THE BRIDGE) ---
+              # This connects the Fixed IP (Bastion) -> ALB DNS -> Backend Nodes
+              # This ensures the professor's IP link works AND we use the ALB.
+              
               cat <<EOT > /etc/nginx/nginx.conf
               user nginx;
               worker_processes auto;
@@ -172,14 +157,9 @@ resource "aws_instance" "gateway" {
                   include /etc/nginx/mime.types;
                   default_type application/octet-stream;
                   
-                  # Upstream to App Nodes (Internal IPs)
-                  # Traffic flows through Peering Connections
-                  upstream backend_cluster {
-                      least_conn;
-                      # Node A (Account 04)
-                      server 10.3.1.10:3000 max_fails=3 fail_timeout=30s;
-                      # Node B (Account 05)
-                      server 10.4.1.10:3000 max_fails=3 fail_timeout=30s;
+                  # UPSTREAM: Points to the AWS Application Load Balancer
+                  upstream aws_alb {
+                      server ${var.alb_dns_name};
                   }
                   
                   server {
@@ -189,17 +169,18 @@ resource "aws_instance" "gateway" {
                       # Health Check Endpoint
                       location /health {
                           access_log off;
-                          return 200 "OK\n";
+                          return 200 "OK - Bridge Active\n";
                           add_header Content-Type text/plain;
                       }
                       
-                      # Main Proxy Logic
+                      # Main Proxy Logic -> Forward to ALB
                       location / {
-                          proxy_pass http://backend_cluster;
+                          proxy_pass http://aws_alb;
                           proxy_set_header Host \$host;
                           proxy_set_header X-Real-IP \$remote_addr;
                           proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
                           
+                          # Timeouts
                           proxy_connect_timeout 60s;
                           proxy_send_timeout 60s;
                           proxy_read_timeout 60s;
@@ -208,8 +189,9 @@ resource "aws_instance" "gateway" {
               }
               EOT
               
-              systemctl restart nginx
-              echo "Gateway Setup Complete"
+              systemctl start nginx
+              systemctl enable nginx
+              echo "Gateway Bridge Setup Complete"
               EOF
 
   tags = { Name = "${var.project_name}-${var.environment}-gateway" }
@@ -222,8 +204,6 @@ resource "aws_volume_attachment" "gateway_data_attach" {
   device_name  = "/dev/sdf"
   volume_id    = aws_ebs_volume.gateway_data.id
   instance_id  = aws_instance.gateway.id
-  
-  # Force detach ensures terraform can re-attach volume if instance is recreated
   force_detach = true 
 }
 
