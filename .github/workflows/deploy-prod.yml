@@ -2,7 +2,7 @@ name: "PROD: V2. TURBO DEPLOY DermaTech Global Infrastructure"
 
 on:
   push:
-    branches: [ developer ]
+   branches: [ developer ]
   workflow_dispatch:
 
 env:
@@ -181,11 +181,25 @@ jobs:
           cd infrastructure/terraform/environments-prod/account-01-prod
           terraform init -reconfigure
           
-          terraform apply -auto-approve \
+          # Intento de deploy con recuperación automática si falla por estado sucio
+          if ! terraform apply -auto-approve \
             -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
             -var="state_vpc_id=${{ env.VPC_STATE }}" \
             -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
-            -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
+            -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"; then
+            
+            echo "⚠️ First attempt failed. Executing partial destroy to clear peerings..."
+            terraform destroy -auto-approve \
+              -var="events_vpc_id=null" -var="state_vpc_id=null" \
+              -var="node_a_vpc_id=null" -var="node_b_vpc_id=null" || true
+            sleep 20
+            
+            terraform apply -auto-approve \
+              -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
+              -var="state_vpc_id=${{ env.VPC_STATE }}" \
+              -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
+              -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
+          fi
 
           ALB_DNS=$(terraform output -raw PROD_ALB_DNS_NAME)
           echo "ALB_URL=$ALB_DNS" > alb_dns.txt
@@ -273,7 +287,15 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
-          
+      
+      # ------------------------------------------------------------------------
+      # FIX CRÍTICO: Espera activa para evitar 'Connection timed out'
+      # ------------------------------------------------------------------------
+      - name: ⏳ Wait for EC2 Initialization
+        run: |
+          echo "Esperando 60 segundos a que la instancia Events termine de arrancar..."
+          sleep 60
+
       - name: Deploy via SSH Tunnel
         run: |
           cat > ~/.ssh/config <<EOF
@@ -294,16 +316,20 @@ jobs:
           ssh events-server << 'ENDSSH'
             echo "✅ SECURITY CHECK: Connected via PROD Bastion Tunnel"
             
+            # --- INSTALACIÓN DE DOCKER COMPOSE ---
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
             
+            # --- CONFIGURACIÓN DE DIRECTORIOS ---
             sudo mkdir -p /data/kafka /data/zookeeper /data/rabbitmq /data/mosquitto/config
             sudo chmod -R 777 /data
             
+            # --- CONFIGURACIÓN DE MOSQUITTO ---
             echo "listener 1883" | sudo tee /data/mosquitto/config/mosquitto.conf
             echo "allow_anonymous true" | sudo tee -a /data/mosquitto/config/mosquitto.conf
 
+            # --- GENERACIÓN DE DOCKER-COMPOSE.YML ---
             cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
@@ -365,6 +391,7 @@ jobs:
               driver: bridge
           EOF
             
+            # --- LEVANTAR SERVICIOS ---
             sudo docker compose up -d
             echo "✅ Events PROD services deployed successfully"
           ENDSSH
@@ -380,6 +407,11 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
           
+      - name: ⏳ Wait for EC2 Initialization
+        run: |
+          echo "Esperando 60 segundos a que la instancia State termine de arrancar..."
+          sleep 60
+
       - name: Deploy via SSH Tunnel
         run: |
           cat > ~/.ssh/config <<EOF
@@ -403,6 +435,7 @@ jobs:
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            
             sudo mkdir -p /data/redis /data/grafana /data/prometheus
             sudo chmod -R 777 /data
             
@@ -453,7 +486,12 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
-          
+      
+      - name: ⏳ Wait for EC2 Initialization
+        run: |
+          echo "Esperando 60 segundos a que la instancia ${{ matrix.node_name }} termine de arrancar..."
+          sleep 60
+
       - name: Deploy to PROD ${{ matrix.node_name }}
         run: |
           cat > ~/.ssh/config <<EOF
