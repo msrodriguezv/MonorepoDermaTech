@@ -1,8 +1,8 @@
 name: "PROD: SMART RECYCLE (Instances EC2 Only - Preserve Network)"
 
 on:
-  # push:
-  #   branches: [ developer ]
+  push:
+     branches: [ developer ]
   workflow_dispatch:
 
 jobs:
