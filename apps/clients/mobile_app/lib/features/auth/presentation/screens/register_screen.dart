@@ -38,18 +38,40 @@ class _RegisterScreenState extends State<RegisterScreen> {
     super.dispose();
   }
 
-  /// Handles the registration process.
+  /// Centralized navigation logic to redirect users to the Login Screen.
+  /// Used for both successful registration and specific timeout scenarios.
+  void _navigateToLogin({required String message, bool isWarning = false}) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isWarning ? Colors.orange[800] : Colors.green,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 5), // Longer duration for readability
+      ),
+    );
+
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (context) => const LoginScreen()),
+    );
+  }
+
+  /// Handles the registration process including timeout resilience.
   Future<void> _submitRegister() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
 
-    // UX: Show floating snackbar to avoid layout shifts
+    // UX: Show floating snackbar to indicate processing
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Processing registration...'), 
+        content: Text('Processing registration... Please wait.'), 
         backgroundColor: _dermaNavyBlue,
-        behavior: SnackBarBehavior.floating, // Floats above content
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 4),
       ),
     );
 
@@ -63,47 +85,63 @@ class _RegisterScreenState extends State<RegisterScreen> {
         role: 'STUDENT', 
       );
 
+      // Attempt to register via API
       await dataSource.register(request);
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      ScaffoldMessenger.of(context).showSnackBar(
-         const SnackBar(
-           content: Text('Account created! Please login.'), 
-           backgroundColor: Colors.green,
-           behavior: SnackBarBehavior.floating,
-         ),
-      );
-
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const LoginScreen()),
-      );
+      // Happy Path: Immediate success response from backend
+      _navigateToLogin(successMessage: 'Account created successfully! Please login.');
 
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       
-      // Clean error message for better UX
-      String errorMessage = error.toString().replaceAll('Exception:', '').trim();
+      String errorMessage = error.toString();
+
+      // --- CRITICAL FIX: TIMEOUT HANDLING ---
+      // If the backend takes too long (e.g., synchronous email sending), 
+      // Dio throws a receive timeout. However, the DB record usually exists.
+      // We redirect the user to login instead of showing an error.
+      if (errorMessage.contains('receive timeout') || 
+          errorMessage.contains('connection timeout') || 
+          errorMessage.contains('deadline exceeded')) {
+        
+        _navigateToLogin(
+          message: 'The process took longer than expected, but your account is likely created. Please try logging in.',
+          isWarning: true
+        );
+        return; 
+      }
       
-      // Translation for specific backend errors (Optional but nice)
+      // Handle "User already exists" (409 Conflict)
       if (errorMessage.contains('409')) {
         errorMessage = 'El usuario ya existe. Intenta iniciar sesión.';
+      } else {
+        // Sanitize technical error messages for the user
+        errorMessage = errorMessage
+            .replaceAll('Exception:', '')
+            .replaceAll('DioException', '')
+            .trim();
       }
 
+      // Show standard error snackbar for non-timeout errors
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(errorMessage),
           backgroundColor: Colors.redAccent,
-          behavior: SnackBarBehavior.floating, // Crucial: Don't push layout up
-          margin: const EdgeInsets.all(20), // Nice spacing
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(20),
         ),
       );
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  // Wrapper for cleaner call in happy path
+  void _navigateToLoginHelper(String successMessage) {
+    _navigateToLogin(message: successMessage);
   }
 
   @override
@@ -114,7 +152,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     return Scaffold(
       backgroundColor: _dermaBackgroundWhite,
-      // EXTEND BODY: This makes the body go BEHIND the AppBar, removing the "rectangle" gap at the top.
+      // EXTEND BODY: Ensures body content flows behind the transparent AppBar
       extendBodyBehindAppBar: true, 
       appBar: AppBar(
         backgroundColor: Colors.transparent,
@@ -122,7 +160,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         leading: Padding(
           padding: const EdgeInsets.only(left: 10, top: 10),
           child: CircleAvatar(
-             backgroundColor: Colors.white.withOpacity(0.8), // Slight background for visibility
+             backgroundColor: Colors.white.withOpacity(0.8),
              child: IconButton(
               icon: const Icon(Icons.arrow_back_ios_new, color: _dermaNavyBlue, size: 20),
               onPressed: () => Navigator.pop(context),
@@ -130,29 +168,28 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ),
         ),
       ),
-      // LAYOUT BUILDER: The secret to perfect centering + scrolling
+      // LAYOUT BUILDER: Ensures content is centered but scrollable on small screens
       body: LayoutBuilder(
         builder: (context, constraints) {
           return SingleChildScrollView(
             physics: const ClampingScrollPhysics(),
             child: ConstrainedBox(
               constraints: BoxConstraints(
-                // Forces the container to be exactly the height of the screen
                 minHeight: constraints.maxHeight, 
               ),
-              child: Center( // This CENTER widget is what vertically aligns everything
+              child: Center( 
                 child: Container(
                   width: double.infinity,
-                  constraints: const BoxConstraints(maxWidth: 450), // Web/Desktop limit
+                  constraints: const BoxConstraints(maxWidth: 450), // Constraint for web/tablet
                   padding: const EdgeInsets.symmetric(horizontal: 30.0, vertical: 20.0),
                   child: Form(
                     key: _formKey,
                     child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center, // Vertically Center content
+                      mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         
-                        // --- Logo ---
+                        // --- Logo Asset ---
                         Image.asset(
                           'assets/images/logo.png', 
                           height: isMobile ? 90 : 120, 
@@ -178,7 +215,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ),
                         const SizedBox(height: 30),
 
-                        // --- Inputs ---
+                        // --- Input Fields ---
                         
                         _buildLabel('Email Institucional'),
                         TextFormField(
@@ -245,7 +282,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
                         const SizedBox(height: 30),
 
-                        // --- Actions ---
+                        // --- Action Buttons ---
                         ElevatedButton(
                           onPressed: _isLoading ? null : _submitRegister,
                           style: ElevatedButton.styleFrom(
@@ -283,6 +320,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
+  // Helper widget to ensure consistent label styling
   Widget _buildLabel(String text) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6.0, left: 4.0),
@@ -290,6 +328,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
+  // Helper for consistent input decoration styling
   InputDecoration _inputDecoration({required String hint, required IconData icon, Widget? suffixIcon}) {
     return InputDecoration(
       hintText: hint,
