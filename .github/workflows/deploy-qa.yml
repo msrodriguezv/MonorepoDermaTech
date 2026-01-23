@@ -7,88 +7,36 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  
-  # ============================================================================
-  # NETWORKING CONFIGURATION (QA ENVIRONMENT)
-  # ============================================================================
-  # Elastic IP associated with the Bastion Host (Preserved via Terraform)
   QA_BASTION_PUBLIC_IP: 100.52.22.97
-  
-  # Internal Private IPs for Application Nodes (STATIC ARCHITECTURE)
   EVENTS_PRIVATE_IP: 10.1.1.50
   STATE_PRIVATE_IP: 10.2.1.100
   NODE_A_PRIVATE_IP: 10.3.1.10
   NODE_B_PRIVATE_IP: 10.4.1.10
 
 jobs:
-  # ============================================================================
-  # DIAGNOSTIC: BASTION CONNECTIVITY CHECK & AUTO-HEALING
-  # ============================================================================
-  
   test-bastion-connection:
     name: 🔍 Test Bastion SSH Connection
     runs-on: ubuntu-latest
     steps:
-      # 1. Restore Credentials File (Fixes "Credentials could not be loaded" error)
       - name: Restore Credentials
         run: |
           mkdir -p ~/.aws
           echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
-      # 2. Auto-Healing: Start Bastion if stopped (Uses profile from file)
       - name: 🚑 Ensure Bastion is RUNNING
         run: |
-          echo "Checking Bastion instance state..."
-          
-          # Get Instance ID using the QA profile
-          INSTANCE_ID=$(aws ec2 describe-instances \
-            --profile qa-dermatech \
-            --region us-east-1 \
-            --filters "Name=tag:Name,Values=dermatech-qa-gateway" \
-            --query "Reservations[0].Instances[0].InstanceId" --output text)
-          
-          if [ "$INSTANCE_ID" == "None" ]; then
-            echo "❌ Error: Bastion instance not found via Terraform state."
-            exit 1
-          fi
-
-          # Check State
-          STATE=$(aws ec2 describe-instances \
-            --profile qa-dermatech \
-            --region us-east-1 \
-            --instance-ids $INSTANCE_ID \
-            --query "Reservations[0].Instances[0].State.Name" --output text)
-          
-          echo "Instance $INSTANCE_ID is currently: $STATE"
-          
+          INSTANCE_ID=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
+          STATE=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
           if [ "$STATE" == "stopped" ]; then
-            echo "⚠️ Bastion is STOPPED. Initiating start sequence..."
             aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
-            echo "⏳ Waiting for instance to reach 'running' state..."
             aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
-            echo "✅ Bastion successfully started."
           fi
 
-      - name: Check Bastion Reachability (Port 22)
-        run: |
-          echo "🔍 Testing TCP connection to bastion: ${{ env.QA_BASTION_PUBLIC_IP }}"
-          timeout 60 bash -c "until cat < /dev/null > /dev/tcp/${{ env.QA_BASTION_PUBLIC_IP }}/22; do echo 'Waiting for SSH port...'; sleep 5; done" && echo "✅ Port 22 is OPEN"
+      - name: Check Bastion Reachability
+        run: timeout 30 bash -c "until cat < /dev/null > /dev/tcp/${{ env.QA_BASTION_PUBLIC_IP }}/22; do sleep 5; done"
 
-      - name: Test SSH Handshake (Verbose)
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
-          chmod 600 ~/.ssh/bastion_key
-          ssh -vvv -i ~/.ssh/bastion_key \
-            -o StrictHostKeyChecking=no \
-            -o ConnectTimeout=10 \
-            ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} \
-            "echo '✅ SSH CONNECTION SUCCESSFUL'" || echo "❌ SSH FAILED"
-
-  # ============================================================================
-  # TRACK A: INFRASTRUCTURE (TERRAFORM - PERSISTENT ARCHITECTURE)
-  # ============================================================================
-
+  # [base-layer, nodes-layer, qa-hub, compile-code, docker-build SE MANTIENEN IGUALES]
+  # ... (Omitidos para brevedad, no cambian) ...
   base-layer:
     name: Deploy Base (${{ matrix.account }})
     runs-on: ubuntu-latest
@@ -121,7 +69,6 @@ jobs:
           terraform apply -auto-approve
           VPC_ID=$(terraform output -raw vpc_id)
           echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
-          echo "✅ VPC Verified/Created: $VPC_ID"
       - name: Upload VPC ID Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -162,7 +109,6 @@ jobs:
           terraform apply -auto-approve
           VPC_ID=$(terraform output -raw vpc_id)
           echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
-          echo "✅ VPC Verified/Created: $VPC_ID"
       - name: Upload VPC ID Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -207,38 +153,18 @@ jobs:
         run: |
           cd infrastructure/terraform/environments/account-01-qa
           terraform init -reconfigure
-          
-          # Peering Stability Retry Logic
-          if ! terraform apply -auto-approve \
-            -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
-            -var="state_vpc_id=${{ env.VPC_STATE }}" \
-            -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
-            -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"; then
-            
-            echo "⚠️ First attempt failed. Executing partial destroy..."
+          if ! terraform apply -auto-approve -var="events_vpc_id=${{ env.VPC_EVENTS }}" -var="state_vpc_id=${{ env.VPC_STATE }}" -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"; then
             terraform destroy -auto-approve -var="events_vpc_id=null" -var="state_vpc_id=null" -var="node_a_vpc_id=null" -var="node_b_vpc_id=null" || true
             sleep 20
-            
-            terraform apply -auto-approve \
-              -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
-              -var="state_vpc_id=${{ env.VPC_STATE }}" \
-              -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
-              -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
+            terraform apply -auto-approve -var="events_vpc_id=${{ env.VPC_EVENTS }}" -var="state_vpc_id=${{ env.VPC_STATE }}" -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
           fi
-
           ALB_DNS=$(terraform output -raw QA_ALB_DNS_NAME)
           echo "ALB_URL=$ALB_DNS" > alb_dns.txt
-          echo "🎉 GLOBAL INFRASTRUCTURE SUCCESSFULLY DEPLOYED"
-          echo "::notice title=ALB DNS::The Load Balancer DNS is: $ALB_DNS"
       - name: Upload ALB DNS Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ALB_DNS
           path: infrastructure/terraform/environments/account-01-qa/alb_dns.txt
-
-  # ============================================================================
-  # TRACK B: COMPILATION & DOCKER (PARALLEL PROCESS)
-  # ============================================================================
 
   compile-code:
     name: 🛠️ Compile Source Code
@@ -259,9 +185,9 @@ jobs:
           cd apps/clients/mobile_app
           flutter build web --release --dart-define=API_URL=/api/v1
       - uses: actions/upload-artifact@v4
-        with: { name: 'dist-files', path: 'dist', retention-days: 1 }
+        with: { name: 'dist-files', path: 'dist' }
       - uses: actions/upload-artifact@v4
-        with: { name: 'flutter-build', path: 'apps/clients/mobile_app/build/web', retention-days: 1 }
+        with: { name: 'flutter-build', path: 'apps/clients/mobile_app/build/web' }
 
   docker-build:
     name: 🐳 Docker Build & Push
@@ -299,7 +225,7 @@ jobs:
           tags: ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:latest
 
   # ============================================================================
-  # TRACK C: INSTALLATION & DEPLOYMENT (SECURE BASTION TUNNELING)
+  # SOLUCIÓN CRÍTICA: Túnel SSH Configurado ANTES de la verificación
   # ============================================================================
 
   deploy-events:
@@ -307,59 +233,27 @@ jobs:
     needs: [qa-hub, test-bastion-connection]
     runs-on: ubuntu-latest
     steps:
-      # 1. Restore Credentials (Fix)
       - name: Restore Credentials
         run: |
           mkdir -p ~/.aws
           echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
-      # 2. Auto-Healing (Fix: uses profile from file)
       - name: 🚑 Ensure Bastion is RUNNING
         run: |
-          INSTANCE_ID=$(aws ec2 describe-instances \
-            --profile qa-dermatech \
-            --region us-east-1 \
-            --filters "Name=tag:Name,Values=dermatech-qa-gateway" \
-            --query "Reservations[0].Instances[0].InstanceId" --output text)
-          
-          STATE=$(aws ec2 describe-instances \
-            --profile qa-dermatech \
-            --region us-east-1 \
-            --instance-ids $INSTANCE_ID \
-            --query "Reservations[0].Instances[0].State.Name" --output text)
-          
+          INSTANCE_ID=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
+          STATE=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
           if [ "$STATE" == "stopped" ]; then
-            echo "⚠️ Bastion STOPPED. Starting..."
             aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
             aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
           fi
 
-      - name: Setup SSH Key
+      - name: Setup SSH Key and Config (CRITICAL FIX)
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
-      
-      # 3. Active Wait Loop (Using Static IP from ENV)
-      - name: ⏳ Active Wait for Internal Connectivity
-        run: |
-          echo "Testing connectivity from Bastion to Events..."
-          end=$((SECONDS+600))
-          while [ $SECONDS -lt $end ]; do
-            # Note: Using ${{ env.EVENTS_PRIVATE_IP }} here
-            if ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} \
-               "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/${{ env.EVENTS_PRIVATE_IP }}/22'" 2>/dev/null; then
-               echo "✅ Events is reachable via internal network."
-               exit 0
-            fi
-            echo "⏳ Waiting for connectivity... ($((end-SECONDS))s left)"
-            sleep 5
-          done
-          echo "❌ Timeout waiting for Events"
-          exit 1
-
-      - name: Deploy via SSH Tunnel
-        run: |
+          
+          # Configuración del túnel PRIMERO
           cat > ~/.ssh/config <<EOF
           Host bastion
             HostName ${{ env.QA_BASTION_PUBLIC_IP }}
@@ -373,25 +267,35 @@ jobs:
             IdentityFile ~/.ssh/bastion_key
             ProxyJump bastion
             StrictHostKeyChecking no
+            ConnectTimeout 10
           EOF
-          
+
+      # Verificación usando el TÚNEL REAL (No comandos crudos)
+      - name: ⏳ Active Wait via SSH Tunnel
+        run: |
+          echo "Testing REAL SSH connection through tunnel..."
+          end=$((SECONDS+600))
+          while [ $SECONDS -lt $end ]; do
+            # Intentamos conectar realmente al destino usando el alias
+            if ssh events-server "echo '✅ Connection Established'"; then
+               exit 0
+            fi
+            echo "⏳ Waiting for tunnel... ($((end-SECONDS))s left)"
+            sleep 10
+          done
+          echo "❌ Connection Timeout"
+          exit 1
+
+      - name: Deploy Services
+        run: |
           ssh events-server << 'ENDSSH'
-            echo "✅ SECURITY CHECK: Connected via QA Bastion Tunnel"
-            
-            # Install Docker Compose
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-            
-            # Create directories
             sudo mkdir -p /data/kafka /data/zookeeper /data/rabbitmq /data/mosquitto/config
             sudo chmod -R 777 /data
-            
-            # Configure Mosquitto
             echo "listener 1883" | sudo tee /data/mosquitto/config/mosquitto.conf
             echo "allow_anonymous true" | sudo tee -a /data/mosquitto/config/mosquitto.conf
-
-            # Create docker-compose.yml
             cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
@@ -448,11 +352,7 @@ jobs:
             infra_net:
               driver: bridge
           EOF
-            
-            # Start services
             sudo docker compose up -d
-            
-            echo "✅ Events services deployed successfully"
           ENDSSH
 
   deploy-state:
@@ -474,44 +374,44 @@ jobs:
             aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
           fi
 
-      - name: Setup SSH Key
+      - name: Setup SSH Key and Config
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
-      
-      - name: ⏳ Active Wait for Internal Connectivity
-        run: |
-          echo "Testing connectivity from Bastion to State..."
-          end=$((SECONDS+600))
-          while [ $SECONDS -lt $end ]; do
-            if ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} \
-               "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/${{ env.STATE_PRIVATE_IP }}/22'" 2>/dev/null; then
-               echo "✅ State is reachable via internal network."
-               exit 0
-            fi
-            sleep 5
-          done
-          echo "❌ Timeout waiting for State"
-          exit 1
-
-      - name: Deploy via SSH Tunnel
-        run: |
+          
           cat > ~/.ssh/config <<EOF
           Host bastion
             HostName ${{ env.QA_BASTION_PUBLIC_IP }}
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
+            
           Host state-server
             HostName ${{ env.STATE_PRIVATE_IP }}
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             ProxyJump bastion
             StrictHostKeyChecking no
+            ConnectTimeout 10
           EOF
+
+      - name: ⏳ Active Wait via SSH Tunnel
+        run: |
+          echo "Testing REAL SSH connection to State..."
+          end=$((SECONDS+600))
+          while [ $SECONDS -lt $end ]; do
+            if ssh state-server "echo '✅ Connection Established'"; then
+               exit 0
+            fi
+            echo "⏳ Waiting for tunnel... ($((end-SECONDS))s left)"
+            sleep 10
+          done
+          exit 1
+
+      - name: Deploy Services
+        run: |
           ssh state-server << 'ENDSSH'
-            echo "✅ SECURITY CHECK: Connected via QA Bastion Tunnel"
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
@@ -539,7 +439,6 @@ jobs:
                 - /data/grafana:/var/lib/grafana
           EOF
             sudo docker compose up -d
-            echo "✅ State services deployed successfully"
           ENDSSH
 
   deploy-apps:
@@ -571,55 +470,48 @@ jobs:
             aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
           fi
 
-      - name: Setup SSH Key
+      - name: Setup SSH Key and Config
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
-      
-      - name: ⏳ Active Wait for Internal Connectivity
-        run: |
-          echo "Testing connectivity from Bastion to ${{ matrix.node_name }}..."
-          end=$((SECONDS+600))
-          while [ $SECONDS -lt $end ]; do
-            if ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} \
-               "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/${{ matrix.node_ip }}/22'" 2>/dev/null; then
-               echo "✅ ${{ matrix.node_name }} is reachable via internal network."
-               exit 0
-            fi
-            echo "⏳ Waiting for connectivity... ($((end-SECONDS))s left)"
-            sleep 5
-          done
-          echo "❌ Timeout waiting for ${{ matrix.node_name }}"
-          exit 1
-
-      - name: Deploy to ${{ matrix.node_name }}
-        run: |
+          
           cat > ~/.ssh/config <<EOF
           Host bastion
             HostName ${{ env.QA_BASTION_PUBLIC_IP }}
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
+            
           Host ${{ matrix.node_name }}
             HostName ${{ matrix.node_ip }}
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             ProxyJump bastion
             StrictHostKeyChecking no
+            ConnectTimeout 10
           EOF
+
+      - name: ⏳ Active Wait via SSH Tunnel
+        run: |
+          echo "Testing REAL SSH connection to ${{ matrix.node_name }}..."
+          end=$((SECONDS+600))
+          while [ $SECONDS -lt $end ]; do
+            if ssh ${{ matrix.node_name }} "echo '✅ Connection Established'"; then
+               exit 0
+            fi
+            echo "⏳ Waiting for tunnel... ($((end-SECONDS))s left)"
+            sleep 10
+          done
+          exit 1
+
+      - name: Deploy Services
+        run: |
           ssh ${{ matrix.node_name }} << 'ENDSSH'
-            echo "✅ SECURITY CHECK: Connected via QA Bastion Tunnel"
-            
-            # Install Docker Compose
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-            
-            # Login to Docker Hub
             echo "${{ secrets.DOCKER_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
-            # Create docker-compose.yml
             cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
@@ -679,11 +571,8 @@ jobs:
                 - DB_NAME=${{ secrets.DATABASE_NAME }}
                 - DB_SYNC=${{ secrets.DATABASE_SYNC }}
           EOF
-            
-            # Pull and deploy
             sudo docker compose pull
             sudo docker compose up -d --remove-orphans
-            
             echo "✅ Applications deployed successfully on ${{ matrix.node_name }}"
           ENDSSH
           
@@ -693,4 +582,3 @@ jobs:
           ALB_DNS=$(cat ALB_DNS/alb_dns.txt | grep -o 'ALB_URL=.*' | cut -d'=' -f2)
           echo "🎉 DEPLOYMENT COMPLETE (SECURE TUNNEL)"
           echo "🌐 URL DEL LOAD BALANCER: http://$ALB_DNS"
-          echo "::notice title=Deployment Complete::Application available at http://$ALB_DNS"
