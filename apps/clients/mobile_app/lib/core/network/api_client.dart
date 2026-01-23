@@ -1,12 +1,10 @@
 import 'package:dio/dio.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../config/environment.dart';
 import 'auth_interceptor.dart'; 
 
 class ApiClient {
   late final Dio _dio;
-  final _storage = const FlutterSecureStorage();
-
+  
   ApiClient() {
     // 1. Initialize Dio
     _dio = Dio(BaseOptions(
@@ -19,14 +17,16 @@ class ApiClient {
       },
     ));
 
-    // 2. Register the Interceptor (MUST BE INSIDE THE CONSTRUCTOR)
-    _dio.interceptors.add(AuthInterceptor(_storage, _dio));
+    // 2. Register the Interceptor
+    // Ahora solo pasamos '_dio'. El interceptor ya sabe cómo buscar el token
+    // usando el StorageService internamente.
+    _dio.interceptors.add(AuthInterceptor(_dio));
   }
 
   // --- Wrapper Methods ---
 
-  Future<Response> get(String path, {Options? options}) async {
-    return _dio.get(path, options: options);
+  Future<Response> get(String path, {Map<String, dynamic>? queryParameters, Options? options}) async {
+    return _dio.get(path, queryParameters: queryParameters, options: options);
   }
 
   Future<Response> post(String path, dynamic data, {Options? options}) async {
