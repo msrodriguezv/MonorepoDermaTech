@@ -1,8 +1,8 @@
 name: "QA: SMART RECYCLE (Instances EC2 Only - Preserve Network)"
 
 on:
-  push:
-    branches: [ qa ]
+  #push:
+    #branches: [ developer ]
   # Manual trigger to avoid accidental data loss
   workflow_dispatch:
 
