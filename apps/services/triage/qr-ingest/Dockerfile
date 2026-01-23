@@ -7,6 +7,8 @@ RUN go mod download
 
 COPY apps/services/triage/qr-ingest/ .
 
+RUN go mod tidy
+
 RUN CGO_ENABLED=0 GOOS=linux go build -o qr-service main.go
 
 FROM alpine:latest
