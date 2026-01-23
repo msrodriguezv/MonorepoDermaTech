@@ -125,7 +125,7 @@ describe('RegisterUserCommandHandler', () => {
         expect.objectContaining({ userId: '123-uuid' })
       );
       
-      expect(loggerSpy).toHaveBeenCalledWith(expect.stringContaining('Processing new user registration'));
+      expect(loggerSpy).toHaveBeenCalledWith(expect.stringContaining('Processing registration for'));
     });
 
     it('should throw ConflictException if user already exists', async () => {

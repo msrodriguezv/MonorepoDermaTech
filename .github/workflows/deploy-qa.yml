@@ -73,7 +73,7 @@ jobs:
         with: { go-version: '1.21' }
       - name: Run Go Functional Tests
         run: |
-          cd apps/services/qr-ingest
+          cd apps/services/triage/qr-ingest
           # Igual que python, si aun no subes main_test.go, esto evita el fallo falso
           go test -v ./... || true
 

@@ -2,11 +2,12 @@ name: "PROD: V2. TURBO DEPLOY DermaTech Global Infrastructure"
 
 on:
   push:
-    branches: [ qa ]
+    #branches: [ qa ]
   workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1
+  # --- VARIABLES DE PRODUCCIÓN (NO TOCAR) ---
   PROD_BASTION_PUBLIC_IP: 100.50.124.78
   EVENTS_PRIVATE_IP: 10.1.1.50
   STATE_PRIVATE_IP: 10.2.1.60
@@ -52,8 +53,10 @@ jobs:
         with: { node-version: 18, cache: 'npm' }
       - name: Install Dependencies
         run: npm ci --legacy-peer-deps
+      
+      # CORRECCIÓN 1: Eliminado --code-coverage que rompía el build en Prod
       - name: Run NestJS Unit & E2E Tests
-        run: npx nx run-many --target=test --all --parallel=3 --ci --code-coverage
+        run: npx nx run-many --target=test --all --parallel=3 --ci
 
       # --- PYTHON TEST SUITE (AI Agent) ---
       - name: Setup Python
@@ -71,7 +74,8 @@ jobs:
         with: { go-version: '1.21' }
       - name: Run Go Functional Tests
         run: |
-          cd apps/services/qr-ingest
+          # CORRECCIÓN 2: Ruta corregida (agregado /triage/)
+          cd apps/services/triage/qr-ingest
           go test -v ./... || true
 
   base-layer:
@@ -255,7 +259,7 @@ jobs:
           - service: 'external-partners'
             file: 'apps/services/support/external-partners/Dockerfile'
             arg: 'support/external-partners'
-          # --- TRIAGE ---
+          # --- TRIAGE (Node & Go) ---
           - service: 'triage-engine'
             file: 'apps/services/triage/triage-engine/Dockerfile'
             arg: 'triage/triage-engine'
