@@ -33,7 +33,7 @@ jobs:
       - name: Check Bastion Reachability
         run: |
           echo "🔍 Testing connection to bastion: ${{ env.QA_BASTION_PUBLIC_IP }}"
-          timeout 10 bash -c "cat < /dev/null > /dev/tcp/${{ env.QA_BASTION_PUBLIC_IP }}/22" && echo "✅ Port 22 is OPEN" || echo "❌ Port 22 is CLOSED"
+          timeout 10 bash -c "cat < /dev/null > /dev/tcp/${{ env.QA_BASTION_PUBLIC_IP }}/22" && echo "✅ Port 22 is OPEN" || echo "❌ Port 22 is CLOSED or FILTERED"
           
       - name: Test SSH Connection (verbose)
         run: |
@@ -83,6 +83,7 @@ jobs:
           
           VPC_ID=$(terraform output -raw vpc_id)
           echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
+          echo "✅ VPC Verified/Created: $VPC_ID"
       - name: Upload VPC ID Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -124,6 +125,7 @@ jobs:
           
           VPC_ID=$(terraform output -raw vpc_id)
           echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
+          echo "✅ VPC Verified/Created: $VPC_ID"
       - name: Upload VPC ID Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -191,6 +193,8 @@ jobs:
 
           ALB_DNS=$(terraform output -raw QA_ALB_DNS_NAME)
           echo "ALB_URL=$ALB_DNS" > alb_dns.txt
+          echo "🎉 GLOBAL INFRASTRUCTURE SUCCESSFULLY DEPLOYED"
+          echo "::notice title=ALB DNS::The Load Balancer DNS is: $ALB_DNS"
       - name: Upload ALB DNS Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -275,17 +279,19 @@ jobs:
           chmod 600 ~/.ssh/bastion_key
       
       # ------------------------------------------------------------------------
-      # FIX: SMART WAIT (Network Connectivity Check)
+      # FIX QA: ACTIVE WAIT (Reemplaza al sleep 60)
+      # Verifica que Events (10.1.1.50) responda por el puerto 22 desde el Bastión
       # ------------------------------------------------------------------------
       - name: ⏳ Active Wait for Internal Connectivity
         run: |
           echo "Testing internal connectivity from Bastion to Events..."
           ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} \
-            "timeout 300 bash -c 'until echo > /dev/tcp/${{ env.EVENTS_PRIVATE_IP }}/22; do echo \"Waiting for Events...\"; sleep 5; done'"
+            "timeout 300 bash -c 'until echo > /dev/tcp/${{ env.EVENTS_PRIVATE_IP }}/22; do echo \"Waiting for Events IP...\"; sleep 5; done'"
           echo "✅ Events is reachable via internal network."
 
       - name: Deploy via SSH Tunnel
         run: |
+          # Configurar StrictHostKeyChecking
           cat > ~/.ssh/config <<EOF
           Host bastion
             HostName ${{ env.QA_BASTION_PUBLIC_IP }}
@@ -301,19 +307,24 @@ jobs:
             StrictHostKeyChecking no
           EOF
           
+          # Ejecutar comandos en el servidor Events
           ssh events-server << 'ENDSSH'
             echo "✅ SECURITY CHECK: Connected via QA Bastion Tunnel"
             
+            # Instalar Docker Compose
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
             
+            # Crear directorios
             sudo mkdir -p /data/kafka /data/zookeeper /data/rabbitmq /data/mosquitto/config
             sudo chmod -R 777 /data
             
+            # Configurar Mosquitto
             echo "listener 1883" | sudo tee /data/mosquitto/config/mosquitto.conf
             echo "allow_anonymous true" | sudo tee -a /data/mosquitto/config/mosquitto.conf
 
+            # Crear docker-compose.yml
             cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
@@ -371,7 +382,9 @@ jobs:
               driver: bridge
           EOF
             
+            # Levantar servicios
             sudo docker compose up -d
+            
             echo "✅ Events services deployed successfully"
           ENDSSH
 
@@ -387,13 +400,14 @@ jobs:
           chmod 600 ~/.ssh/bastion_key
       
       # ------------------------------------------------------------------------
-      # FIX: SMART WAIT (Network Connectivity Check)
+      # FIX QA: ACTIVE WAIT (Reemplaza al sleep 60)
+      # Verifica que State (10.2.1.100) responda por el puerto 22 desde el Bastión
       # ------------------------------------------------------------------------
       - name: ⏳ Active Wait for Internal Connectivity
         run: |
           echo "Testing internal connectivity from Bastion to State..."
           ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} \
-            "timeout 300 bash -c 'until echo > /dev/tcp/${{ env.STATE_PRIVATE_IP }}/22; do echo \"Waiting for State...\"; sleep 5; done'"
+            "timeout 300 bash -c 'until echo > /dev/tcp/${{ env.STATE_PRIVATE_IP }}/22; do echo \"Waiting for State IP...\"; sleep 5; done'"
           echo "✅ State is reachable via internal network."
 
       - name: Deploy via SSH Tunnel
@@ -470,13 +484,14 @@ jobs:
           chmod 600 ~/.ssh/bastion_key
       
       # ------------------------------------------------------------------------
-      # FIX: SMART WAIT (Network Connectivity Check)
+      # FIX QA: ACTIVE WAIT (Reemplaza al sleep 60)
+      # Verifica que los Nodos (10.3... y 10.4...) respondan por el puerto 22
       # ------------------------------------------------------------------------
       - name: ⏳ Active Wait for Internal Connectivity
         run: |
           echo "Testing internal connectivity from Bastion to ${{ matrix.node_name }}..."
           ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} \
-            "timeout 300 bash -c 'until echo > /dev/tcp/${{ matrix.node_ip }}/22; do echo \"Waiting for ${{ matrix.node_ip }}...\"; sleep 5; done'"
+            "timeout 300 bash -c 'until echo > /dev/tcp/${{ matrix.node_ip }}/22; do echo \"Waiting for Node IP...\"; sleep 5; done'"
           echo "✅ ${{ matrix.node_name }} is reachable via internal network."
 
       - name: Deploy to ${{ matrix.node_name }}
@@ -499,12 +514,15 @@ jobs:
           ssh ${{ matrix.node_name }} << 'ENDSSH'
             echo "✅ SECURITY CHECK: Connected via QA Bastion Tunnel"
             
+            # Instalar Docker Compose
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
             
+            # Login a Docker Hub
             echo "${{ secrets.DOCKER_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
+            # Crear docker-compose.yml
             cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
@@ -565,6 +583,7 @@ jobs:
                 - DB_SYNC=${{ secrets.DATABASE_SYNC }}
           EOF
             
+            # Pull y deploy
             sudo docker compose pull
             sudo docker compose up -d --remove-orphans
             
