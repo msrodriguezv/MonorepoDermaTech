@@ -1,13 +1,12 @@
 name: "QA: SMART RECYCLE (Instances EC2 Only - Preserve Network)"
 
 on:
-    #push:
-        #branches: [ qa ]
-    workflow_dispatch:
+  # Manual trigger to avoid accidental data loss
+  workflow_dispatch:
 
 jobs:
   recycle-compute-only:
-    name: Recycle QA Instances (Keep Network Alive)
+    name: Recycle QA Instances (Keep Network & Bastion Alive)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -18,29 +17,40 @@ jobs:
           echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
       # ------------------------------------------------------------------------
-      # SOLO BORRAMOS LAS INSTANCIAS (Capa 2)
-      # Protegemos VPC, ALB, Peerings, Gateways (Capa 1)
+      # STRATEGY: IMMUTABLE INFRASTRUCTURE MAINTENANCE
+      # 1. Terminate Application Nodes (Events, State, Node A, Node B) (Layer 2).
+      # 2. Preserve Network Access Layer (VPC, IGW, NAT, Bastion Host) (Layer 1).
       # ------------------------------------------------------------------------
       
-      - name: 🔥 Terminate Instances (QA & Nodes)
+      - name: 🔥 Terminate App Instances (Protect Bastion)
         run: |
-          echo "♻️ Iniciando Reciclaje de Computo (Smart Mode)..."
+          echo "♻️ Starting Smart Compute Recycle (Preserving Bastion Host)..."
           
-          # Lista de perfiles donde viven las apps
+          # Iterate through AWS profiles defining the infrastructure components
           for profile in qa-dermatech node-a-dermatech node-b-dermatech events-dermatech state-dermatech; do
-            echo "🔎 Buscando instancias en perfil: $profile"
+            echo "🔎 Scanning profile: $profile"
             
-            # Buscar instancias que NO estén terminadas
-            ids=$(aws ec2 describe-instances --profile $profile --region us-east-1 --filters "Name=instance-state-name,Values=running,stopped,stopping,pending" --query 'Reservations[*].Instances[*].InstanceId' --output text 2>/dev/null || echo "")
+            # CRITICAL JMESPath FILTER:
+            # We query for all instances that are NOT Terminated.
+            # Then, we strictly EXCLUDE the instance tagged as 'dermatech-qa-gateway'.
+            # This ensures the Bastion Host remains active for the next deployment cycle.
+            ids=$(aws ec2 describe-instances \
+              --profile $profile \
+              --region us-east-1 \
+              --filters "Name=instance-state-name,Values=running,stopped,stopping,pending" \
+              --query "Reservations[].Instances[?Tags[?Key=='Name' && Value!='dermatech-qa-gateway']].InstanceId" \
+              --output text 2>/dev/null || echo "")
             
             if [ -n "$ids" ]; then
-              echo " ☠️ Terminando instancias: $ids"
+              echo " ☠️ Terminating Application Instances: $ids"
               aws ec2 terminate-instances --profile $profile --region us-east-1 --instance-ids $ids
             else
-              echo " ✅ No hay instancias activas en este perfil."
+              echo " ✅ No disposable instances found in this profile (or Bastion was protected)."
             fi
           done
           
-          echo "⏳ Esperando a que AWS procese la terminación..."
-          sleep 10
-          echo "✅ Reciclaje Completado. La Red y el Load Balancer siguen vivos."
+          echo "⏳ Waiting for AWS termination signal propagation..."
+          sleep 5
+          echo "✅ Recycle Complete." 
+          echo "ℹ️ INFO: Application Nodes have been terminated."
+          echo "ℹ️ INFO: Network Layer and Bastion Host remain active."

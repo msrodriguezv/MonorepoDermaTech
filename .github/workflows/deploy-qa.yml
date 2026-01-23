@@ -11,31 +11,86 @@ env:
   # ============================================================================
   # NETWORKING CONFIGURATION (QA ENVIRONMENT)
   # ============================================================================
-  # ⚠️ VERIFICA QUE ESTA IP NO HAYA CAMBIADO EN AWS CONSOLE ⚠️
+  # Elastic IP associated with the Bastion Host (Preserved via Terraform)
   QA_BASTION_PUBLIC_IP: 100.52.22.97
   
+  # Internal Private IPs for Application Nodes
   EVENTS_PRIVATE_IP: 10.1.1.50
   STATE_PRIVATE_IP: 10.2.1.100
   NODE_A_PRIVATE_IP: 10.3.1.10
   NODE_B_PRIVATE_IP: 10.4.1.10
 
 jobs:
+  # ============================================================================
+  # DIAGNOSTIC: BASTION CONNECTIVITY CHECK & AUTO-HEALING
+  # ============================================================================
+  
   test-bastion-connection:
     name: 🔍 Test Bastion SSH Connection
     runs-on: ubuntu-latest
     steps:
-      - name: Check Bastion Reachability
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      # ------------------------------------------------------------------------
+      # AUTO-HEALING: Ensure Bastion is Running
+      # This step guarantees that even if the instance was stopped by a scheduler
+      # or manual intervention, it is started before the deployment proceeds.
+      # ------------------------------------------------------------------------
+      - name: 🚑 Ensure Bastion is RUNNING
         run: |
-          echo "🔍 Testing connection to bastion: ${{ env.QA_BASTION_PUBLIC_IP }}"
-          # Aumenté el timeout de conexión a 15s para dar margen
-          timeout 15 bash -c "cat < /dev/null > /dev/tcp/${{ env.QA_BASTION_PUBLIC_IP }}/22" && echo "✅ Port 22 is OPEN" || echo "❌ Port 22 is CLOSED"
+          echo "Checking Bastion instance state..."
           
-      - name: Test SSH Connection (verbose)
+          # Retrieve Instance ID by Name Tag
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=dermatech-qa-gateway" \
+            --query "Reservations[0].Instances[0].InstanceId" --output text)
+          
+          if [ "$INSTANCE_ID" == "None" ]; then
+            echo "❌ Error: Bastion instance not found via Terraform state."
+            exit 1
+          fi
+
+          # Check Current State
+          STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+          echo "Instance $INSTANCE_ID is currently: $STATE"
+          
+          if [ "$STATE" == "stopped" ]; then
+            echo "⚠️ Bastion is STOPPED. Initiating start sequence..."
+            aws ec2 start-instances --instance-ids $INSTANCE_ID
+            echo "⏳ Waiting for instance to reach 'running' state..."
+            aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+            echo "✅ Bastion successfully started."
+          elif [ "$STATE" == "running" ]; then
+            echo "✅ Bastion is already running."
+          else
+            echo "⚠️ Bastion state is '$STATE'. Proceeding with connectivity check."
+          fi
+
+      - name: Check Bastion Reachability (Port 22)
+        run: |
+          echo "🔍 Testing TCP connection to bastion: ${{ env.QA_BASTION_PUBLIC_IP }}"
+          # Retry loop to allow SSH daemon startup time if instance just booted
+          timeout 60 bash -c "until cat < /dev/null > /dev/tcp/${{ env.QA_BASTION_PUBLIC_IP }}/22; do echo 'Waiting for SSH port...'; sleep 5; done" && echo "✅ Port 22 is OPEN"
+
+      - name: Test SSH Handshake (Verbose)
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
-          ssh -vvv -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -o ConnectTimeout=10 ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} "echo '✅ SSH CONNECTION SUCCESSFUL'" || echo "❌ SSH FAILED"
+          ssh -vvv -i ~/.ssh/bastion_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=10 \
+            ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} \
+            "echo '✅ SSH CONNECTION SUCCESSFUL'" || echo "❌ SSH FAILED"
+
+  # ============================================================================
+  # TRACK A: INFRASTRUCTURE (TERRAFORM - PERSISTENT ARCHITECTURE)
+  # ============================================================================
 
   base-layer:
     name: Deploy Base (${{ matrix.account }})
@@ -67,6 +122,7 @@ jobs:
           cd infrastructure/terraform/environments/${{ matrix.path }}
           terraform init -reconfigure
           terraform apply -auto-approve
+          
           VPC_ID=$(terraform output -raw vpc_id)
           echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
           echo "✅ VPC Verified/Created: $VPC_ID"
@@ -108,6 +164,7 @@ jobs:
           cd infrastructure/terraform/environments/${{ matrix.path }}
           terraform init -reconfigure
           terraform apply -auto-approve
+          
           VPC_ID=$(terraform output -raw vpc_id)
           echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
           echo "✅ VPC Verified/Created: $VPC_ID"
@@ -155,22 +212,27 @@ jobs:
         run: |
           cd infrastructure/terraform/environments/account-01-qa
           terraform init -reconfigure
+          
+          # Peering Stability Retry Logic
           if ! terraform apply -auto-approve \
             -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
             -var="state_vpc_id=${{ env.VPC_STATE }}" \
             -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
             -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"; then
+            
             echo "⚠️ First attempt failed. Executing partial destroy..."
             terraform destroy -auto-approve \
               -var="events_vpc_id=null" -var="state_vpc_id=null" \
               -var="node_a_vpc_id=null" -var="node_b_vpc_id=null" || true
             sleep 20
+            
             terraform apply -auto-approve \
               -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
               -var="state_vpc_id=${{ env.VPC_STATE }}" \
               -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
               -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
           fi
+
           ALB_DNS=$(terraform output -raw QA_ALB_DNS_NAME)
           echo "ALB_URL=$ALB_DNS" > alb_dns.txt
           echo "🎉 GLOBAL INFRASTRUCTURE SUCCESSFULLY DEPLOYED"
@@ -182,7 +244,7 @@ jobs:
           path: infrastructure/terraform/environments/account-01-qa/alb_dns.txt
 
   # ============================================================================
-  # TRACK B: COMPILATION & DOCKER
+  # TRACK B: COMPILATION & DOCKER (PARALLEL PROCESS)
   # ============================================================================
 
   compile-code:
@@ -244,7 +306,7 @@ jobs:
           tags: ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:latest
 
   # ============================================================================
-  # TRACK C: INSTALLATION & DEPLOYMENT
+  # TRACK C: INSTALLATION & DEPLOYMENT (SECURE BASTION TUNNELING)
   # ============================================================================
 
   deploy-events:
@@ -252,20 +314,40 @@ jobs:
     needs: [qa-hub, test-bastion-connection]
     runs-on: ubuntu-latest
     steps:
+      # ------------------------------------------------------------------------
+      # AUTO-HEALING: Ensure Bastion is Running (Redundant Safety Check)
+      # ------------------------------------------------------------------------
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: 🚑 Ensure Bastion is RUNNING
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
+          STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+          if [ "$STATE" == "stopped" ]; then
+            echo "⚠️ Bastion STOPPED. Starting..."
+            aws ec2 start-instances --instance-ids $INSTANCE_ID
+            aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+          fi
+
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
       
-      # ⬇️ FIX: Loop en el Runner (GitHub) para manejar caídas del Bastion ⬇️
+      # ------------------------------------------------------------------------
+      # FIX: Runner-Side Retry Loop to prevent SSH Freeze
+      # ------------------------------------------------------------------------
       - name: ⏳ Active Wait for Internal Connectivity
         run: |
           echo "Testing connectivity from Bastion to Events..."
-          # Loop de 10 minutos (600s)
           end=$((SECONDS+600))
           while [ $SECONDS -lt $end ]; do
-            # Intentamos conectar. Si el Bastion está caído, el comando ssh falla y el script CONTINÚA (gracias al if)
             if ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} \
                "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/${{ env.EVENTS_PRIVATE_IP }}/22'" 2>/dev/null; then
                echo "✅ Events is reachable via internal network."
@@ -285,6 +367,7 @@ jobs:
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
+            
           Host events-server
             HostName ${{ env.EVENTS_PRIVATE_IP }}
             User ec2-user
@@ -292,15 +375,24 @@ jobs:
             ProxyJump bastion
             StrictHostKeyChecking no
           EOF
+          
           ssh events-server << 'ENDSSH'
             echo "✅ SECURITY CHECK: Connected via QA Bastion Tunnel"
+            
+            # Install Docker Compose
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            
+            # Create directories
             sudo mkdir -p /data/kafka /data/zookeeper /data/rabbitmq /data/mosquitto/config
             sudo chmod -R 777 /data
+            
+            # Configure Mosquitto
             echo "listener 1883" | sudo tee /data/mosquitto/config/mosquitto.conf
             echo "allow_anonymous true" | sudo tee -a /data/mosquitto/config/mosquitto.conf
+
+            # Create docker-compose.yml
             cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
@@ -357,7 +449,10 @@ jobs:
             infra_net:
               driver: bridge
           EOF
+            
+            # Start services
             sudo docker compose up -d
+            
             echo "✅ Events services deployed successfully"
           ENDSSH
 
@@ -366,16 +461,32 @@ jobs:
     needs: [qa-hub, test-bastion-connection]
     runs-on: ubuntu-latest
     steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: 🚑 Ensure Bastion is RUNNING
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
+          STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+          if [ "$STATE" == "stopped" ]; then
+            echo "⚠️ Bastion STOPPED. Starting..."
+            aws ec2 start-instances --instance-ids $INSTANCE_ID
+            aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+          fi
+
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
       
-      # ⬇️ FIX: Loop en el Runner para State ⬇️
       - name: ⏳ Active Wait for Internal Connectivity
         run: |
-          echo "Testing internal connectivity from Bastion to State..."
+          echo "Testing connectivity from Bastion to State..."
           end=$((SECONDS+600))
           while [ $SECONDS -lt $end ]; do
             if ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} \
@@ -397,6 +508,7 @@ jobs:
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
+            
           Host state-server
             HostName ${{ env.STATE_PRIVATE_IP }}
             User ec2-user
@@ -404,13 +516,16 @@ jobs:
             ProxyJump bastion
             StrictHostKeyChecking no
           EOF
+          
           ssh state-server << 'ENDSSH'
             echo "✅ SECURITY CHECK: Connected via QA Bastion Tunnel"
+            
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
             sudo mkdir -p /data/redis /data/grafana /data/prometheus
             sudo chmod -R 777 /data
+            
             cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
@@ -432,6 +547,7 @@ jobs:
               volumes: 
                 - /data/grafana:/var/lib/grafana
           EOF
+            
             sudo docker compose up -d
             echo "✅ State services deployed successfully"
           ENDSSH
@@ -450,16 +566,33 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { name: 'ALB_DNS', path: 'ALB_DNS' }
+        
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: 🚑 Ensure Bastion is RUNNING
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
+          STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+          if [ "$STATE" == "stopped" ]; then
+            echo "⚠️ Bastion STOPPED. Starting..."
+            aws ec2 start-instances --instance-ids $INSTANCE_ID
+            aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+          fi
+
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
       
-      # ⬇️ FIX: Loop en el Runner para Apps ⬇️
       - name: ⏳ Active Wait for Internal Connectivity
         run: |
-          echo "Testing internal connectivity from Bastion to ${{ matrix.node_name }}..."
+          echo "Testing connectivity from Bastion to ${{ matrix.node_name }}..."
           end=$((SECONDS+600))
           while [ $SECONDS -lt $end ]; do
             if ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} \
@@ -481,6 +614,7 @@ jobs:
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
+            
           Host ${{ matrix.node_name }}
             HostName ${{ matrix.node_ip }}
             User ec2-user
@@ -488,12 +622,19 @@ jobs:
             ProxyJump bastion
             StrictHostKeyChecking no
           EOF
+          
           ssh ${{ matrix.node_name }} << 'ENDSSH'
             echo "✅ SECURITY CHECK: Connected via QA Bastion Tunnel"
+            
+            # Install Docker Compose
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            
+            # Login to Docker Hub
             echo "${{ secrets.DOCKER_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+            # Create docker-compose.yml
             cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
@@ -553,8 +694,11 @@ jobs:
                 - DB_NAME=${{ secrets.DATABASE_NAME }}
                 - DB_SYNC=${{ secrets.DATABASE_SYNC }}
           EOF
+            
+            # Pull and deploy
             sudo docker compose pull
             sudo docker compose up -d --remove-orphans
+            
             echo "✅ Applications deployed successfully on ${{ matrix.node_name }}"
           ENDSSH
           

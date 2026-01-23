@@ -12,30 +12,65 @@ env:
   # NETWORKING CONFIGURATION (PROD ENVIRONMENT)
   # ============================================================================
   
-  # PROD BASTION HOST
+  # PROD BASTION HOST (Elastic IP)
   PROD_BASTION_PUBLIC_IP: 100.50.124.78
 
   # PROD PRIVATE IPs (Internal Targets)
   EVENTS_PRIVATE_IP: 10.1.1.50
-  STATE_PRIVATE_IP: 10.2.1.60
+  STATE_PRIVATE_IP: 10.2.1.60  # Note: Different subnet/IP than QA
   NODE_A_PRIVATE_IP: 10.3.1.10
   NODE_B_PRIVATE_IP: 10.4.1.10
 
 jobs:
   # ============================================================================
-  # DIAGNÓSTICO: Verificar conectividad SSH
+  # DIAGNOSTIC: BASTION CONNECTIVITY CHECK & AUTO-HEALING
   # ============================================================================
   
   test-bastion-connection:
     name: 🔍 Test Bastion SSH Connection (PROD)
     runs-on: ubuntu-latest
     steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      # ------------------------------------------------------------------------
+      # AUTO-HEALING: Ensure Bastion is Running
+      # Verifies if the Production Bastion is in a 'stopped' state and starts it.
+      # This prevents pipeline failures due to scheduled shutdowns or manual stops.
+      # ------------------------------------------------------------------------
+      - name: 🚑 Ensure PROD Bastion is RUNNING
+        run: |
+          echo "Checking PROD Bastion instance state..."
+          
+          # Retrieve Instance ID by Name Tag (Assuming 'dermatech-prod-gateway' follows convention)
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=dermatech-prod-gateway" \
+            --query "Reservations[0].Instances[0].InstanceId" --output text)
+          
+          if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
+             echo "⚠️ Warning: Could not find instance with tag 'dermatech-prod-gateway'. Skipping auto-heal."
+          else
+             STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+             echo "Bastion ($INSTANCE_ID) is currently: $STATE"
+             
+             if [ "$STATE" == "stopped" ]; then
+               echo "⚠️ Bastion is STOPPED. Initiating start sequence..."
+               aws ec2 start-instances --instance-ids $INSTANCE_ID
+               echo "⏳ Waiting for instance to reach 'running' state..."
+               aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+               echo "✅ Bastion is now RUNNING."
+             fi
+          fi
+
       - name: Check Bastion Reachability
         run: |
           echo "🔍 Testing connection to PROD bastion: ${{ env.PROD_BASTION_PUBLIC_IP }}"
-          
-          # Test if port 22 is open
-          timeout 10 bash -c "cat < /dev/null > /dev/tcp/${{ env.PROD_BASTION_PUBLIC_IP }}/22" && echo "✅ Port 22 is OPEN" || echo "❌ Port 22 is CLOSED or FILTERED"
+          # Resilient check with timeout to prevent hanging
+          timeout 30 bash -c "until cat < /dev/null > /dev/tcp/${{ env.PROD_BASTION_PUBLIC_IP }}/22; do echo 'Waiting for SSH port...'; sleep 5; done" && echo "✅ Port 22 is OPEN"
           
       - name: Test SSH Connection (verbose)
         run: |
@@ -174,7 +209,7 @@ jobs:
           cd infrastructure/terraform/environments-prod/account-01-prod
           terraform init -reconfigure
           
-          # Intento de deploy con recuperación automática
+          # Peering Stability Retry Logic
           if ! terraform apply -auto-approve \
             -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
             -var="state_vpc_id=${{ env.VPC_STATE }}" \
@@ -275,6 +310,29 @@ jobs:
     needs: [prod-hub, test-bastion-connection]
     runs-on: ubuntu-latest
     steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      # 🔥 AUTO-HEALING: Ensures PROD Bastion is active before attempting connection
+      - name: 🚑 Ensure PROD Bastion is RUNNING
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=dermatech-prod-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
+          # Check if instance exists before proceeding
+          if [ "$INSTANCE_ID" != "None" ] && [ -n "$INSTANCE_ID" ]; then
+            STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+            if [ "$STATE" == "stopped" ]; then
+              echo "⚠️ PROD Bastion is STOPPED. Starting instance to allow deployment..."
+              aws ec2 start-instances --instance-ids $INSTANCE_ID
+              aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+            fi
+          else
+             echo "⚠️ Warning: Could not auto-heal Bastion. Proceeding with standard connectivity check."
+          fi
+
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
@@ -282,15 +340,25 @@ jobs:
           chmod 600 ~/.ssh/bastion_key
       
       # ------------------------------------------------------------------------
-      # FIX CRÍTICO: Espera Activa (Smart Wait)
+      # CRITICAL FIX: Runner-Side Connectivity Loop (Smart Wait)
+      # Executes the wait logic locally to avoid freezing if SSH connection drops.
       # ------------------------------------------------------------------------
       - name: ⏳ Active Wait for Internal Connectivity
         run: |
           echo "Testing internal connectivity from Bastion to Events..."
-          # Esto reemplaza al 'sleep 60'. Verifica el puerto 22 cada 5 seg.
-          ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} \
-            "timeout 300 bash -c 'until echo > /dev/tcp/${{ env.EVENTS_PRIVATE_IP }}/22; do echo \"Waiting for Events IP...\"; sleep 5; done'"
-          echo "✅ Network Path Established!"
+          end=$((SECONDS+600))
+          while [ $SECONDS -lt $end ]; do
+            # Attempt to connect. If Bastion is unreachable, the ssh command fails and loop continues.
+            if ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} \
+               "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/${{ env.EVENTS_PRIVATE_IP }}/22'" 2>/dev/null; then
+               echo "✅ Network Path Established!"
+               exit 0
+            fi
+            echo "⏳ Waiting for connectivity... ($((end-SECONDS))s left)"
+            sleep 5
+          done
+          echo "❌ Timeout waiting for Events connectivity"
+          exit 1
 
       - name: Deploy via SSH Tunnel
         run: |
@@ -312,20 +380,20 @@ jobs:
           ssh events-server << 'ENDSSH'
             echo "✅ SECURITY CHECK: Connected via PROD Bastion Tunnel"
             
-            # --- INSTALACIÓN DE DOCKER COMPOSE ---
+            # --- INSTALL DOCKER COMPOSE ---
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
             
-            # --- CONFIGURACIÓN DE DIRECTORIOS ---
+            # --- CONFIGURE DIRECTORIES ---
             sudo mkdir -p /data/kafka /data/zookeeper /data/rabbitmq /data/mosquitto/config
             sudo chmod -R 777 /data
             
-            # --- CONFIGURACIÓN DE MOSQUITTO ---
+            # --- CONFIGURE MOSQUITTO ---
             echo "listener 1883" | sudo tee /data/mosquitto/config/mosquitto.conf
             echo "allow_anonymous true" | sudo tee -a /data/mosquitto/config/mosquitto.conf
 
-            # --- GENERACIÓN DE DOCKER-COMPOSE.YML ---
+            # --- GENERATE DOCKER-COMPOSE.YML ---
             cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
@@ -383,7 +451,7 @@ jobs:
               driver: bridge
           EOF
             
-            # --- LEVANTAR SERVICIOS ---
+            # --- START SERVICES ---
             sudo docker compose up -d
             echo "✅ Events PROD services deployed successfully"
           ENDSSH
@@ -393,6 +461,24 @@ jobs:
     needs: [prod-hub, test-bastion-connection]
     runs-on: ubuntu-latest
     steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: 🚑 Ensure PROD Bastion is RUNNING
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=dermatech-prod-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
+          if [ "$INSTANCE_ID" != "None" ] && [ -n "$INSTANCE_ID" ]; then
+            STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+            if [ "$STATE" == "stopped" ]; then
+              aws ec2 start-instances --instance-ids $INSTANCE_ID
+              aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+            fi
+          fi
+
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
@@ -400,14 +486,22 @@ jobs:
           chmod 600 ~/.ssh/bastion_key
           
       # ------------------------------------------------------------------------
-      # FIX CRÍTICO: Espera Activa (Smart Wait)
+      # FIX CRÍTICO: Runner-Side Resilience Loop
       # ------------------------------------------------------------------------
       - name: ⏳ Active Wait for Internal Connectivity
         run: |
           echo "Testing internal connectivity from Bastion to State..."
-          ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} \
-            "timeout 300 bash -c 'until echo > /dev/tcp/${{ env.STATE_PRIVATE_IP }}/22; do echo \"Waiting for State IP...\"; sleep 5; done'"
-          echo "✅ Network Path Established!"
+          end=$((SECONDS+600))
+          while [ $SECONDS -lt $end ]; do
+            if ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} \
+               "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/${{ env.STATE_PRIVATE_IP }}/22'" 2>/dev/null; then
+               echo "✅ Network Path Established!"
+               exit 0
+            fi
+            sleep 5
+          done
+          echo "❌ Timeout waiting for State connectivity"
+          exit 1
 
       - name: Deploy via SSH Tunnel
         run: |
@@ -476,6 +570,24 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: 'ALB_DNS', path: 'ALB_DNS' }
         
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: 🚑 Ensure PROD Bastion is RUNNING
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=dermatech-prod-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
+          if [ "$INSTANCE_ID" != "None" ] && [ -n "$INSTANCE_ID" ]; then
+            STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+            if [ "$STATE" == "stopped" ]; then
+              aws ec2 start-instances --instance-ids $INSTANCE_ID
+              aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+            fi
+          fi
+
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
@@ -483,14 +595,22 @@ jobs:
           chmod 600 ~/.ssh/bastion_key
       
       # ------------------------------------------------------------------------
-      # FIX CRÍTICO: Espera Activa (Smart Wait)
+      # FIX CRÍTICO: Runner-Side Resilience Loop
       # ------------------------------------------------------------------------
       - name: ⏳ Active Wait for Internal Connectivity
         run: |
           echo "Testing internal connectivity from Bastion to ${{ matrix.node_name }}..."
-          ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} \
-            "timeout 300 bash -c 'until echo > /dev/tcp/${{ matrix.node_ip }}/22; do echo \"Waiting for Node IP...\"; sleep 5; done'"
-          echo "✅ Network Path Established!"
+          end=$((SECONDS+600))
+          while [ $SECONDS -lt $end ]; do
+            if ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} \
+               "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/${{ matrix.node_ip }}/22'" 2>/dev/null; then
+               echo "✅ Network Path Established!"
+               exit 0
+            fi
+            sleep 5
+          done
+          echo "❌ Timeout waiting for Node connectivity"
+          exit 1
 
       - name: Deploy to PROD ${{ matrix.node_name }}
         run: |
@@ -515,7 +635,7 @@ jobs:
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
             echo "${{ secrets.DOCKER_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
+            
             cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
