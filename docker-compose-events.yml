@@ -29,10 +29,10 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      # CRITICAL: Advertises the specific AWS Private IP (10.0.1.50)
+      # CRITICAL: Advertises the specific AWS Private IP (10.1.1.50)
       # This allows Node A and Node B to connect via peering.
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://10.0.1.50:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://10.1.1.50:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
     networks:

@@ -15,7 +15,7 @@ env:
   # PROD BASTION HOST (Elastic IP)
   PROD_BASTION_PUBLIC_IP: 100.50.124.78
 
-  # PROD PRIVATE IPs (Internal Targets)
+  # PROD PRIVATE IPs (Internal Targets - STATIC)
   EVENTS_PRIVATE_IP: 10.1.1.50
   STATE_PRIVATE_IP: 10.2.1.60  # Note: Different subnet/IP than QA
   NODE_A_PRIVATE_IP: 10.3.1.10
@@ -30,19 +30,15 @@ jobs:
     name: 🔍 Test Bastion SSH Connection (PROD)
     runs-on: ubuntu-latest
     steps:
-      # ------------------------------------------------------------------------
-      # AUTHENTICATION: Restore PROD AWS Credentials File
-      # Using file-based authentication strategy (Single Secret Source)
-      # ------------------------------------------------------------------------
+      # 1. AUTHENTICATION: Restore PROD AWS Credentials File
+      # Fixes "Credentials could not be loaded" error by using the file strategy.
       - name: Restore Credentials (PROD)
         run: |
           mkdir -p ~/.aws
           echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
-      # ------------------------------------------------------------------------
-      # AUTO-HEALING: Ensure PROD Bastion is Running
+      # 2. AUTO-HEALING: Ensure PROD Bastion is Running
       # Uses the 'prod-dermatech' profile from the restored credentials file.
-      # ------------------------------------------------------------------------
       - name: 🚑 Ensure PROD Bastion is RUNNING
         run: |
           echo "Checking PROD Bastion instance state..."
@@ -329,6 +325,7 @@ jobs:
 
       - name: 🚑 Ensure PROD Bastion is RUNNING
         run: |
+          # Use 'prod-dermatech' profile
           INSTANCE_ID=$(aws ec2 describe-instances \
             --profile prod-dermatech \
             --region us-east-1 \
@@ -347,6 +344,8 @@ jobs:
               aws ec2 start-instances --profile prod-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
               aws ec2 wait instance-running --profile prod-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
             fi
+          else
+             echo "⚠️ Warning: Could not auto-heal Bastion. Proceeding with standard connectivity check."
           fi
 
       - name: Setup SSH Key
@@ -363,7 +362,7 @@ jobs:
           echo "Testing internal connectivity from Bastion to Events..."
           end=$((SECONDS+600))
           while [ $SECONDS -lt $end ]; do
-            # Attempt to connect. If Bastion is unreachable, the ssh command fails and loop continues.
+            # Attempt to connect using Static IP
             if ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} \
                "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/${{ env.EVENTS_PRIVATE_IP }}/22'" 2>/dev/null; then
                echo "✅ Network Path Established!"
@@ -483,19 +482,9 @@ jobs:
 
       - name: 🚑 Ensure PROD Bastion is RUNNING
         run: |
-          INSTANCE_ID=$(aws ec2 describe-instances \
-            --profile prod-dermatech \
-            --region us-east-1 \
-            --filters "Name=tag:Name,Values=dermatech-prod-gateway" \
-            --query "Reservations[0].Instances[0].InstanceId" --output text)
-          
+          INSTANCE_ID=$(aws ec2 describe-instances --profile prod-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-prod-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
           if [ "$INSTANCE_ID" != "None" ] && [ -n "$INSTANCE_ID" ]; then
-            STATE=$(aws ec2 describe-instances \
-              --profile prod-dermatech \
-              --region us-east-1 \
-              --instance-ids $INSTANCE_ID \
-              --query "Reservations[0].Instances[0].State.Name" --output text)
-            
+            STATE=$(aws ec2 describe-instances --profile prod-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
             if [ "$STATE" == "stopped" ]; then
               aws ec2 start-instances --profile prod-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
               aws ec2 wait instance-running --profile prod-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
@@ -593,29 +582,21 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: 'ALB_DNS', path: 'ALB_DNS' }
         
-      - name: Restore Credentials (PROD)
-        run: |
-          mkdir -p ~/.aws
-          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
 
       - name: 🚑 Ensure PROD Bastion is RUNNING
         run: |
-          INSTANCE_ID=$(aws ec2 describe-instances \
-            --profile prod-dermatech \
-            --region us-east-1 \
-            --filters "Name=tag:Name,Values=dermatech-prod-gateway" \
-            --query "Reservations[0].Instances[0].InstanceId" --output text)
-          
+          INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=dermatech-prod-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
           if [ "$INSTANCE_ID" != "None" ] && [ -n "$INSTANCE_ID" ]; then
-            STATE=$(aws ec2 describe-instances \
-              --profile prod-dermatech \
-              --region us-east-1 \
-              --instance-ids $INSTANCE_ID \
-              --query "Reservations[0].Instances[0].State.Name" --output text)
-            
+            STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
             if [ "$STATE" == "stopped" ]; then
-              aws ec2 start-instances --profile prod-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
-              aws ec2 wait instance-running --profile prod-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+              aws ec2 start-instances --instance-ids $INSTANCE_ID
+              aws ec2 wait instance-running --instance-ids $INSTANCE_ID
             fi
           fi
 
