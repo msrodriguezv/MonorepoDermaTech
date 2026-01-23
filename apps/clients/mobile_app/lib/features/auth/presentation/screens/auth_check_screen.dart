@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../../../core/storage/storage_service.dart';
+import 'package:dermatech_mobile/core/storage/storage_service.dart';
 
 // --- AUTH & LOGIN IMPORTS ---
 import 'login_screen.dart';

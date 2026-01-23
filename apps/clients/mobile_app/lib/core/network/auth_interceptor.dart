@@ -1,5 +1,5 @@
 import 'package:dio/dio.dart';
-import '../../storage/storage_service.dart';
+import 'package:dermatech_mobile/core/storage/storage_service.dart';
 import '../../config/environment.dart';
 
 class AuthInterceptor extends Interceptor {
