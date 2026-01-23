@@ -1,14 +1,61 @@
 # See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
 
-# compiled output
+# --- COMPILED OUTPUT ---
 dist
 tmp
 out-tsc
+build/
 
-# dependencies
+# --- DEPENDENCIES (Node.js) ---
 node_modules
 
-# IDEs and editors
+# --- PYTHON (AI AGENT) ---
+# CRITICAL: Virtual Environments
+venv/
+.venv/
+env/
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+# Unit test / coverage reports
+.coverage
+.tox/
+.nox/
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+
+# --- GO (QR SERVICE) ---
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+# Project specific binary name (adjust if you change output name)
+apps/services/qr-ingest/qr-service
+
+# --- IDEs and EDITORS ---
 /.idea
 .project
 .classpath
@@ -17,16 +64,15 @@ node_modules
 .settings/
 *.sublime-workspace
 
-# IDE - VSCode
+# --- VSCODE ---
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+!.vscode/*.code-snippets
 
-.vscode/
-
-# misc
+# --- MISC / LOGS ---
 /.sass-cache
 /connect.lock
 /coverage
@@ -36,23 +82,38 @@ yarn-error.log
 testem.log
 /typings
 
-# System Files
+# --- SYSTEM FILES ---
 .DS_Store
 Thumbs.db
+Desktop.ini
 
+# --- NX MONOREPO ---
 .nx/cache
 .nx/workspace-data
 .cursor/rules/nx-rules.mdc
 .github/instructions/nx.instructions.md
 
+# --- ENVIRONMENT VARIABLES (SECURITY) ---
+# Absolutely crucial to keep secrets out of git
 *.env
 .env.local
 .env.*
+!.env.example
+
+# --- TERRAFORM ---
 *.tfvars
+*.tfvars.json
 *.tfstate
 *.tfstate.backup
 .terraform/
+.terraform.lock.hcl
+tfplan
+crash.log
+
+# --- DATABASES / STORAGE ---
 redis_data/
+postgres_data/
+mongo_data/
 
 # --- MOSQUITTO ---
 # Ignore data and logs

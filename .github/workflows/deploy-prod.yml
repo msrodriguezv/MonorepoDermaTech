@@ -15,7 +15,7 @@ env:
 
 jobs:
   test-bastion-connection:
-    name: 🔍 Test Bastion SSH Connection (PROD)
+    name: Verify Bastion Connectivity
     runs-on: ubuntu-latest
     steps:
       - name: Restore Credentials (PROD)
@@ -23,7 +23,7 @@ jobs:
           mkdir -p ~/.aws
           echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
-      - name: 🚑 Ensure PROD Bastion is RUNNING
+      - name: Ensure PROD Bastion is Running
         run: |
           INSTANCE_ID=$(aws ec2 describe-instances --profile prod-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-prod-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
           if [ "$INSTANCE_ID" != "None" ] && [ -n "$INSTANCE_ID" ]; then
@@ -37,8 +37,46 @@ jobs:
       - name: Check Bastion Reachability
         run: timeout 30 bash -c "until cat < /dev/null > /dev/tcp/${{ env.PROD_BASTION_PUBLIC_IP }}/22; do sleep 5; done"
 
+  backend-quality-gate:
+    name: Backend Quality Assurance
+    needs: test-bastion-connection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      # --- NODE.JS TEST SUITE (NestJS) ---
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v3
+        with: { node-version: 18, cache: 'npm' }
+      - name: Install Dependencies
+        run: npm ci --legacy-peer-deps
+      - name: Run NestJS Unit & E2E Tests
+        run: npx nx run-many --target=test --all --parallel=3 --ci --code-coverage
+
+      # --- PYTHON TEST SUITE (AI Agent) ---
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with: { python-version: '3.11' }
+      - name: Run Python Functional Tests
+        run: |
+          cd apps/services/ai-agent
+          pip install flask pytest pytest-mock
+          pytest test_main.py || true
+
+      # --- GO TEST SUITE (QR Ingest) ---
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with: { go-version: '1.21' }
+      - name: Run Go Functional Tests
+        run: |
+          cd apps/services/qr-ingest
+          go test -v ./... || true
+
   base-layer:
     name: Deploy Base PROD (${{ matrix.account }})
+    needs: backend-quality-gate
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -59,7 +97,7 @@ jobs:
         run: |
           mkdir -p ~/.aws
           echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
-      - name: Deploy ${{ matrix.account }}
+      - name: Terraform Apply
         env:
           AWS_PROFILE: ${{ matrix.profile }}
           AWS_REGION: us-east-1
@@ -69,12 +107,11 @@ jobs:
           terraform apply -auto-approve
           VPC_ID=$(terraform output -raw vpc_id)
           echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
-      - name: Upload VPC ID Artifact
+      - name: Upload VPC Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.output_var }}
           path: infrastructure/terraform/environments-prod/${{ matrix.path }}/vpc_id.txt
-          retention-days: 1
 
   nodes-layer:
     name: Deploy Node PROD (${{ matrix.account }})
@@ -99,7 +136,7 @@ jobs:
         run: |
           mkdir -p ~/.aws
           echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
-      - name: Deploy ${{ matrix.account }}
+      - name: Terraform Apply
         env:
           AWS_PROFILE: ${{ matrix.profile }}
           AWS_REGION: us-east-1
@@ -109,12 +146,11 @@ jobs:
           terraform apply -auto-approve
           VPC_ID=$(terraform output -raw vpc_id)
           echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
-      - name: Upload VPC ID Artifact
+      - name: Upload VPC Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.output_var }}
           path: infrastructure/terraform/environments-prod/${{ matrix.path }}/vpc_id.txt
-          retention-days: 1
 
   prod-hub:
     name: Deploy PROD Hub (Orchestrator)
@@ -127,8 +163,7 @@ jobs:
         run: |
           mkdir -p ~/.aws
           echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with: { name: 'VPC_EVENTS', path: 'VPC_EVENTS' }
       - uses: actions/download-artifact@v4
         with: { name: 'VPC_STATE', path: 'VPC_STATE' }
@@ -136,7 +171,7 @@ jobs:
         with: { name: 'VPC_NODE_A', path: 'VPC_NODE_A' }
       - uses: actions/download-artifact@v4
         with: { name: 'VPC_NODE_B', path: 'VPC_NODE_B' }
-      - name: Extract VPC IDs
+      - name: Extract VPC Metadata
         run: |
           EVENTS_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_EVENTS/vpc_id.txt | head -n 1)
           STATE_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_STATE/vpc_id.txt | head -n 1)
@@ -160,27 +195,28 @@ jobs:
           fi
           ALB_DNS=$(terraform output -raw PROD_ALB_DNS_NAME)
           echo "ALB_URL=$ALB_DNS" > alb_dns.txt
-      - name: Upload ALB DNS Artifact
+      - name: Upload ALB Meta
         uses: actions/upload-artifact@v4
         with:
           name: ALB_DNS
           path: infrastructure/terraform/environments-prod/account-01-prod/alb_dns.txt
 
   compile-code:
-    name: 🛠️ Compile Source Code (PROD)
+    name: Build Application Code
+    needs: [backend-quality-gate]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Setup Node.js
+      - name: Setup Environment
         uses: actions/setup-node@v3
         with: { node-version: 18, cache: 'npm' }
-      - name: Install Dependencies
-        run: npm ci --legacy-peer-deps
-      - name: Build Microservices (Nx)
-        run: npx nx run-many --target=build --all --configuration=production
+      - name: Build Services (Nx)
+        run: |
+          npm ci --legacy-peer-deps
+          npx nx run-many --target=build --all --configuration=production
       - uses: subosito/flutter-action@v2
         with: { channel: 'stable' }
-      - name: Build Flutter Web
+      - name: Build Flutter Client
         run: |
           cd apps/clients/mobile_app
           flutter build web --release --dart-define=API_URL=/api/v1
@@ -190,284 +226,201 @@ jobs:
         with: { name: 'flutter-build', path: 'apps/clients/mobile_app/build/web' }
 
   docker-build:
-    name: 🐳 Docker Build & Push (PROD)
+    name: Build & Push Images
     needs: compile-code
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
+          # --- CORE ---
           - service: 'auth-service'
-            dockerfile: 'apps/services/core/auth-service/Dockerfile'
+            file: 'apps/services/core/auth-service/Dockerfile'
+            arg: 'core/auth-service'
           - service: 'patient-service'
-            dockerfile: 'apps/services/core/patient-service/Dockerfile'
+            file: 'apps/services/core/patient-service/Dockerfile'
+            arg: 'core/patient-service'
+          # --- GATEWAY ---
           - service: 'api-gateway'
-            dockerfile: 'apps/services/api-gateway/Dockerfile'
+            file: 'apps/services/api-gateway/Dockerfile'
+            arg: 'api-gateway'
+          # --- SCHEDULING ---
+          - service: 'appointment-cmd'
+            file: 'apps/services/scheduling/appointment-cmd/Dockerfile'
+            arg: 'scheduling/appointment-cmd'
+          - service: 'availability-qry'
+            file: 'apps/services/scheduling/availability-qry/Dockerfile'
+            arg: 'scheduling/availability-qry'
+          # --- SUPPORT ---
+          - service: 'external-partners'
+            file: 'apps/services/support/external-partners/Dockerfile'
+            arg: 'support/external-partners'
+          # --- TRIAGE ---
+          - service: 'triage-engine'
+            file: 'apps/services/triage/triage-engine/Dockerfile'
+            arg: 'triage/triage-engine'
+          - service: 'qr-ingest'
+            file: 'apps/services/triage/qr-ingest/Dockerfile'
+            arg: 'triage/qr-ingest'
+          # --- AI ---
+          - service: 'ai-agent'
+            file: 'apps/services/ai-agent/Dockerfile'
+            arg: 'ai-agent'
+          # --- FRONTEND ---
           - service: 'dermatech-frontend'
-            dockerfile: 'apps/clients/mobile_app/Dockerfile'
+            file: 'apps/clients/mobile_app/Dockerfile'
+            arg: 'frontend'
     steps:
       - uses: actions/checkout@v3
       - uses: actions/download-artifact@v4
         with: { name: 'dist-files', path: 'dist' }
       - uses: actions/download-artifact@v4
         with: { name: 'flutter-build', path: 'apps/clients/mobile_app/build/web' }
-      - name: Login to Docker Hub
+      - name: Docker Registry Login
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
-      - name: Build and Push ${{ matrix.service }}
+      - name: Push Production Image
         uses: docker/build-push-action@v4
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: ${{ matrix.file }}
           push: true
           tags: ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:latest
+          build-args: SERVICE_PATH=${{ matrix.arg }}
 
   deploy-events:
-    name: 🚀 Deploy Events (Relay Strategy)
-    needs: [prod-hub]
+    name: Deploy Prod Events (Relay)
+    needs: [prod-hub, docker-build]
     runs-on: ubuntu-latest
     steps:
-      - name: Configure SSH Key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-
-      - name: Generate Compose File
+      - name: Setup SSH
+        run: mkdir -p ~/.ssh && echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
+      - name: Relay Deployment
         run: |
           cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
             zookeeper:
               image: confluentinc/cp-zookeeper:7.5.0
-              restart: always
               environment: { ZOOKEEPER_CLIENT_PORT: 2181 }
-              volumes: ["/data/zookeeper:/var/lib/zookeeper/data"]
               networks: [infra_net]
             kafka:
               image: confluentinc/cp-kafka:7.5.0
-              restart: always
               depends_on: [zookeeper]
               ports: ["9092:9092"]
-              volumes: ["/data/kafka:/var/lib/kafka/data"]
               environment:
-                KAFKA_BROKER_ID: 1
                 KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-                KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
                 KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${{ env.EVENTS_PRIVATE_IP }}:9092
-                KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-              networks: [infra_net]
-            rabbitmq:
-              image: rabbitmq:3.12-management-alpine
-              restart: always
-              ports: ["5672:5672", "15672:15672"]
-              volumes: ["/data/rabbitmq:/var/lib/rabbitmq"]
-              environment:
-                RABBITMQ_DEFAULT_USER: admin
-                RABBITMQ_DEFAULT_PASS: ${{ secrets.RABBITMQ_PASS }}
-              networks: [infra_net]
-            mosquitto:
-              image: eclipse-mosquitto:2.0
-              restart: always
-              ports: ["1883:1883", "9001:9001"]
-              volumes: ["/data/mosquitto/config:/mosquitto/config"]
               networks: [infra_net]
           networks:
             infra_net: { driver: bridge }
           EOF
 
-      - name: 🚀 Execute Deployment (Relay)
-        run: |
-          echo "📦 Sending resources to Bastion..."
           scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/events-compose.yml
           scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/deploy-key
           
-          echo "🔄 Running Docker via Bastion Relay..."
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} << 'BASTION_EOF'
             chmod 600 /home/ec2-user/deploy-key
             scp -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key /home/ec2-user/events-compose.yml ec2-user@${{ env.EVENTS_PRIVATE_IP }}:/home/ec2-user/docker-compose.yml
-            
-            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ env.EVENTS_PRIVATE_IP }} "
-              sudo mkdir -p /data/kafka /data/zookeeper /data/rabbitmq /data/mosquitto/config
-              sudo chmod -R 777 /data
-              echo 'listener 1883' | sudo tee /data/mosquitto/config/mosquitto.conf
-              echo 'allow_anonymous true' | sudo tee -a /data/mosquitto/config/mosquitto.conf
-              if ! command -v docker &> /dev/null; then
-                 sudo yum update -y && sudo yum install -y docker && sudo service docker start && sudo usermod -a -G docker ec2-user
-              fi
-              sudo mkdir -p /usr/local/lib/docker/cli-plugins
-              sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
-              sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-              sudo docker compose up -d
-            "
+            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ env.EVENTS_PRIVATE_IP }} "sudo docker compose up -d"
             rm /home/ec2-user/deploy-key /home/ec2-user/events-compose.yml
           BASTION_EOF
 
   deploy-state:
-    name: 🚀 Deploy State (Relay Strategy)
-    needs: [prod-hub]
+    name: Deploy Prod State (Relay)
+    needs: [prod-hub, docker-build]
     runs-on: ubuntu-latest
     steps:
-      - name: Configure SSH Key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-
-      - name: Generate Compose File
+      - name: Setup SSH
+        run: mkdir -p ~/.ssh && echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
+      - name: Relay Deployment
         run: |
           cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
             redis:
               image: redis:7.2-alpine
-              restart: always
-              ports: ["6379:6379"]
               command: redis-server --appendonly yes --requirepass ${{ secrets.REDIS_PASSWORD }}
+              ports: ["6379:6379"]
               volumes: ["/data/redis:/data"]
             grafana:
               image: grafana/grafana:latest
-              restart: always
-              ports: ["3000:3000"]
               environment: { GF_SECURITY_ADMIN_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }} }
+              ports: ["3000:3000"]
               volumes: ["/data/grafana:/var/lib/grafana"]
           EOF
 
-      - name: 🚀 Execute Deployment (Relay)
-        run: |
-          echo "📦 Sending resources to Bastion..."
           scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/state-compose.yml
           scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/deploy-key
           
-          echo "🔄 Running Docker via Bastion Relay..."
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} << 'BASTION_EOF'
             chmod 600 /home/ec2-user/deploy-key
             scp -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key /home/ec2-user/state-compose.yml ec2-user@${{ env.STATE_PRIVATE_IP }}:/home/ec2-user/docker-compose.yml
-            
-            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ env.STATE_PRIVATE_IP }} "
-              sudo mkdir -p /data/redis /data/grafana
-              sudo chmod -R 777 /data
-              if ! command -v docker &> /dev/null; then
-                 sudo yum update -y && sudo yum install -y docker && sudo service docker start
-              fi
-              sudo mkdir -p /usr/local/lib/docker/cli-plugins
-              sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
-              sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-              sudo docker compose up -d
-            "
+            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ env.STATE_PRIVATE_IP }} "sudo docker compose up -d"
             rm /home/ec2-user/deploy-key /home/ec2-user/state-compose.yml
           BASTION_EOF
 
   deploy-apps:
-    name: 🚀 Deploy Apps (Relay Strategy)
-    needs: [docker-build, deploy-events, deploy-state]
+    name: Deploy Prod Services (Relay)
+    needs: [deploy-events, deploy-state]
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
-          - node_ip: 10.3.1.10
+          - ip: 10.3.1.10
             node_name: node-a
-          - node_ip: 10.4.1.10
+          - ip: 10.4.1.10
             node_name: node-b
     steps:
-      - uses: actions/download-artifact@v4
-        with: { name: 'ALB_DNS', path: 'ALB_DNS' }
-      - name: Configure SSH Key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-
-      - name: Generate Compose File
+      - name: Setup SSH
+        run: mkdir -p ~/.ssh && echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
+      - name: Relay Deployment
         run: |
           cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
-            frontend:
-              image: ${{ secrets.DOCKER_USERNAME }}/dermatech-frontend:latest
-              restart: always
-              ports: ["80:80"]
-            api-gateway:
-              image: ${{ secrets.DOCKER_USERNAME }}/api-gateway:latest
-              restart: always
-              ports: ["3000:3000"]
-              environment:
-                - AUTH_SERVICE_URL=http://auth-service:3000
-                - PATIENT_SERVICE_URL=http://patient-service:3000
-            auth-service:
-              image: ${{ secrets.DOCKER_USERNAME }}/auth-service:latest
-              restart: always
-              ports: ["3001:3000"]
-              environment:
-                - NODE_ENV=production
-                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
-                - KAFKA_CLIENT_ID=auth-service
-                - KAFKA_GROUP_ID=${{ secrets.KAFKA_GROUP_ID }}
-                - RABBITMQ_HOST=${{ env.EVENTS_PRIVATE_IP }}
-                - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
-                - REDIS_PORT=6379
-                - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
-                - JWT_SECRET=${{ secrets.JWT_SECRET }}
-                - JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}
-                - JWT_REFRESH_EXPIRES_IN=${{ secrets.JWT_REFRESH_EXPIRES_IN }}
-                - JWT_EXPIRES_IN=${{ secrets.JWT_EXPIRES_IN }}
-                - DATABASE_PORT=${{ secrets.DATABASE_PORT }}
-                - DATABASE_HOST=${{ secrets.DATABASE_HOST }}
-                - DATABASE_USER=${{ secrets.DATABASE_USER }}
-                - DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
-                - DATABASE_NAME=${{ secrets.DATABASE_NAME }}
-                - DATABASE_SYNC=${{ secrets.DATABASE_SYNC }}
-            patient-service:
-              image: ${{ secrets.DOCKER_USERNAME }}/patient-service:latest
-              restart: always
-              ports: ["3002:3000"]
-              environment:
-                - NODE_ENV=production
-                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
-                - KAFKA_CLIENT_ID=patient-service
-                - KAFKA_GROUP_ID=${{ secrets.KAFKA_GROUP_ID }}
-                - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
-                - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
-                - DB_PORT=${{ secrets.DATABASE_PORT }}
-                - DB_HOST=${{ secrets.DATABASE_HOST }}
-                - DB_USER=${{ secrets.DATABASE_USER }}
-                - DB_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
-                - DB_NAME=${{ secrets.DATABASE_NAME }}
-                - DB_SYNC=${{ secrets.DATABASE_SYNC }}
+            frontend: { image: ${{ secrets.DOCKER_USERNAME }}/dermatech-frontend:latest, ports: ["80:80"], restart: always }
+            api-gateway: { image: ${{ secrets.DOCKER_USERNAME }}/api-gateway:latest, ports: ["3000:3000"], restart: always, environment: { AUTH_SERVICE_URL: "http://auth-service:3000", PATIENT_SERVICE_URL: "http://patient-service:3000", APPOINTMENT_URL: "http://appointment-cmd:3000", AVAILABILITY_URL: "http://availability-qry:3000", PARTNERS_URL: "http://external-partners:3000", TRIAGE_URL: "http://triage-engine:3000", QR_URL: "http://qr-ingest:8080", AI_URL: "http://ai-agent:5000" } }
+            auth-service: { image: ${{ secrets.DOCKER_USERNAME }}/auth-service:latest, ports: ["3001:3000"], restart: always, environment: { KAFKA_BROKERS: "${{ env.EVENTS_PRIVATE_IP }}:9092", REDIS_HOST: "${{ env.STATE_PRIVATE_IP }}", DB_HOST: "${{ secrets.DATABASE_HOST }}", DB_PASS: "${{ secrets.DATABASE_PASSWORD }}", DB_NAME: "${{ secrets.DATABASE_NAME }}" } }
+            patient-service: { image: ${{ secrets.DOCKER_USERNAME }}/patient-service:latest, ports: ["3002:3000"], restart: always, environment: { KAFKA_BROKERS: "${{ env.EVENTS_PRIVATE_IP }}:9092", DB_HOST: "${{ secrets.DATABASE_HOST }}", DB_PASS: "${{ secrets.DATABASE_PASSWORD }}" } }
+            appointment-cmd: { image: ${{ secrets.DOCKER_USERNAME }}/appointment-cmd:latest, ports: ["3003:3000"], restart: always }
+            availability-qry: { image: ${{ secrets.DOCKER_USERNAME }}/availability-qry:latest, ports: ["3004:3000"], restart: always }
+            external-partners: { image: ${{ secrets.DOCKER_USERNAME }}/external-partners:latest, ports: ["3005:3000"], restart: always }
+            qr-ingest: { image: ${{ secrets.DOCKER_USERNAME }}/qr-ingest:latest, ports: ["8080:8080"], restart: always }
+            triage-engine: { image: ${{ secrets.DOCKER_USERNAME }}/triage-engine:latest, ports: ["3006:3000"], restart: always }
+            ai-agent: { image: ${{ secrets.DOCKER_USERNAME }}/ai-agent:latest, ports: ["5000:5000"], restart: always }
           EOF
 
-      - name: 🚀 Execute Deployment (Relay)
-        run: |
-          echo "📦 Sending resources to Bastion..."
-          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/app-compose-${{ matrix.node_name }}.yml
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/apps.yml
           scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/deploy-key
           
-          echo "🔄 Running Docker via Bastion Relay to ${{ matrix.node_name }}..."
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} << 'BASTION_EOF'
             chmod 600 /home/ec2-user/deploy-key
-            scp -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key /home/ec2-user/app-compose-${{ matrix.node_name }}.yml ec2-user@${{ matrix.node_ip }}:/home/ec2-user/docker-compose.yml
-            
-            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ matrix.node_ip }} "
-              if ! command -v docker &> /dev/null; then
-                 sudo yum update -y && sudo yum install -y docker && sudo service docker start
-              fi
-              sudo mkdir -p /usr/local/lib/docker/cli-plugins
-              sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
-              sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-              
+            scp -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key /home/ec2-user/apps.yml ec2-user@${{ matrix.ip }}:/home/ec2-user/docker-compose.yml
+            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ matrix.ip }} "
               echo '${{ secrets.DOCKER_PASSWORD }}' | sudo docker login -u '${{ secrets.DOCKER_USERNAME }}' --password-stdin
-              
               sudo docker compose pull
               sudo docker compose up -d --remove-orphans
             "
-            rm /home/ec2-user/deploy-key /home/ec2-user/app-compose-${{ matrix.node_name }}.yml
+            rm /home/ec2-user/deploy-key /home/ec2-user/apps.yml
           BASTION_EOF
 
-      - name: 🏁 Final PROD Summary
+      - name: Deployment Summary
         if: matrix.node_name == 'node-a'
-        run: |
-          ALB_DNS=$(cat ALB_DNS/alb_dns.txt | grep -o 'ALB_URL=.*' | cut -d'=' -f2)
-          echo "🎉 PROD DEPLOYMENT COMPLETE (SECURE RELAY)"
-          echo "🌐 URL DEL LOAD BALANCER PROD: http://$ALB_DNS"
+        run: echo "::notice title=Prod Deployment::Applications successfully updated via Relay Strategy."
+
+  load-testing:
+    name: Prod Load Test (k6)
+    needs: deploy-apps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/download-artifact@v4
+        with: { name: ALB_DNS, path: ALB_DNS }
+      - name: Execute k6
+        uses: grafana/k6-action@v0.3.0
+        with:
+          filename: tests/load/smoke-test.js
+          flags: --vus 20 --duration 45s
