@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../../../../core/storage/storage_service.dart';
 
 // --- AUTH & LOGIN IMPORTS ---
 import 'login_screen.dart';
 
-// --- DASHBOARD IMPORTS (CRITICAL FIX) ---
-// We must import the specific files where the Dashboard classes are defined.
+// --- DASHBOARD IMPORTS ---
 import '../../../patients/presentation/screens/student_dashboard_screen.dart';
 import '../../../doctor/presentation/screens/doctor_dashboard_screen.dart';
 import '../../../admin/presentation/screens/admin_dashboard_screen.dart';
@@ -16,7 +15,7 @@ import '../../../nurse/presentation/screens/nurse_dashboard_screen.dart';
 ///
 /// **Responsibility:**
 /// 1. Initialize the application state.
-/// 2. Check for the existence of a persisted JWT (JSON Web Token) in Secure Storage.
+/// 2. Check for the existence of a persisted JWT using the unified StorageService.
 /// 3. Route the user to the appropriate Dashboard based on their Role (RBAC).
 class AuthCheckScreen extends StatefulWidget {
   const AuthCheckScreen({super.key});
@@ -26,8 +25,8 @@ class AuthCheckScreen extends StatefulWidget {
 }
 
 class _AuthCheckScreenState extends State<AuthCheckScreen> {
-  // Instance of the secure storage to retrieve session credentials.
-  final _storage = const FlutterSecureStorage();
+  // Instance of the unified storage service (Web-safe)
+  final _storage = StorageService(); // <-- CAMBIO CRÍTICO: Usamos el wrapper inteligente
 
   @override
   void initState() {
@@ -41,7 +40,7 @@ class _AuthCheckScreenState extends State<AuthCheckScreen> {
     await Future.delayed(const Duration(milliseconds: 1500));
 
     try {
-      // Retrieve sensitive session data from encrypted storage.
+      // Retrieve sensitive session data using the Web-safe wrapper.
       final String? accessToken = await _storage.read(key: 'accessToken');
       final String? userRole = await _storage.read(key: 'userRole');
       final String? userName = await _storage.read(key: 'userName');
@@ -67,9 +66,7 @@ class _AuthCheckScreenState extends State<AuthCheckScreen> {
     Widget targetScreen;
 
     // --- ROUTING LOGIC SWITCH ---
-    
     if (normalizedRole == 'STUDENT' || normalizedRole == 'PATIENT') {
-      // Students require the name parameter
       targetScreen = StudentDashboardScreen(
         studentName: userName ?? "Student",
       );
@@ -115,8 +112,6 @@ class _AuthCheckScreenState extends State<AuthCheckScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             // Branding Logo
-            // Ensure you have an asset at 'assets/images/logo.png'
-            // If not, this Icon serves as a placeholder.
             const Icon(Icons.local_hospital_rounded, size: 90, color: Color(0xFF0D47A1)),
             const SizedBox(height: 24),
             
@@ -126,16 +121,6 @@ class _AuthCheckScreenState extends State<AuthCheckScreen> {
               valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF0D47A1)),
             ),
             const SizedBox(height: 16),
-            
-            // // User Feedback
-            // const Text(
-            //   "Verifying session...",
-            //   style: TextStyle(
-            //     color: Colors.grey,
-            //     fontSize: 14,
-            //     letterSpacing: 1.2,
-            //   ),
-            // ),
           ],
         ),
       ),
