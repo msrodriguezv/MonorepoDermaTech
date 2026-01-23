@@ -91,7 +91,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (!mounted) return;
 
       // Happy Path: Immediate success response from backend
-      _navigateToLogin(successMessage: 'Account created successfully! Please login.');
+      _navigateToLogin(message: 'Account created successfully! Please login.');
 
     } catch (error) {
       if (!mounted) return;
