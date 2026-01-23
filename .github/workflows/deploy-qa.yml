@@ -7,7 +7,6 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  # QA NETWORK CONFIGURATION
   QA_BASTION_PUBLIC_IP: 100.52.22.97
   EVENTS_PRIVATE_IP: 10.1.1.50
   STATE_PRIVATE_IP: 10.2.1.100
@@ -230,37 +229,24 @@ jobs:
     needs: [qa-hub, test-bastion-connection]
     runs-on: ubuntu-latest
     steps:
-      - name: Restore Credentials
-        run: |
-          mkdir -p ~/.aws
-          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
-
-      - name: 🚑 Ensure Bastion is RUNNING
-        run: |
-          INSTANCE_ID=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
-          if [ "$INSTANCE_ID" != "None" ] && [ -n "$INSTANCE_ID" ]; then
-            STATE=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
-            if [ "$STATE" == "stopped" ]; then
-              aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
-              aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
-            fi
-          fi
-
-      - name: Setup SSH Key and Config
+      - name: Setup SSH with ControlMaster
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
           
-          # FIX: Increased timeout to 60s for Banner Exchange issues
-          cat > ~/.ssh/config <<EOF
+          # CRITICAL FIX: Use ControlMaster to reuse SSH connections
+          cat > ~/.ssh/config <<'EOF'
           Host bastion
             HostName ${{ env.QA_BASTION_PUBLIC_IP }}
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
-            ServerAliveInterval 60
-            ServerAliveCountMax 10
+            ServerAliveInterval 30
+            ServerAliveCountMax 3
+            ControlMaster auto
+            ControlPath ~/.ssh/control-%r@%h:%p
+            ControlPersist 10m
             
           Host events-server
             HostName ${{ env.EVENTS_PRIVATE_IP }}
@@ -268,22 +254,35 @@ jobs:
             IdentityFile ~/.ssh/bastion_key
             ProxyJump bastion
             StrictHostKeyChecking no
-            ConnectTimeout 60
-            ServerAliveInterval 60
+            ServerAliveInterval 30
+            ServerAliveCountMax 3
           EOF
 
-      - name: ⏳ Active Wait via SSH Tunnel
+      - name: Establish Bastion Connection
         run: |
-          echo "Testing REAL SSH connection through tunnel..."
-          end=$((SECONDS+600))
-          while [ $SECONDS -lt $end ]; do
-            if ssh events-server "echo '✅ Connection Established'"; then
-               exit 0
+          echo "🔗 Establishing persistent SSH tunnel..."
+          ssh -fN bastion
+          sleep 3
+          echo "✅ Background tunnel established"
+
+      - name: Test Connection to Events
+        run: |
+          echo "🔍 Testing connection to Events server..."
+          max_attempts=30
+          attempt=1
+          
+          while [ $attempt -le $max_attempts ]; do
+            echo "Attempt $attempt/$max_attempts..."
+            if ssh -o ConnectTimeout=10 events-server "echo '✅ Connected'"; then
+              echo "✅ Events server is reachable"
+              exit 0
             fi
-            echo "⏳ Waiting for tunnel... ($((end-SECONDS))s left)"
+            echo "⏳ Retrying in 10 seconds..."
             sleep 10
+            attempt=$((attempt + 1))
           done
-          echo "❌ Connection Timeout"
+          
+          echo "❌ Failed to connect after $max_attempts attempts"
           exit 1
 
       - name: Deploy Services
@@ -306,91 +305,69 @@ jobs:
                 ZOOKEEPER_CLIENT_PORT: 2181
               volumes: 
                 - /data/zookeeper:/var/lib/zookeeper/data
-              networks: 
-                - infra_net
+              networks: [infra_net]
             kafka:
               image: confluentinc/cp-kafka:7.5.0
               restart: always
-              depends_on: 
-                - zookeeper
-              ports: 
-                - "9092:9092"
-              volumes: 
-                - /data/kafka:/var/lib/kafka/data
+              depends_on: [zookeeper]
+              ports: ["9092:9092"]
+              volumes: ["/data/kafka:/var/lib/kafka/data"]
               environment:
                 KAFKA_BROKER_ID: 1
                 KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
                 KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
                 KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${{ env.EVENTS_PRIVATE_IP }}:9092
                 KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-              networks: 
-                - infra_net
+              networks: [infra_net]
             rabbitmq:
               image: rabbitmq:3.12-management-alpine
               restart: always
-              ports: 
-                - "5672:5672"
-                - "15672:15672"
-              volumes: 
-                - /data/rabbitmq:/var/lib/rabbitmq
+              ports: ["5672:5672", "15672:15672"]
+              volumes: ["/data/rabbitmq:/var/lib/rabbitmq"]
               environment:
                 RABBITMQ_DEFAULT_USER: admin
                 RABBITMQ_DEFAULT_PASS: ${{ secrets.RABBITMQ_PASS }}
-              networks: 
-                - infra_net
+              networks: [infra_net]
             mosquitto:
               image: eclipse-mosquitto:2.0
               restart: always
-              ports: 
-                - "1883:1883"
-                - "9001:9001"
-              volumes: 
-                - /data/mosquitto/config:/mosquitto/config
-              networks: 
-                - infra_net
+              ports: ["1883:1883", "9001:9001"]
+              volumes: ["/data/mosquitto/config:/mosquitto/config"]
+              networks: [infra_net]
           networks:
             infra_net:
               driver: bridge
           EOF
             sudo docker compose up -d
+            echo "✅ Events services deployed"
           ENDSSH
+
+      - name: Cleanup SSH Connection
+        if: always()
+        run: ssh -O exit bastion || true
 
   deploy-state:
     name: 🚀 Deploy State (Via QA Bastion)
     needs: [qa-hub, test-bastion-connection]
     runs-on: ubuntu-latest
     steps:
-      - name: Restore Credentials
-        run: |
-          mkdir -p ~/.aws
-          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
-
-      - name: 🚑 Ensure Bastion is RUNNING
-        run: |
-          INSTANCE_ID=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
-          if [ "$INSTANCE_ID" != "None" ] && [ -n "$INSTANCE_ID" ]; then
-            STATE=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
-            if [ "$STATE" == "stopped" ]; then
-              aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
-              aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
-            fi
-          fi
-
-      - name: Setup SSH Key and Config
+      - name: Setup SSH with ControlMaster
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
           
-          # FIX: Increased timeout
-          cat > ~/.ssh/config <<EOF
+          cat > ~/.ssh/config <<'EOF'
           Host bastion
             HostName ${{ env.QA_BASTION_PUBLIC_IP }}
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
-            ServerAliveInterval 60
-            ServerAliveCountMax 10
+            ServerAliveInterval 30
+            ServerAliveCountMax 3
+            ControlMaster auto
+            ControlPath ~/.ssh/control-%r@%h:%p
+            ControlPersist 10m
             
           Host state-server
             HostName ${{ env.STATE_PRIVATE_IP }}
@@ -398,20 +375,26 @@ jobs:
             IdentityFile ~/.ssh/bastion_key
             ProxyJump bastion
             StrictHostKeyChecking no
-            ConnectTimeout 60
-            ServerAliveInterval 60
+            ServerAliveInterval 30
+            ServerAliveCountMax 3
           EOF
 
-      - name: ⏳ Active Wait via SSH Tunnel
+      - name: Establish Bastion Connection
         run: |
-          echo "Testing REAL SSH connection to State..."
-          end=$((SECONDS+600))
-          while [ $SECONDS -lt $end ]; do
-            if ssh state-server "echo '✅ Connection Established'"; then
-               exit 0
+          ssh -fN bastion
+          sleep 3
+
+      - name: Test Connection to State
+        run: |
+          max_attempts=30
+          attempt=1
+          
+          while [ $attempt -le $max_attempts ]; do
+            if ssh -o ConnectTimeout=10 state-server "echo '✅ Connected'"; then
+              exit 0
             fi
-            echo "⏳ Waiting for tunnel... ($((end-SECONDS))s left)"
             sleep 10
+            attempt=$((attempt + 1))
           done
           exit 1
 
@@ -421,7 +404,7 @@ jobs:
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-            sudo mkdir -p /data/redis /data/grafana /data/prometheus
+            sudo mkdir -p /data/redis /data/grafana
             sudo chmod -R 777 /data
             cat > docker-compose.yml <<'EOF'
           version: '3.8'
@@ -429,23 +412,23 @@ jobs:
             redis:
               image: redis:7.2-alpine
               restart: always
-              ports: 
-                - "6379:6379"
+              ports: ["6379:6379"]
               command: redis-server --appendonly yes --requirepass ${{ secrets.REDIS_PASSWORD }}
-              volumes: 
-                - /data/redis:/data
+              volumes: ["/data/redis:/data"]
             grafana:
               image: grafana/grafana:latest
               restart: always
-              ports: 
-                - "3000:3000"
+              ports: ["3000:3000"]
               environment:
                 GF_SECURITY_ADMIN_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }}
-              volumes: 
-                - /data/grafana:/var/lib/grafana
+              volumes: ["/data/grafana:/var/lib/grafana"]
           EOF
             sudo docker compose up -d
           ENDSSH
+
+      - name: Cleanup
+        if: always()
+        run: ssh -O exit bastion || true
 
   deploy-apps:
     name: 🚀 Deploy Apps (Via QA Bastion)
@@ -462,37 +445,23 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: 'ALB_DNS', path: 'ALB_DNS' }
         
-      - name: Restore Credentials
-        run: |
-          mkdir -p ~/.aws
-          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
-
-      - name: 🚑 Ensure Bastion is RUNNING
-        run: |
-          INSTANCE_ID=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
-          if [ "$INSTANCE_ID" != "None" ] && [ -n "$INSTANCE_ID" ]; then
-            STATE=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
-            if [ "$STATE" == "stopped" ]; then
-              aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
-              aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
-            fi
-          fi
-
-      - name: Setup SSH Key and Config
+      - name: Setup SSH with ControlMaster
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
           
-          # FIX: Increased timeout
-          cat > ~/.ssh/config <<EOF
+          cat > ~/.ssh/config <<'EOF'
           Host bastion
             HostName ${{ env.QA_BASTION_PUBLIC_IP }}
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
-            ServerAliveInterval 60
-            ServerAliveCountMax 10
+            ServerAliveInterval 30
+            ServerAliveCountMax 3
+            ControlMaster auto
+            ControlPath ~/.ssh/control-%r@%h:%p
+            ControlPersist 10m
             
           Host ${{ matrix.node_name }}
             HostName ${{ matrix.node_ip }}
@@ -500,20 +469,26 @@ jobs:
             IdentityFile ~/.ssh/bastion_key
             ProxyJump bastion
             StrictHostKeyChecking no
-            ConnectTimeout 60
-            ServerAliveInterval 60
+            ServerAliveInterval 30
+            ServerAliveCountMax 3
           EOF
 
-      - name: ⏳ Active Wait via SSH Tunnel
+      - name: Establish Bastion Connection
         run: |
-          echo "Testing REAL SSH connection to ${{ matrix.node_name }}..."
-          end=$((SECONDS+600))
-          while [ $SECONDS -lt $end ]; do
-            if ssh ${{ matrix.node_name }} "echo '✅ Connection Established'"; then
-               exit 0
+          ssh -fN bastion
+          sleep 3
+
+      - name: Test Connection
+        run: |
+          max_attempts=30
+          attempt=1
+          
+          while [ $attempt -le $max_attempts ]; do
+            if ssh -o ConnectTimeout=10 ${{ matrix.node_name }} "echo '✅ Connected'"; then
+              exit 0
             fi
-            echo "⏳ Waiting for tunnel... ($((end-SECONDS))s left)"
             sleep 10
+            attempt=$((attempt + 1))
           done
           exit 1
 
@@ -530,21 +505,18 @@ jobs:
             frontend:
               image: ${{ secrets.DOCKER_USERNAME }}/dermatech-frontend:latest
               restart: always
-              ports: 
-                - "80:80"
+              ports: ["80:80"]
             api-gateway:
               image: ${{ secrets.DOCKER_USERNAME }}/api-gateway:latest
               restart: always
-              ports: 
-                - "3000:3000"
+              ports: ["3000:3000"]
               environment:
                 - AUTH_SERVICE_URL=http://auth-service:3000
                 - PATIENT_SERVICE_URL=http://patient-service:3000
             auth-service:
               image: ${{ secrets.DOCKER_USERNAME }}/auth-service:latest
               restart: always
-              ports: 
-                - "3001:3000"
+              ports: ["3001:3000"]
               environment:
                 - NODE_ENV=production
                 - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
@@ -567,8 +539,7 @@ jobs:
             patient-service:
               image: ${{ secrets.DOCKER_USERNAME }}/patient-service:latest
               restart: always
-              ports: 
-                - "3002:3000"
+              ports: ["3002:3000"]
               environment:
                 - NODE_ENV=production
                 - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
@@ -585,13 +556,15 @@ jobs:
           EOF
             sudo docker compose pull
             sudo docker compose up -d --remove-orphans
-            echo "✅ Applications deployed successfully on ${{ matrix.node_name }}"
           ENDSSH
+
+      - name: Cleanup
+        if: always()
+        run: ssh -O exit bastion || true
           
       - name: 🏁 Final Summary
         if: matrix.node_name == 'node-a'
         run: |
           ALB_DNS=$(cat ALB_DNS/alb_dns.txt | grep -o 'ALB_URL=.*' | cut -d'=' -f2)
-          echo "🎉 DEPLOYMENT COMPLETE (SECURE TUNNEL)"
-          echo "🌐 URL DEL LOAD BALANCER: http://$ALB_DNS"
-          echo "::notice title=Deployment Complete::Application available at http://$ALB_DNS"
+          echo "🎉 DEPLOYMENT COMPLETE"
+          echo "🌐 URL: http://$ALB_DNS"
