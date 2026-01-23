@@ -29,12 +29,14 @@ jobs:
     name: 🔍 Test Bastion SSH Connection
     runs-on: ubuntu-latest
     steps:
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+      # ------------------------------------------------------------------------
+      # AUTHENTICATION: Restore AWS Credentials File
+      # We use the file-based auth strategy consistent with the rest of the pipeline.
+      # ------------------------------------------------------------------------
+      - name: Restore Credentials
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
       # ------------------------------------------------------------------------
       # AUTO-HEALING: Ensure Bastion is Running
@@ -45,25 +47,32 @@ jobs:
         run: |
           echo "Checking Bastion instance state..."
           
-          # Retrieve Instance ID by Name Tag
+          # Retrieve Instance ID by Name Tag using specific profile
           INSTANCE_ID=$(aws ec2 describe-instances \
+            --profile qa-dermatech \
+            --region us-east-1 \
             --filters "Name=tag:Name,Values=dermatech-qa-gateway" \
             --query "Reservations[0].Instances[0].InstanceId" --output text)
           
-          if [ "$INSTANCE_ID" == "None" ]; then
+          if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
             echo "❌ Error: Bastion instance not found via Terraform state."
             exit 1
           fi
 
           # Check Current State
-          STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+          STATE=$(aws ec2 describe-instances \
+            --profile qa-dermatech \
+            --region us-east-1 \
+            --instance-ids $INSTANCE_ID \
+            --query "Reservations[0].Instances[0].State.Name" --output text)
+          
           echo "Instance $INSTANCE_ID is currently: $STATE"
           
           if [ "$STATE" == "stopped" ]; then
             echo "⚠️ Bastion is STOPPED. Initiating start sequence..."
-            aws ec2 start-instances --instance-ids $INSTANCE_ID
+            aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
             echo "⏳ Waiting for instance to reach 'running' state..."
-            aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+            aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
             echo "✅ Bastion successfully started."
           elif [ "$STATE" == "running" ]; then
             echo "✅ Bastion is already running."
@@ -122,7 +131,6 @@ jobs:
           cd infrastructure/terraform/environments/${{ matrix.path }}
           terraform init -reconfigure
           terraform apply -auto-approve
-          
           VPC_ID=$(terraform output -raw vpc_id)
           echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
           echo "✅ VPC Verified/Created: $VPC_ID"
@@ -164,7 +172,6 @@ jobs:
           cd infrastructure/terraform/environments/${{ matrix.path }}
           terraform init -reconfigure
           terraform apply -auto-approve
-          
           VPC_ID=$(terraform output -raw vpc_id)
           echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
           echo "✅ VPC Verified/Created: $VPC_ID"
@@ -317,21 +324,30 @@ jobs:
       # ------------------------------------------------------------------------
       # AUTO-HEALING: Ensure Bastion is Running (Redundant Safety Check)
       # ------------------------------------------------------------------------
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+      - name: Restore Credentials
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
       - name: 🚑 Ensure Bastion is RUNNING
         run: |
-          INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
-          STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+          # Use profile 'qa-dermatech' from restored credentials file
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --profile qa-dermatech \
+            --region us-east-1 \
+            --filters "Name=tag:Name,Values=dermatech-qa-gateway" \
+            --query "Reservations[0].Instances[0].InstanceId" --output text)
+          
+          STATE=$(aws ec2 describe-instances \
+            --profile qa-dermatech \
+            --region us-east-1 \
+            --instance-ids $INSTANCE_ID \
+            --query "Reservations[0].Instances[0].State.Name" --output text)
+          
           if [ "$STATE" == "stopped" ]; then
             echo "⚠️ Bastion STOPPED. Starting..."
-            aws ec2 start-instances --instance-ids $INSTANCE_ID
-            aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+            aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+            aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
           fi
 
       - name: Setup SSH Key
@@ -461,21 +477,18 @@ jobs:
     needs: [qa-hub, test-bastion-connection]
     runs-on: ubuntu-latest
     steps:
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+      - name: Restore Credentials
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
       - name: 🚑 Ensure Bastion is RUNNING
         run: |
-          INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
-          STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+          INSTANCE_ID=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
+          STATE=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
           if [ "$STATE" == "stopped" ]; then
-            echo "⚠️ Bastion STOPPED. Starting..."
-            aws ec2 start-instances --instance-ids $INSTANCE_ID
-            aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+            aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+            aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
           fi
 
       - name: Setup SSH Key
@@ -491,13 +504,11 @@ jobs:
           while [ $SECONDS -lt $end ]; do
             if ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} \
                "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/${{ env.STATE_PRIVATE_IP }}/22'" 2>/dev/null; then
-               echo "✅ State is reachable via internal network."
+               echo "✅ State is reachable."
                exit 0
             fi
-            echo "⏳ Waiting for connectivity... ($((end-SECONDS))s left)"
             sleep 5
           done
-          echo "❌ Timeout waiting for State"
           exit 1
 
       - name: Deploy via SSH Tunnel
@@ -508,7 +519,6 @@ jobs:
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
-            
           Host state-server
             HostName ${{ env.STATE_PRIVATE_IP }}
             User ec2-user
@@ -516,16 +526,13 @@ jobs:
             ProxyJump bastion
             StrictHostKeyChecking no
           EOF
-          
           ssh state-server << 'ENDSSH'
-            echo "✅ SECURITY CHECK: Connected via QA Bastion Tunnel"
-            
+            echo "✅ Connected"
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
             sudo mkdir -p /data/redis /data/grafana /data/prometheus
             sudo chmod -R 777 /data
-            
             cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
@@ -547,9 +554,7 @@ jobs:
               volumes: 
                 - /data/grafana:/var/lib/grafana
           EOF
-            
             sudo docker compose up -d
-            echo "✅ State services deployed successfully"
           ENDSSH
 
   deploy-apps:
@@ -567,21 +572,18 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: 'ALB_DNS', path: 'ALB_DNS' }
         
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+      - name: Restore Credentials
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
 
       - name: 🚑 Ensure Bastion is RUNNING
         run: |
-          INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
-          STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+          INSTANCE_ID=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
+          STATE=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
           if [ "$STATE" == "stopped" ]; then
-            echo "⚠️ Bastion STOPPED. Starting..."
-            aws ec2 start-instances --instance-ids $INSTANCE_ID
-            aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+            aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+            aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
           fi
 
       - name: Setup SSH Key
@@ -597,13 +599,12 @@ jobs:
           while [ $SECONDS -lt $end ]; do
             if ssh -i ~/.ssh/bastion_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} \
                "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/${{ matrix.node_ip }}/22'" 2>/dev/null; then
-               echo "✅ ${{ matrix.node_name }} is reachable via internal network."
+               echo "✅ ${{ matrix.node_name }} is reachable."
                exit 0
             fi
             echo "⏳ Waiting for connectivity... ($((end-SECONDS))s left)"
             sleep 5
           done
-          echo "❌ Timeout waiting for ${{ matrix.node_name }}"
           exit 1
 
       - name: Deploy to ${{ matrix.node_name }}
@@ -614,7 +615,6 @@ jobs:
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
-            
           Host ${{ matrix.node_name }}
             HostName ${{ matrix.node_ip }}
             User ec2-user
@@ -622,19 +622,12 @@ jobs:
             ProxyJump bastion
             StrictHostKeyChecking no
           EOF
-          
           ssh ${{ matrix.node_name }} << 'ENDSSH'
-            echo "✅ SECURITY CHECK: Connected via QA Bastion Tunnel"
-            
-            # Install Docker Compose
+            echo "✅ Connected"
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
             sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
             sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-            
-            # Login to Docker Hub
             echo "${{ secrets.DOCKER_PASSWORD }}" | sudo docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
-            # Create docker-compose.yml
             cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
@@ -694,11 +687,8 @@ jobs:
                 - DB_NAME=${{ secrets.DATABASE_NAME }}
                 - DB_SYNC=${{ secrets.DATABASE_SYNC }}
           EOF
-            
-            # Pull and deploy
             sudo docker compose pull
             sudo docker compose up -d --remove-orphans
-            
             echo "✅ Applications deployed successfully on ${{ matrix.node_name }}"
           ENDSSH
           
