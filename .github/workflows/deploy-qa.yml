@@ -564,17 +564,16 @@ jobs:
           echo "🌐 URL: http://$ALB_DNS"
 
   load-testing:
-    name: 🔥 Load Testing (k6)
+    name: QA Smoke Test (Dominios Reales)
     needs: [deploy-apps]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Download ALB Meta
-        uses: actions/download-artifact@v4
-        with: { name: 'ALB_DNS', path: 'ALB_DNS' }
-      # IMPORTANTE: Asegurate de crear el archivo tests/load/smoke-test.js en el repo
-      - name: Execute k6 Load Test
+      
+      - name: Execute k6 Load Test against QA Domain
         uses: grafana/k6-action@v0.3.0
+        env:
+          API_URL: "http://martharodriguez_qa2.distribuidauce.org"
         with:
           filename: tests/load/smoke-test.js
-          flags: --vus 50 --duration 30s
+          flags: --env API_URL="http://martharodriguez_qa2.distribuidauce.org"

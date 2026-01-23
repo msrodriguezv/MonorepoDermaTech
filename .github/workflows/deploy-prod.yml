@@ -2,12 +2,12 @@ name: "PROD: V2. TURBO DEPLOY DermaTech Global Infrastructure"
 
 on:
   push:
-    #branches: [ qa ]
+    branches: [ qa ]
   workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1
-  # --- VARIABLES DE PRODUCCIÓN (NO TOCAR) ---
+
   PROD_BASTION_PUBLIC_IP: 100.50.124.78
   EVENTS_PRIVATE_IP: 10.1.1.50
   STATE_PRIVATE_IP: 10.2.1.60
@@ -416,15 +416,16 @@ jobs:
         run: echo "::notice title=Prod Deployment::Applications successfully updated via Relay Strategy."
 
   load-testing:
-    name: Prod Load Test (k6)
-    needs: deploy-apps
+    name:  PROD Smoke Test (Real Domain)
+    needs: [deploy-apps]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/download-artifact@v4
-        with: { name: ALB_DNS, path: ALB_DNS }
-      - name: Execute k6
+      
+      - name: Execute k6 Load Test against PROD Domain
         uses: grafana/k6-action@v0.3.0
+        env:
+          API_URL: "https://martharodriguez_prod2.distribuidauce.org"
         with:
           filename: tests/load/smoke-test.js
-          flags: --vus 20 --duration 45s
+          flags: --env API_URL="https://martharodriguez_prod2.distribuidauce.org"
