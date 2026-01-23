@@ -2,11 +2,12 @@ name: "PROD: V2. TURBO DEPLOY DermaTech Global Infrastructure"
 
 on:
   push:
-    branches: [ qa ]
+    branches: [ developer ]
   workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1
+  # PROD NETWORK CONFIGURATION
   PROD_BASTION_PUBLIC_IP: 100.50.124.78
   EVENTS_PRIVATE_IP: 10.1.1.50
   STATE_PRIVATE_IP: 10.2.1.60
@@ -37,8 +38,6 @@ jobs:
       - name: Check Bastion Reachability
         run: timeout 30 bash -c "until cat < /dev/null > /dev/tcp/${{ env.PROD_BASTION_PUBLIC_IP }}/22; do sleep 5; done"
 
-  # [base-layer, nodes-layer, prod-hub, compile-code, docker-build SE MANTIENEN IGUALES]
-  # ... (Omitidos para brevedad) ...
   base-layer:
     name: Deploy Base PROD (${{ matrix.account }})
     runs-on: ubuntu-latest
@@ -226,10 +225,6 @@ jobs:
           push: true
           tags: ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:latest
 
-  # ============================================================================
-  # SOLUCIÓN CRÍTICA: Túnel SSH Configurado ANTES de la verificación
-  # ============================================================================
-
   deploy-events:
     name: 🚀 Deploy Events (Via PROD Bastion)
     needs: [prod-hub, test-bastion-connection]
@@ -257,13 +252,15 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
           
-          # Configuración del túnel PRIMERO
+          # FIX: Increased timeout for banner exchange
           cat > ~/.ssh/config <<EOF
           Host bastion
             HostName ${{ env.PROD_BASTION_PUBLIC_IP }}
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
+            ServerAliveInterval 60
+            ServerAliveCountMax 10
             
           Host events-server
             HostName ${{ env.EVENTS_PRIVATE_IP }}
@@ -271,7 +268,8 @@ jobs:
             IdentityFile ~/.ssh/bastion_key
             ProxyJump bastion
             StrictHostKeyChecking no
-            ConnectTimeout 10
+            ConnectTimeout 60
+            ServerAliveInterval 60
           EOF
 
       - name: ⏳ Active Wait via SSH Tunnel
@@ -384,12 +382,15 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
           
+          # FIX: Increased timeout
           cat > ~/.ssh/config <<EOF
           Host bastion
             HostName ${{ env.PROD_BASTION_PUBLIC_IP }}
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
+            ServerAliveInterval 60
+            ServerAliveCountMax 10
             
           Host state-server
             HostName ${{ env.STATE_PRIVATE_IP }}
@@ -397,7 +398,8 @@ jobs:
             IdentityFile ~/.ssh/bastion_key
             ProxyJump bastion
             StrictHostKeyChecking no
-            ConnectTimeout 10
+            ConnectTimeout 60
+            ServerAliveInterval 60
           EOF
 
       - name: ⏳ Active Wait via SSH Tunnel
@@ -482,12 +484,15 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
           
+          # FIX: Increased timeout
           cat > ~/.ssh/config <<EOF
           Host bastion
             HostName ${{ env.PROD_BASTION_PUBLIC_IP }}
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
+            ServerAliveInterval 60
+            ServerAliveCountMax 10
             
           Host ${{ matrix.node_name }}
             HostName ${{ matrix.node_ip }}
@@ -495,7 +500,8 @@ jobs:
             IdentityFile ~/.ssh/bastion_key
             ProxyJump bastion
             StrictHostKeyChecking no
-            ConnectTimeout 10
+            ConnectTimeout 60
+            ServerAliveInterval 60
           EOF
 
       - name: ⏳ Active Wait via SSH Tunnel

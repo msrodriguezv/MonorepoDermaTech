@@ -7,6 +7,7 @@ on:
 
 env:
   AWS_REGION: us-east-1
+  # QA NETWORK CONFIGURATION
   QA_BASTION_PUBLIC_IP: 100.52.22.97
   EVENTS_PRIVATE_IP: 10.1.1.50
   STATE_PRIVATE_IP: 10.2.1.100
@@ -26,17 +27,17 @@ jobs:
       - name: 🚑 Ensure Bastion is RUNNING
         run: |
           INSTANCE_ID=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
-          STATE=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
-          if [ "$STATE" == "stopped" ]; then
-            aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
-            aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+          if [ "$INSTANCE_ID" != "None" ] && [ -n "$INSTANCE_ID" ]; then
+            STATE=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+            if [ "$STATE" == "stopped" ]; then
+              aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+              aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+            fi
           fi
 
       - name: Check Bastion Reachability
         run: timeout 30 bash -c "until cat < /dev/null > /dev/tcp/${{ env.QA_BASTION_PUBLIC_IP }}/22; do sleep 5; done"
 
-  # [base-layer, nodes-layer, qa-hub, compile-code, docker-build SE MANTIENEN IGUALES]
-  # ... (Omitidos para brevedad, no cambian) ...
   base-layer:
     name: Deploy Base (${{ matrix.account }})
     runs-on: ubuntu-latest
@@ -224,10 +225,6 @@ jobs:
           push: true
           tags: ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:latest
 
-  # ============================================================================
-  # SOLUCIÓN CRÍTICA: Túnel SSH Configurado ANTES de la verificación
-  # ============================================================================
-
   deploy-events:
     name: 🚀 Deploy Events (Via QA Bastion)
     needs: [qa-hub, test-bastion-connection]
@@ -241,25 +238,29 @@ jobs:
       - name: 🚑 Ensure Bastion is RUNNING
         run: |
           INSTANCE_ID=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
-          STATE=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
-          if [ "$STATE" == "stopped" ]; then
-            aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
-            aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+          if [ "$INSTANCE_ID" != "None" ] && [ -n "$INSTANCE_ID" ]; then
+            STATE=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+            if [ "$STATE" == "stopped" ]; then
+              aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+              aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+            fi
           fi
 
-      - name: Setup SSH Key and Config (CRITICAL FIX)
+      - name: Setup SSH Key and Config
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
           
-          # Configuración del túnel PRIMERO
+          # FIX: Increased timeout to 60s for Banner Exchange issues
           cat > ~/.ssh/config <<EOF
           Host bastion
             HostName ${{ env.QA_BASTION_PUBLIC_IP }}
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
+            ServerAliveInterval 60
+            ServerAliveCountMax 10
             
           Host events-server
             HostName ${{ env.EVENTS_PRIVATE_IP }}
@@ -267,16 +268,15 @@ jobs:
             IdentityFile ~/.ssh/bastion_key
             ProxyJump bastion
             StrictHostKeyChecking no
-            ConnectTimeout 10
+            ConnectTimeout 60
+            ServerAliveInterval 60
           EOF
 
-      # Verificación usando el TÚNEL REAL (No comandos crudos)
       - name: ⏳ Active Wait via SSH Tunnel
         run: |
           echo "Testing REAL SSH connection through tunnel..."
           end=$((SECONDS+600))
           while [ $SECONDS -lt $end ]; do
-            # Intentamos conectar realmente al destino usando el alias
             if ssh events-server "echo '✅ Connection Established'"; then
                exit 0
             fi
@@ -368,10 +368,12 @@ jobs:
       - name: 🚑 Ensure Bastion is RUNNING
         run: |
           INSTANCE_ID=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
-          STATE=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
-          if [ "$STATE" == "stopped" ]; then
-            aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
-            aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+          if [ "$INSTANCE_ID" != "None" ] && [ -n "$INSTANCE_ID" ]; then
+            STATE=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+            if [ "$STATE" == "stopped" ]; then
+              aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+              aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+            fi
           fi
 
       - name: Setup SSH Key and Config
@@ -380,12 +382,15 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
           
+          # FIX: Increased timeout
           cat > ~/.ssh/config <<EOF
           Host bastion
             HostName ${{ env.QA_BASTION_PUBLIC_IP }}
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
+            ServerAliveInterval 60
+            ServerAliveCountMax 10
             
           Host state-server
             HostName ${{ env.STATE_PRIVATE_IP }}
@@ -393,7 +398,8 @@ jobs:
             IdentityFile ~/.ssh/bastion_key
             ProxyJump bastion
             StrictHostKeyChecking no
-            ConnectTimeout 10
+            ConnectTimeout 60
+            ServerAliveInterval 60
           EOF
 
       - name: ⏳ Active Wait via SSH Tunnel
@@ -464,10 +470,12 @@ jobs:
       - name: 🚑 Ensure Bastion is RUNNING
         run: |
           INSTANCE_ID=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
-          STATE=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
-          if [ "$STATE" == "stopped" ]; then
-            aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
-            aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+          if [ "$INSTANCE_ID" != "None" ] && [ -n "$INSTANCE_ID" ]; then
+            STATE=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+            if [ "$STATE" == "stopped" ]; then
+              aws ec2 start-instances --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+              aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+            fi
           fi
 
       - name: Setup SSH Key and Config
@@ -476,12 +484,15 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/bastion_key
           chmod 600 ~/.ssh/bastion_key
           
+          # FIX: Increased timeout
           cat > ~/.ssh/config <<EOF
           Host bastion
             HostName ${{ env.QA_BASTION_PUBLIC_IP }}
             User ec2-user
             IdentityFile ~/.ssh/bastion_key
             StrictHostKeyChecking no
+            ServerAliveInterval 60
+            ServerAliveCountMax 10
             
           Host ${{ matrix.node_name }}
             HostName ${{ matrix.node_ip }}
@@ -489,7 +500,8 @@ jobs:
             IdentityFile ~/.ssh/bastion_key
             ProxyJump bastion
             StrictHostKeyChecking no
-            ConnectTimeout 10
+            ConnectTimeout 60
+            ServerAliveInterval 60
           EOF
 
       - name: ⏳ Active Wait via SSH Tunnel
@@ -505,7 +517,7 @@ jobs:
           done
           exit 1
 
-      - name: Deploy Services
+      - name: Deploy to ${{ matrix.node_name }}
         run: |
           ssh ${{ matrix.node_name }} << 'ENDSSH'
             sudo mkdir -p /usr/local/lib/docker/cli-plugins
@@ -582,3 +594,4 @@ jobs:
           ALB_DNS=$(cat ALB_DNS/alb_dns.txt | grep -o 'ALB_URL=.*' | cut -d'=' -f2)
           echo "🎉 DEPLOYMENT COMPLETE (SECURE TUNNEL)"
           echo "🌐 URL DEL LOAD BALANCER: http://$ALB_DNS"
+          echo "::notice title=Deployment Complete::Application available at http://$ALB_DNS"
