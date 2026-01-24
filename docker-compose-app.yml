@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  # --- SERVICIOS LISTOS (NestJS / Flutter) ---
+  api-gateway:
+    image: ${DOCKER_USERNAME}/dermatech-api-gateway:latest
+    container_name: gateway
+    restart: always
+    ports:
+      - "3000:3000"
+    env_file: .env
+
+  auth-service:
+    image: ${DOCKER_USERNAME}/dermatech-auth-service:latest
+    container_name: auth
+    restart: always
+    ports:
+      - "3001:3000"
+    env_file: .env
+
+  patient-service:
+    image: ${DOCKER_USERNAME}/dermatech-patient-service:latest
+    container_name: patient
+    restart: always
+    ports:
+      - "3002:3000"
+    env_file: .env
+
+  frontend:
+    image: ${DOCKER_USERNAME}/dermatech-frontend:latest
+    container_name: frontend
+    restart: always
+    ports:
+      - "80:80"
+
+  # --- SERVICIOS PENDIENTES (Placeholders para que no falle el despliegue) ---
+  # Estos usan una imagen ligera de Nginx hasta que termines el código
+  inventory-service:
+    image: nginx:alpine
+    container_name: placeholder_inventory
+  
+  notification-service:
+    image: nginx:alpine
+    container_name: placeholder_notification
+
+  # Agrega aquí el resto de los 10 microservicios como placeholders...

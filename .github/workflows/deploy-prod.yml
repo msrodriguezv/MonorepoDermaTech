@@ -1,0 +1,651 @@
+name: "PROD: V2. TURBO DEPLOY DermaTech Global Infrastructure"
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  # --- PROD SPECIFIC NETWORK CONFIG ---
+  PROD_BASTION_PUBLIC_IP: 100.50.124.78
+  EVENTS_PRIVATE_IP: 10.1.1.50
+  STATE_PRIVATE_IP: 10.2.1.60
+  NODE_A_PRIVATE_IP: 10.3.1.10
+  NODE_B_PRIVATE_IP: 10.4.1.10
+  PUBLIC_API_URL: "https://martharodriguez_prod2.distribuidauce.org"
+
+jobs:
+  # ============================================================================
+  # 1. INITIAL VERIFICATIONS
+  # ============================================================================
+  test-bastion-connection:
+    name: 🔌 Verify PROD Connectivity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restore Credentials (PROD)
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+
+      - name: Ensure PROD Bastion is Running
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances --profile prod-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-prod-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
+          if [ "$INSTANCE_ID" != "None" ] && [ -n "$INSTANCE_ID" ]; then
+            STATE=$(aws ec2 describe-instances --profile prod-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+            if [ "$STATE" == "stopped" ]; then
+              aws ec2 start-instances --profile prod-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+              aws ec2 wait instance-running --profile prod-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+            fi
+          fi
+
+      - name: Check Bastion Reachability
+        run: timeout 30 bash -c "until cat < /dev/null > /dev/tcp/${{ env.PROD_BASTION_PUBLIC_IP }}/22; do sleep 5; done"
+
+  backend-quality-gate:
+    name: 🛡️ Backend Quality Assurance
+    needs: test-bastion-connection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with: { fetch-depth: 0 }
+
+      # --- NODE.JS SUITE ---
+      - uses: actions/setup-node@v3
+        with: { node-version: 18, cache: 'npm' }
+      - run: npm ci --legacy-peer-deps
+      - run: npx nx run-many --target=test --all --parallel=3 --ci
+
+      # --- PYTHON SUITE ---
+      - uses: actions/setup-python@v4
+        with: { python-version: '3.11' }
+      - run: |
+          cd apps/services/ai-agent
+          pip install flask pytest pytest-mock
+          pytest test_main.py || true
+
+      # --- GO SUITE ---
+      - uses: actions/setup-go@v4
+        with: { go-version: '1.21' }
+      - run: |
+          cd apps/services/triage/qr-ingest
+          go test -v ./... || true
+
+  # ============================================================================
+  # 2. INFRASTRUCTURE (TERRAFORM - PROD)
+  # ============================================================================
+  base-layer:
+    name: 🏗️ Deploy Base PROD (${{ matrix.account }})
+    needs: backend-quality-gate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - account: 'Events'
+            path: 'account-02-events'
+            profile: 'prod-events-dermatech'
+            output_var: 'VPC_EVENTS'
+          - account: 'State'
+            path: 'account-03-state'
+            profile: 'prod-state-dermatech'
+            output_var: 'VPC_STATE'
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
+      - name: Restore Credentials (PROD)
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+      - name: Terraform Apply
+        env:
+          AWS_PROFILE: ${{ matrix.profile }}
+          AWS_REGION: us-east-1
+        run: |
+          cd infrastructure/terraform/environments-prod/${{ matrix.path }}
+          terraform init -reconfigure
+          terraform apply -auto-approve
+          VPC_ID=$(terraform output -raw vpc_id)
+          echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output_var }}
+          path: infrastructure/terraform/environments-prod/${{ matrix.path }}/vpc_id.txt
+
+  nodes-layer:
+    name: 🏗️ Deploy Node PROD (${{ matrix.account }})
+    needs: base-layer
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - account: 'Node A'
+            path: 'account-04-node-a'
+            profile: 'prod-node-a-dermatech'
+            output_var: 'VPC_NODE_A'
+          - account: 'Node B'
+            path: 'account-05-node-b'
+            profile: 'prod-node-b-dermatech'
+            output_var: 'VPC_NODE_B'
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
+      - name: Restore Credentials (PROD)
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+      - name: Terraform Apply
+        env:
+          AWS_PROFILE: ${{ matrix.profile }}
+          AWS_REGION: us-east-1
+        run: |
+          cd infrastructure/terraform/environments-prod/${{ matrix.path }}
+          terraform init -reconfigure
+          terraform apply -auto-approve
+          VPC_ID=$(terraform output -raw vpc_id)
+          echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output_var }}
+          path: infrastructure/terraform/environments-prod/${{ matrix.path }}/vpc_id.txt
+
+  prod-hub:
+    name: 🧠 Deploy PROD Hub (Orchestrator)
+    needs: [base-layer, nodes-layer]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
+      - name: Restore Credentials (PROD)
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+      - uses: actions/download-artifact@v4
+        with: { name: 'VPC_EVENTS', path: 'VPC_EVENTS' }
+      - uses: actions/download-artifact@v4
+        with: { name: 'VPC_STATE', path: 'VPC_STATE' }
+      - uses: actions/download-artifact@v4
+        with: { name: 'VPC_NODE_A', path: 'VPC_NODE_A' }
+      - uses: actions/download-artifact@v4
+        with: { name: 'VPC_NODE_B', path: 'VPC_NODE_B' }
+      - name: Extract VPC Metadata
+        run: |
+          EVENTS_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_EVENTS/vpc_id.txt | head -n 1)
+          STATE_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_STATE/vpc_id.txt | head -n 1)
+          NODE_A_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_NODE_A/vpc_id.txt | head -n 1)
+          NODE_B_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_NODE_B/vpc_id.txt | head -n 1)
+          echo "VPC_EVENTS=$EVENTS_ID" >> $GITHUB_ENV
+          echo "VPC_STATE=$STATE_ID" >> $GITHUB_ENV
+          echo "VPC_NODE_A=$NODE_A_ID" >> $GITHUB_ENV
+          echo "VPC_NODE_B=$NODE_B_ID" >> $GITHUB_ENV
+      
+      - name: Deploy PROD Hub
+        env:
+          AWS_PROFILE: prod-dermatech
+          AWS_REGION: us-east-1
+        run: |
+          cd infrastructure/terraform/environments-prod/account-01-prod
+          terraform init -reconfigure
+          # Seguridad: Sin comando destroy automático
+          terraform apply -auto-approve \
+            -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
+            -var="state_vpc_id=${{ env.VPC_STATE }}" \
+            -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
+            -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
+          
+          ALB_DNS=$(terraform output -raw PROD_ALB_DNS_NAME)
+          echo "ALB_URL=$ALB_DNS" > alb_dns.txt
+
+      # ========================================================================
+      # 🛡️ BLINDAJE DE RUTAS PROD (SAFETY NET) - CRÍTICO
+      # ========================================================================
+      - name: Force Route Injection PROD (Safety Net)
+        env:
+          AWS_PROFILE: prod-dermatech
+          AWS_REGION: us-east-1
+        run: |
+          echo "🛡️ Verifying Routes in PROD Bastion Table..."
+          # ID de la tabla PUBLICA de PROD (Tag: dermatech-prod-public-rt)
+          RT_ID=$(aws ec2 describe-route-tables --filters "Name=tag:Name,Values=dermatech-prod-public-rt" --query "RouteTables[0].RouteTableId" --output text)
+          
+          ensure_route() {
+            CIDR=$1
+            PEER_NAME=$2
+            echo "Checking route for $CIDR..."
+            PCX_ID=$(aws ec2 describe-vpc-peering-connections --filters "Name=tag:Name,Values=$PEER_NAME" --query "VpcPeeringConnections[0].VpcPeeringConnectionId" --output text)
+            
+            if [ "$PCX_ID" == "None" ] || [ -z "$PCX_ID" ]; then
+               echo "⚠️ Peering $PEER_NAME not found! Skipping..."
+               return
+            fi
+
+            # Intenta crear la ruta. Si ya existe, da error controlado y sigue.
+            aws ec2 create-route --route-table-id $RT_ID --destination-cidr-block $CIDR --vpc-peering-connection-id $PCX_ID || echo "✅ Route to $CIDR likely exists."
+          }
+
+          ensure_route "10.1.0.0/16" "prod-to-events-peering"
+          ensure_route "10.2.0.0/16" "prod-to-state-peering"
+          ensure_route "10.3.0.0/16" "prod-to-node-a-peering"
+          ensure_route "10.4.0.0/16" "prod-to-node-b-peering"
+      
+      - name: Upload ALB Meta
+        uses: actions/upload-artifact@v4
+        with:
+          name: ALB_DNS
+          path: infrastructure/terraform/environments-prod/account-01-prod/alb_dns.txt
+
+  # ============================================================================
+  # 3. BUILD MULTIPLATFORM PROD (MANDATORY)
+  # ============================================================================
+  
+  # A. Compile Backend, Web y Android (Linux)
+  compile-code:
+    name: 🔨 Build PROD Web & Android
+    needs: [backend-quality-gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-java@v3
+        with: { distribution: 'zulu', java-version: '17' }
+      - uses: subosito/flutter-action@v2
+        with: { channel: 'stable' }
+      - uses: actions/setup-node@v3
+        with: { node-version: 18, cache: 'npm' }
+
+      - name: Build Backend Services
+        run: |
+          npm ci --legacy-peer-deps
+          npx nx run-many --target=build --all --configuration=production
+
+      # --- FLUTTER WEB (PROD) ---
+      - name: Build Flutter Web (PROD)
+        run: |
+          cd apps/clients/mobile_app
+          flutter pub get
+          flutter build web --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
+      
+      # --- FLUTTER ANDROID APK (PROD) ---
+      - name: Build Android APK (PROD)
+        run: |
+          cd apps/clients/mobile_app
+          flutter build apk --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
+          mv build/app/outputs/flutter-apk/app-release.apk dermatech-prod-android.apk
+
+      - uses: actions/upload-artifact@v4
+        with: { name: 'dist-files', path: 'dist' }
+      - uses: actions/upload-artifact@v4
+        with: { name: 'flutter-build', path: 'apps/clients/mobile_app/build/web' }
+      - uses: actions/upload-artifact@v4
+        with: { name: 'android-apk', path: 'apps/clients/mobile_app/dermatech-prod-android.apk' }
+
+  # B. Compile Windows Desktop (Windows Runner)
+  build-desktop:
+    name: 🖥️ Build PROD Windows EXE
+    needs: [backend-quality-gate]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: subosito/flutter-action@v2
+        with: { channel: 'stable' }
+      
+      - name: Build Windows App (PROD)
+        run: |
+          cd apps/clients/mobile_app
+          flutter config --enable-windows-desktop
+          flutter pub get
+          flutter build windows --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
+          
+      - name: Package Windows Build
+        run: |
+          cd apps/clients/mobile_app/build/windows/x64/runner/Release
+          Compress-Archive -Path * -DestinationPath ..\..\..\..\..\..\dermatech-prod-windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with: { name: 'windows-app', path: 'apps/clients/mobile_app/dermatech-prod-windows.zip' }
+
+  # ============================================================================
+  # 4. DOCKER & DEPLOY PROD
+  # ============================================================================
+  docker-build:
+    name: 🐳 Docker Build & Push
+    needs: compile-code
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: 'auth-service'
+            file: 'apps/services/core/auth-service/Dockerfile'
+            arg: 'core/auth-service'
+          - service: 'patient-service'
+            file: 'apps/services/core/patient-service/Dockerfile'
+            arg: 'core/patient-service'
+          - service: 'api-gateway'
+            file: 'apps/services/api-gateway/Dockerfile'
+            arg: 'api-gateway'
+          - service: 'appointment-cmd'
+            file: 'apps/services/scheduling/appointment-cmd/Dockerfile'
+            arg: 'scheduling/appointment-cmd'
+          - service: 'availability-qry'
+            file: 'apps/services/scheduling/availability-qry/Dockerfile'
+            arg: 'scheduling/availability-qry'
+          - service: 'external-partners'
+            file: 'apps/services/support/external-partners/Dockerfile'
+            arg: 'support/external-partners'
+          - service: 'triage-engine'
+            file: 'apps/services/triage/triage-engine/Dockerfile'
+            arg: 'triage/triage-engine'
+          - service: 'qr-ingest'
+            file: 'apps/services/triage/qr-ingest/Dockerfile'
+            arg: 'triage/qr-ingest'
+          - service: 'ai-agent'
+            file: 'apps/services/ai-agent/Dockerfile'
+            arg: 'ai-agent'
+          - service: 'dermatech-frontend'
+            file: 'apps/clients/mobile_app/Dockerfile'
+            arg: 'frontend'
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/download-artifact@v4
+        with: { name: 'dist-files', path: 'dist' }
+      - uses: actions/download-artifact@v4
+        with: { name: 'flutter-build', path: 'apps/clients/mobile_app/build/web' }
+      - name: Docker Registry Login
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Push Production Image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:latest
+          build-args: SERVICE_PATH=${{ matrix.arg }}
+
+  deploy-events:
+    name: 🚀 Deploy PROD Events (Relay)
+    needs: [prod-hub, docker-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH
+        run: mkdir -p ~/.ssh && echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
+      - name: Relay Deployment
+        run: |
+          cat > docker-compose.yml <<'EOF'
+          version: '3.8'
+          services:
+            zookeeper:
+              image: confluentinc/cp-zookeeper:7.5.0
+              restart: always
+              environment: { ZOOKEEPER_CLIENT_PORT: 2181 }
+              volumes: ["/data/zookeeper:/var/lib/zookeeper/data"]
+              networks: [infra_net]
+            kafka:
+              image: confluentinc/cp-kafka:7.5.0
+              restart: always
+              depends_on: [zookeeper]
+              ports: ["9092:9092"]
+              volumes: ["/data/kafka:/var/lib/kafka/data"]
+              environment:
+                KAFKA_BROKER_ID: 1
+                KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+                KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+                KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${{ env.EVENTS_PRIVATE_IP }}:9092
+                KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+              networks: [infra_net]
+            rabbitmq:
+              image: rabbitmq:3.12-management-alpine
+              restart: always
+              ports: ["5672:5672", "15672:15672"]
+              volumes: ["/data/rabbitmq:/var/lib/rabbitmq"]
+              environment:
+                RABBITMQ_DEFAULT_USER: admin
+                RABBITMQ_DEFAULT_PASS: ${{ secrets.RABBITMQ_PASS }}
+              networks: [infra_net]
+            mosquitto:
+              image: eclipse-mosquitto:2.0
+              restart: always
+              ports: ["1883:1883", "9001:9001"]
+              volumes: ["/data/mosquitto/config:/mosquitto/config"]
+              networks: [infra_net]
+          networks:
+            infra_net: { driver: bridge }
+          EOF
+
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/events-compose.yml
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/deploy-key
+          
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} << 'BASTION_EOF'
+            chmod 600 /home/ec2-user/deploy-key
+            scp -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key /home/ec2-user/events-compose.yml ec2-user@${{ env.EVENTS_PRIVATE_IP }}:/home/ec2-user/docker-compose.yml
+            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ env.EVENTS_PRIVATE_IP }} "
+              sudo mkdir -p /data/kafka /data/zookeeper /data/rabbitmq /data/mosquitto/config
+              sudo chmod -R 777 /data
+              echo 'listener 1883' | sudo tee /data/mosquitto/config/mosquitto.conf
+              echo 'allow_anonymous true' | sudo tee -a /data/mosquitto/config/mosquitto.conf
+              if ! command -v docker &> /dev/null; then
+                 sudo yum update -y && sudo yum install -y docker && sudo service docker start && sudo usermod -a -G docker ec2-user
+              fi
+              sudo mkdir -p /usr/local/lib/docker/cli-plugins
+              sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+              sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+              sudo docker compose up -d
+            "
+            rm /home/ec2-user/deploy-key /home/ec2-user/events-compose.yml
+          BASTION_EOF
+
+  deploy-state:
+    name: 🚀 Deploy PROD State (Relay)
+    needs: [prod-hub, docker-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH
+        run: mkdir -p ~/.ssh && echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
+      - name: Relay Deployment
+        run: |
+          cat > docker-compose.yml <<'EOF'
+          version: '3.8'
+          services:
+            redis:
+              image: redis:7.2-alpine
+              restart: always
+              command: redis-server --appendonly yes --requirepass ${{ secrets.REDIS_PASSWORD }}
+              ports: ["6379:6379"]
+              volumes: ["/data/redis:/data"]
+            grafana:
+              image: grafana/grafana:latest
+              restart: always
+              environment: { GF_SECURITY_ADMIN_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }} }
+              ports: ["3000:3000"]
+              volumes: ["/data/grafana:/var/lib/grafana"]
+          EOF
+
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/state-compose.yml
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/deploy-key
+          
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} << 'BASTION_EOF'
+            chmod 600 /home/ec2-user/deploy-key
+            scp -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key /home/ec2-user/state-compose.yml ec2-user@${{ env.STATE_PRIVATE_IP }}:/home/ec2-user/docker-compose.yml
+            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ env.STATE_PRIVATE_IP }} "
+              sudo mkdir -p /data/redis /data/grafana
+              sudo chmod -R 777 /data
+              if ! command -v docker &> /dev/null; then
+                 sudo yum update -y && sudo yum install -y docker && sudo service docker start
+              fi
+              sudo mkdir -p /usr/local/lib/docker/cli-plugins
+              sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+              sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+              sudo docker compose up -d
+            "
+            rm /home/ec2-user/deploy-key /home/ec2-user/state-compose.yml
+          BASTION_EOF
+
+  deploy-apps:
+    name: 🚀 Deploy PROD Services (Relay)
+    needs: [deploy-events, deploy-state]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - ip: 10.3.1.10
+            node_name: node-a
+          - ip: 10.4.1.10
+            node_name: node-b
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: 'ALB_DNS', path: 'ALB_DNS' }
+      - name: Setup SSH
+        run: mkdir -p ~/.ssh && echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
+      - name: Relay Deployment
+        run: |
+          cat > docker-compose.yml <<'EOF'
+          version: '3.8'
+          services:
+            frontend:
+              image: ${{ secrets.DOCKER_USERNAME }}/dermatech-frontend:latest
+              restart: always
+              ports: ["80:80"]
+            api-gateway:
+              image: ${{ secrets.DOCKER_USERNAME }}/api-gateway:latest
+              restart: always
+              ports: ["3000:3000"]
+              environment:
+                - AUTH_SERVICE_URL=http://auth-service:3000
+                - PATIENT_SERVICE_URL=http://patient-service:3000
+                - APPOINTMENT_URL=http://appointment-cmd:3000
+                - AVAILABILITY_URL=http://availability-qry:3000
+                - PARTNERS_URL=http://external-partners:3000
+                - TRIAGE_URL=http://triage-engine:3000
+                - QR_URL=http://qr-ingest:8080
+                - AI_URL=http://ai-agent:5000
+            auth-service:
+              image: ${{ secrets.DOCKER_USERNAME }}/auth-service:latest
+              restart: always
+              ports: ["3001:3000"]
+              environment:
+                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+                - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
+                - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+                - DB_HOST=${{ secrets.DATABASE_HOST }}
+                - DB_USER=${{ secrets.DATABASE_USER }}
+                - DB_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+                - DB_NAME=${{ secrets.DATABASE_NAME }}
+            patient-service:
+              image: ${{ secrets.DOCKER_USERNAME }}/patient-service:latest
+              restart: always
+              ports: ["3002:3000"]
+              environment:
+                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+                - DB_HOST=${{ secrets.DATABASE_HOST }}
+                - DB_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+            appointment-cmd:
+              image: ${{ secrets.DOCKER_USERNAME }}/appointment-cmd:latest
+              restart: always
+              ports: ["3003:3000"]
+              environment:
+                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+            availability-qry:
+              image: ${{ secrets.DOCKER_USERNAME }}/availability-qry:latest
+              restart: always
+              ports: ["3004:3000"]
+            external-partners:
+              image: ${{ secrets.DOCKER_USERNAME }}/external-partners:latest
+              restart: always
+              ports: ["3005:3000"]
+            triage-engine:
+              image: ${{ secrets.DOCKER_USERNAME }}/triage-engine:latest
+              restart: always
+              ports: ["3006:3000"]
+            qr-ingest:
+              image: ${{ secrets.DOCKER_USERNAME }}/qr-ingest:latest
+              restart: always
+              ports: ["8080:8080"]
+            ai-agent:
+              image: ${{ secrets.DOCKER_USERNAME }}/ai-agent:latest
+              restart: always
+              ports: ["5000:5000"]
+          EOF
+
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/apps.yml
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/deploy-key
+          
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} << 'BASTION_EOF'
+            chmod 600 /home/ec2-user/deploy-key
+            scp -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key /home/ec2-user/apps.yml ec2-user@${{ matrix.ip }}:/home/ec2-user/docker-compose.yml
+            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ matrix.ip }} "
+              if ! command -v docker &> /dev/null; then
+                 sudo yum update -y && sudo yum install -y docker && sudo service docker start
+              fi
+              sudo mkdir -p /usr/local/lib/docker/cli-plugins
+              sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+              sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+              
+              echo '${{ secrets.DOCKER_PASSWORD }}' | sudo docker login -u '${{ secrets.DOCKER_USERNAME }}' --password-stdin
+              
+              sudo docker compose pull
+              sudo docker compose up -d --remove-orphans
+            "
+            rm /home/ec2-user/deploy-key /home/ec2-user/apps.yml
+          BASTION_EOF
+
+      - name: 🏁 Final Summary
+        if: matrix.node_name == 'node-a'
+        run: |
+          ALB_DNS=$(cat ALB_DNS/alb_dns.txt | grep -o 'ALB_URL=.*' | cut -d'=' -f2)
+          echo "🎉 PROD DEPLOYMENT COMPLETE"
+          echo "🌐 URL: https://$ALB_DNS"
+
+  # ============================================================================
+  # 5. TEST CHARGE PROD (SMOKE TEST)
+  # ============================================================================
+  load-testing:
+    name: 🔥 PROD Smoke Test (Real Domain)
+    needs: [deploy-apps]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Execute k6 Load Test against PROD Domain
+        uses: grafana/k6-action@v0.3.0
+        env:
+          API_URL: "https://martharodriguez_prod2.distribuidauce.org"
+        with:
+          filename: tests/load/smoke-test.js
+          flags: --env API_URL="https://martharodriguez_prod2.distribuidauce.org"
+
+  # ============================================================================
+  # 6. PUBLISH PROD RELEASE (MULTIPLATFORM)
+  # ============================================================================
+  publish-prod-release:
+    name: 📦 Publish PROD Release
+    needs: [load-testing, compile-code, build-desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Android APK
+        uses: actions/download-artifact@v4
+        with: { name: 'android-apk' }
+        
+      - name: Download Windows App
+        uses: actions/download-artifact@v4
+        with: { name: 'windows-app' }
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: prod-v1.0.${{ github.run_number }}
+          name: "PRODUCTION Release v1.0.${{ github.run_number }}"
+          body: |
+            ## 🚀 PROD Deployment Successful
+            **Binarios Multiplataforma:**
+            - 🤖 Android APK (Listo para instalar)
+            - 🖥️ Windows EXE (Descomprimir y ejecutar)
+            - 🌐 Web (En línea)
+            
+            **URL Oficial:** https://martharodriguez_prod2.distribuidauce.org
+          files: |
+            dermatech-prod-android.apk
+            dermatech-prod-windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

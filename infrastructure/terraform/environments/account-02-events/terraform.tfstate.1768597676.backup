@@ -1,0 +1,627 @@
+{
+  "version": 4,
+  "terraform_version": "1.14.1",
+  "serial": 28,
+  "lineage": "e9dac135-c5f0-985a-54b5-1556f221310a",
+  "outputs": {
+    "EVENTS_PRIVATE_IP": {
+      "value": "10.0.1.50",
+      "type": "string"
+    },
+    "EVENTS_PUBLIC_IP": {
+      "value": "3.210.119.37",
+      "type": "string"
+    }
+  },
+  "resources": [
+    {
+      "module": "module.compute",
+      "mode": "managed",
+      "type": "aws_ebs_volume",
+      "name": "data_volume",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:ec2:us-east-1:528062813765:volume/vol-0ae8f1892a0f37b0e",
+            "availability_zone": "us-east-1a",
+            "create_time": "2026-01-14T21:53:01Z",
+            "encrypted": false,
+            "final_snapshot": false,
+            "id": "vol-0ae8f1892a0f37b0e",
+            "iops": 3000,
+            "kms_key_id": "",
+            "multi_attach_enabled": false,
+            "outpost_arn": "",
+            "region": "us-east-1",
+            "size": 10,
+            "snapshot_id": "",
+            "tags": {
+              "Name": "dermatech-infra-events-persistence"
+            },
+            "tags_all": {
+              "Name": "dermatech-infra-events-persistence"
+            },
+            "throughput": 125,
+            "timeouts": null,
+            "type": "gp3",
+            "volume_initialization_rate": 0
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDAsImRlbGV0ZSI6NjAwMDAwMDAwMDAwLCJ1cGRhdGUiOjMwMDAwMDAwMDAwMH19"
+        }
+      ]
+    },
+    {
+      "module": "module.compute",
+      "mode": "managed",
+      "type": "aws_eip",
+      "name": "events_eip",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "address": null,
+            "allocation_id": "eipalloc-0e0551efd3c2b669f",
+            "arn": "arn:aws:ec2:us-east-1:528062813765:elastic-ip/eipalloc-0e0551efd3c2b669f",
+            "associate_with_private_ip": null,
+            "association_id": "eipassoc-0640f8ee7c2da71d2",
+            "carrier_ip": "",
+            "customer_owned_ip": "",
+            "customer_owned_ipv4_pool": "",
+            "domain": "vpc",
+            "id": "eipalloc-0e0551efd3c2b669f",
+            "instance": "i-008276edb1e38a767",
+            "ipam_pool_id": null,
+            "network_border_group": "us-east-1",
+            "network_interface": "eni-0ac557e64d5bb7f39",
+            "private_dns": "ip-10-0-1-50.ec2.internal",
+            "private_ip": "10.0.1.50",
+            "ptr_record": "",
+            "public_dns": "ec2-3-210-119-37.compute-1.amazonaws.com",
+            "public_ip": "3.210.119.37",
+            "public_ipv4_pool": "amazon",
+            "region": "us-east-1",
+            "tags": {
+              "Name": "dermatech-infra-events-eip"
+            },
+            "tags_all": {
+              "Name": "dermatech-infra-events-eip"
+            },
+            "timeouts": null
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiZGVsZXRlIjoxODAwMDAwMDAwMDAsInJlYWQiOjkwMDAwMDAwMDAwMCwidXBkYXRlIjozMDAwMDAwMDAwMDB9fQ=="
+        }
+      ]
+    },
+    {
+      "module": "module.compute",
+      "mode": "managed",
+      "type": "aws_eip_association",
+      "name": "eip_assoc",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "allocation_id": "eipalloc-0e0551efd3c2b669f",
+            "allow_reassociation": null,
+            "id": "eipassoc-0b108fca65e8c5218",
+            "instance_id": "i-04a4e25407eb747ce",
+            "network_interface_id": "eni-047469474580a769d",
+            "private_ip_address": "10.0.1.50",
+            "public_ip": "3.210.119.37",
+            "region": "us-east-1"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "module.compute.aws_eip.events_eip",
+            "module.compute.aws_instance.worker",
+            "module.compute.aws_security_group.events_sg",
+            "module.networking.aws_subnet.public",
+            "module.networking.aws_vpc.main"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "module.compute",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "worker",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 2,
+          "attributes": {
+            "ami": "ami-051f7e7f6c2f40dc1",
+            "arn": "arn:aws:ec2:us-east-1:528062813765:instance/i-04a4e25407eb747ce",
+            "associate_public_ip_address": true,
+            "availability_zone": "us-east-1a",
+            "capacity_reservation_specification": [
+              {
+                "capacity_reservation_preference": "open",
+                "capacity_reservation_target": []
+              }
+            ],
+            "cpu_options": [
+              {
+                "amd_sev_snp": "",
+                "core_count": 1,
+                "threads_per_core": 2
+              }
+            ],
+            "credit_specification": [
+              {
+                "cpu_credits": "unlimited"
+              }
+            ],
+            "disable_api_stop": false,
+            "disable_api_termination": false,
+            "ebs_block_device": [],
+            "ebs_optimized": false,
+            "enable_primary_ipv6": null,
+            "enclave_options": [
+              {
+                "enabled": false
+              }
+            ],
+            "ephemeral_block_device": [],
+            "force_destroy": false,
+            "get_password_data": false,
+            "hibernation": false,
+            "host_id": "",
+            "host_resource_group_arn": null,
+            "iam_instance_profile": "",
+            "id": "i-04a4e25407eb747ce",
+            "instance_initiated_shutdown_behavior": "stop",
+            "instance_lifecycle": "",
+            "instance_market_options": [],
+            "instance_state": "running",
+            "instance_type": "t3.large",
+            "ipv6_address_count": 0,
+            "ipv6_addresses": [],
+            "key_name": "",
+            "launch_template": [],
+            "maintenance_options": [
+              {
+                "auto_recovery": "default"
+              }
+            ],
+            "metadata_options": [
+              {
+                "http_endpoint": "enabled",
+                "http_protocol_ipv6": "disabled",
+                "http_put_response_hop_limit": 2,
+                "http_tokens": "required",
+                "instance_metadata_tags": "disabled"
+              }
+            ],
+            "monitoring": false,
+            "network_interface": [],
+            "outpost_arn": "",
+            "password_data": "",
+            "placement_group": "",
+            "placement_group_id": "",
+            "placement_partition_number": 0,
+            "primary_network_interface": [
+              {
+                "delete_on_termination": true,
+                "network_interface_id": "eni-047469474580a769d"
+              }
+            ],
+            "primary_network_interface_id": "eni-047469474580a769d",
+            "private_dns": "ip-10-0-1-50.ec2.internal",
+            "private_dns_name_options": [
+              {
+                "enable_resource_name_dns_a_record": false,
+                "enable_resource_name_dns_aaaa_record": false,
+                "hostname_type": "ip-name"
+              }
+            ],
+            "private_ip": "10.0.1.50",
+            "public_dns": "ec2-54-236-34-151.compute-1.amazonaws.com",
+            "public_ip": "54.236.34.151",
+            "region": "us-east-1",
+            "root_block_device": [
+              {
+                "delete_on_termination": true,
+                "device_name": "/dev/xvda",
+                "encrypted": false,
+                "iops": 3000,
+                "kms_key_id": "",
+                "tags": null,
+                "tags_all": {},
+                "throughput": 125,
+                "volume_id": "vol-0e2c97ba5fa792390",
+                "volume_size": 25,
+                "volume_type": "gp3"
+              }
+            ],
+            "secondary_private_ips": [],
+            "security_groups": [],
+            "source_dest_check": true,
+            "spot_instance_request_id": "",
+            "subnet_id": "subnet-015f785847dab44ec",
+            "tags": {
+              "Name": "dermatech-infra-events-server"
+            },
+            "tags_all": {
+              "Name": "dermatech-infra-events-server"
+            },
+            "tenancy": "default",
+            "timeouts": null,
+            "user_data": "#!/bin/bash\r\nset -e\r\n\r\n# A. INSTALL DOCKER \u0026 TOOLS\r\ndnf update -y\r\ndnf install -y docker git htop\r\nsystemctl start docker\r\nsystemctl enable docker\r\nusermod -aG docker ec2-user\r\n\r\n# B. INSTALL DOCKER COMPOSE V2\r\nmkdir -p /usr/local/lib/docker/cli-plugins\r\ncurl -SL https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose\r\nchmod +x /usr/local/lib/docker/cli-plugins/docker-compose\r\n\r\n# C. SWAP MEMORY CONFIGURATION (STABILITY)\r\ndd if=/dev/zero of=/swapfile bs=128M count=32\r\nchmod 600 /swapfile\r\nmkswap /swapfile\r\nswapon /swapfile\r\necho \"/swapfile swap swap defaults 0 0\" \u003e\u003e /etc/fstab\r\n\r\n# D. MOUNT PERSISTENT DISK\r\n# Checks if the disk is unformatted, formats it, and mounts it to /data\r\nDATA_DISK=\"/dev/nvme1n1\"\r\nMOUNT_POINT=\"/data\"\r\n    \r\n# Wait for EBS attachment\r\nsleep 20 \r\n\r\nif ! blkid $DATA_DISK; then\r\n    mkfs -t xfs $DATA_DISK\r\nfi\r\nmkdir -p $MOUNT_POINT\r\nmount $DATA_DISK $MOUNT_POINT\r\necho \"$DATA_DISK $MOUNT_POINT xfs defaults,nofail 0 2\" \u003e\u003e /etc/fstab\r\n    \r\n# Create Persistent Directories Structure\r\nmkdir -p $MOUNT_POINT/kafka $MOUNT_POINT/zookeeper $MOUNT_POINT/rabbitmq\r\nmkdir -p $MOUNT_POINT/mosquitto/config $MOUNT_POINT/mosquitto/data $MOUNT_POINT/mosquitto/log\r\n    \r\n# --- CRITICAL PERMISSION FIX ---\r\n# Grants Read/Write permissions to all users (including containers) to prevent \"Permission Denied\" loops.\r\nchmod -R 777 $MOUNT_POINT\r\n\r\n# E. CONFIGURE MOSQUITTO\r\ncat \u003c\u003cMQTTCFG \u003e $MOUNT_POINT/mosquitto/config/mosquitto.conf\r\npersistence true\r\npersistence_location /mosquitto/data/\r\nlog_dest file /mosquitto/log/mosquitto.log\r\nlistener 1883\r\nallow_anonymous true\r\nlistener 9001\r\nprotocol websockets\r\nMQTTCFG\r\n\r\n# F. INJECT PUBLIC IP (RUNTIME VARIABLE)\r\nPUBLIC_IP=$(curl -s http://checkip.amazonaws.com)\r\necho \"KAFKA_PUBLIC_IP=$PUBLIC_IP\" \u003e /home/ec2-user/.env\r\n\r\n# G. CREATE DOCKER COMPOSE FILE\r\ncat \u003c\u003cCOMPOSE \u003e /home/ec2-user/docker-compose.yml\r\nversion: '3.8'\r\nservices:\r\n  zookeeper:\r\n    image: confluentinc/cp-zookeeper:7.5.0\r\n    container_name: zookeeper\r\n    environment:\r\n      ZOOKEEPER_CLIENT_PORT: 2181\r\n      ZOOKEEPER_TICK_TIME: 2000\r\n    volumes:\r\n      - $MOUNT_POINT/zookeeper:/var/lib/zookeeper/data\r\n    restart: always\r\n\r\n  kafka:\r\n    image: confluentinc/cp-kafka:7.5.0\r\n    container_name: kafka\r\n    depends_on:\r\n      - zookeeper\r\n    ports:\r\n      - \"9092:9092\"\r\n    env_file: .env\r\n    volumes:\r\n      - $MOUNT_POINT/kafka:/var/lib/kafka/data\r\n    environment:\r\n      KAFKA_BROKER_ID: 1\r\n      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181\r\n      # DOUBLE DOLLAR SIGN ($$) FOR TERRAFORM ESCAPE\r\n      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://${KAFKA_PUBLIC_IP}:9092\r\n      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT\r\n      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT\r\n      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1\r\n      KAFKA_AUTO_CREATE_TOPICS_ENABLE: \"true\"\r\n      KAFKA_HEAP_OPTS: \"-Xmx2G -Xms2G\"\r\n    restart: always\r\n\r\n  rabbitmq:\r\n    image: rabbitmq:3-management\r\n    container_name: rabbitmq\r\n    ports:\r\n      - \"5672:5672\"\r\n      - \"15672:15672\"\r\n    environment:\r\n      RABBITMQ_DEFAULT_USER: admin\r\n      RABBITMQ_DEFAULT_PASS: admin123\r\n    volumes:\r\n      - $MOUNT_POINT/rabbitmq:/var/lib/rabbitmq\r\n    restart: always\r\n\r\n  mosquitto:\r\n    image: eclipse-mosquitto\r\n    container_name: mqtt\r\n    ports:\r\n      - \"1883:1883\"\r\n      - \"9001:9001\"\r\n    volumes:\r\n      - $MOUNT_POINT/mosquitto/config:/mosquitto/config\r\n      - $MOUNT_POINT/mosquitto/data:/mosquitto/data\r\n      - $MOUNT_POINT/mosquitto/log:/mosquitto/log\r\n    restart: always\r\nCOMPOSE\r\n\r\n# H. START SERVICES\r\ncd /home/ec2-user\r\n# Re-apply permissions just in case\r\nchmod -R 777 $MOUNT_POINT\r\ndocker compose up -d\r\n    \r\necho \"SETUP COMPLETE: Services Running on Persistent Volume\"\r\n",
+            "user_data_base64": null,
+            "user_data_replace_on_change": true,
+            "volume_tags": null,
+            "vpc_security_group_ids": [
+              "sg-0c94db58fdc684fa7"
+            ]
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "identity": {
+            "account_id": "528062813765",
+            "id": "i-04a4e25407eb747ce",
+            "region": "us-east-1"
+          },
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsImRlbGV0ZSI6MTIwMDAwMDAwMDAwMCwicmVhZCI6OTAwMDAwMDAwMDAwLCJ1cGRhdGUiOjYwMDAwMDAwMDAwMH0sInNjaGVtYV92ZXJzaW9uIjoiMiJ9",
+          "dependencies": [
+            "module.compute.aws_security_group.events_sg",
+            "module.networking.aws_subnet.public",
+            "module.networking.aws_vpc.main"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "module.compute",
+      "mode": "managed",
+      "type": "aws_security_group",
+      "name": "events_sg",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 1,
+          "attributes": {
+            "arn": "arn:aws:ec2:us-east-1:528062813765:security-group/sg-0c94db58fdc684fa7",
+            "description": "Security Group for Events Infrastructure (Whitelisted)",
+            "egress": [
+              {
+                "cidr_blocks": [
+                  "0.0.0.0/0"
+                ],
+                "description": "",
+                "from_port": 0,
+                "ipv6_cidr_blocks": [],
+                "prefix_list_ids": [],
+                "protocol": "-1",
+                "security_groups": [],
+                "self": false,
+                "to_port": 0
+              }
+            ],
+            "id": "sg-0c94db58fdc684fa7",
+            "ingress": [
+              {
+                "cidr_blocks": [
+                  "100.52.22.97/32"
+                ],
+                "description": "SSH Access from QA Gateway",
+                "from_port": 22,
+                "ipv6_cidr_blocks": [],
+                "prefix_list_ids": [],
+                "protocol": "tcp",
+                "security_groups": [],
+                "self": false,
+                "to_port": 22
+              },
+              {
+                "cidr_blocks": [
+                  "3.220.53.59/32",
+                  "54.86.159.130/32"
+                ],
+                "description": "Data Traffic from Trusted App Nodes",
+                "from_port": 0,
+                "ipv6_cidr_blocks": [],
+                "prefix_list_ids": [],
+                "protocol": "tcp",
+                "security_groups": [],
+                "self": false,
+                "to_port": 65535
+              }
+            ],
+            "name": "dermatech-infra-events-sg",
+            "name_prefix": "",
+            "owner_id": "528062813765",
+            "region": "us-east-1",
+            "revoke_rules_on_delete": false,
+            "tags": {
+              "Name": "dermatech-infra-events-sg"
+            },
+            "tags_all": {
+              "Name": "dermatech-infra-events-sg"
+            },
+            "timeouts": null,
+            "vpc_id": "vpc-0a1207b3a52ece83d"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "identity": {
+            "account_id": "528062813765",
+            "id": "sg-0c94db58fdc684fa7",
+            "region": "us-east-1"
+          },
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsImRlbGV0ZSI6OTAwMDAwMDAwMDAwfSwic2NoZW1hX3ZlcnNpb24iOiIxIn0=",
+          "dependencies": [
+            "module.networking.aws_vpc.main"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "module.compute",
+      "mode": "managed",
+      "type": "aws_volume_attachment",
+      "name": "ebs_att",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "device_name": "/dev/sdf",
+            "force_detach": null,
+            "id": "vai-2749578372",
+            "instance_id": "i-04a4e25407eb747ce",
+            "region": "us-east-1",
+            "skip_destroy": null,
+            "stop_instance_before_detaching": null,
+            "timeouts": null,
+            "volume_id": "vol-0ae8f1892a0f37b0e"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDAsImRlbGV0ZSI6MzAwMDAwMDAwMDAwfX0=",
+          "dependencies": [
+            "module.compute.aws_ebs_volume.data_volume",
+            "module.compute.aws_instance.worker",
+            "module.compute.aws_security_group.events_sg",
+            "module.networking.aws_subnet.public",
+            "module.networking.aws_vpc.main"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "module.networking",
+      "mode": "managed",
+      "type": "aws_internet_gateway",
+      "name": "igw",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:ec2:us-east-1:528062813765:internet-gateway/igw-02d52462e0ebcc546",
+            "id": "igw-02d52462e0ebcc546",
+            "owner_id": "528062813765",
+            "region": "us-east-1",
+            "tags": {
+              "Name": "dermatech-infra-events-igw"
+            },
+            "tags_all": {
+              "Name": "dermatech-infra-events-igw"
+            },
+            "timeouts": null,
+            "vpc_id": "vpc-0a1207b3a52ece83d"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19",
+          "dependencies": [
+            "module.networking.aws_vpc.main"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "module.networking",
+      "mode": "managed",
+      "type": "aws_route_table",
+      "name": "public",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:ec2:us-east-1:528062813765:route-table/rtb-06ef2fb982e27792b",
+            "id": "rtb-06ef2fb982e27792b",
+            "owner_id": "528062813765",
+            "propagating_vgws": [],
+            "region": "us-east-1",
+            "route": [
+              {
+                "carrier_gateway_id": "",
+                "cidr_block": "0.0.0.0/0",
+                "core_network_arn": "",
+                "destination_prefix_list_id": "",
+                "egress_only_gateway_id": "",
+                "gateway_id": "igw-02d52462e0ebcc546",
+                "ipv6_cidr_block": "",
+                "local_gateway_id": "",
+                "nat_gateway_id": "",
+                "network_interface_id": "",
+                "transit_gateway_id": "",
+                "vpc_endpoint_id": "",
+                "vpc_peering_connection_id": ""
+              }
+            ],
+            "tags": {
+              "Name": "dermatech-infra-events-public-rt"
+            },
+            "tags_all": {
+              "Name": "dermatech-infra-events-public-rt"
+            },
+            "timeouts": null,
+            "vpc_id": "vpc-0a1207b3a52ece83d"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "identity": {
+            "account_id": "528062813765",
+            "id": "rtb-06ef2fb982e27792b",
+            "region": "us-east-1"
+          },
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDAsImRlbGV0ZSI6MzAwMDAwMDAwMDAwLCJ1cGRhdGUiOjEyMDAwMDAwMDAwMH19",
+          "dependencies": [
+            "module.networking.aws_internet_gateway.igw",
+            "module.networking.aws_vpc.main"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "module.networking",
+      "mode": "managed",
+      "type": "aws_route_table_association",
+      "name": "public",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "gateway_id": "",
+            "id": "rtbassoc-0e762195f90c00b87",
+            "region": "us-east-1",
+            "route_table_id": "rtb-06ef2fb982e27792b",
+            "subnet_id": "subnet-015f785847dab44ec",
+            "timeouts": null
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDAsImRlbGV0ZSI6MzAwMDAwMDAwMDAwLCJ1cGRhdGUiOjEyMDAwMDAwMDAwMH19",
+          "dependencies": [
+            "module.networking.aws_internet_gateway.igw",
+            "module.networking.aws_route_table.public",
+            "module.networking.aws_subnet.public",
+            "module.networking.aws_vpc.main"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "module.networking",
+      "mode": "managed",
+      "type": "aws_subnet",
+      "name": "public",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 1,
+          "attributes": {
+            "arn": "arn:aws:ec2:us-east-1:528062813765:subnet/subnet-015f785847dab44ec",
+            "assign_ipv6_address_on_creation": false,
+            "availability_zone": "us-east-1a",
+            "availability_zone_id": "use1-az1",
+            "cidr_block": "10.0.1.0/24",
+            "customer_owned_ipv4_pool": "",
+            "enable_dns64": false,
+            "enable_lni_at_device_index": 0,
+            "enable_resource_name_dns_a_record_on_launch": false,
+            "enable_resource_name_dns_aaaa_record_on_launch": false,
+            "id": "subnet-015f785847dab44ec",
+            "ipv6_cidr_block": "",
+            "ipv6_cidr_block_association_id": "",
+            "ipv6_native": false,
+            "map_customer_owned_ip_on_launch": false,
+            "map_public_ip_on_launch": true,
+            "outpost_arn": "",
+            "owner_id": "528062813765",
+            "private_dns_hostname_type_on_launch": "ip-name",
+            "region": "us-east-1",
+            "tags": {
+              "Name": "dermatech-infra-events-public-subnet"
+            },
+            "tags_all": {
+              "Name": "dermatech-infra-events-public-subnet"
+            },
+            "timeouts": null,
+            "vpc_id": "vpc-0a1207b3a52ece83d"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "identity": {
+            "account_id": "528062813765",
+            "id": "subnet-015f785847dab44ec",
+            "region": "us-east-1"
+          },
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsImRlbGV0ZSI6MTIwMDAwMDAwMDAwMH0sInNjaGVtYV92ZXJzaW9uIjoiMSJ9",
+          "dependencies": [
+            "module.networking.aws_vpc.main"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "module.networking",
+      "mode": "managed",
+      "type": "aws_vpc",
+      "name": "main",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 1,
+          "attributes": {
+            "arn": "arn:aws:ec2:us-east-1:528062813765:vpc/vpc-0a1207b3a52ece83d",
+            "assign_generated_ipv6_cidr_block": false,
+            "cidr_block": "10.0.0.0/16",
+            "default_network_acl_id": "acl-0147aef72c7249137",
+            "default_route_table_id": "rtb-0b6e2fabdb29b4b90",
+            "default_security_group_id": "sg-0fd48a5a7ab6d0c14",
+            "dhcp_options_id": "dopt-5c020927",
+            "enable_dns_hostnames": true,
+            "enable_dns_support": true,
+            "enable_network_address_usage_metrics": false,
+            "id": "vpc-0a1207b3a52ece83d",
+            "instance_tenancy": "default",
+            "ipv4_ipam_pool_id": null,
+            "ipv4_netmask_length": null,
+            "ipv6_association_id": "",
+            "ipv6_cidr_block": "",
+            "ipv6_cidr_block_network_border_group": "",
+            "ipv6_ipam_pool_id": "",
+            "ipv6_netmask_length": 0,
+            "main_route_table_id": "rtb-0b6e2fabdb29b4b90",
+            "owner_id": "528062813765",
+            "region": "us-east-1",
+            "tags": {
+              "Environment": "infra-events",
+              "Name": "dermatech-infra-events-vpc"
+            },
+            "tags_all": {
+              "Environment": "infra-events",
+              "Name": "dermatech-infra-events-vpc"
+            }
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "identity": {
+            "account_id": "528062813765",
+            "id": "vpc-0a1207b3a52ece83d",
+            "region": "us-east-1"
+          },
+          "private": "eyJzY2hlbWFfdmVyc2lvbiI6IjEifQ=="
+        }
+      ]
+    }
+  ],
+  "check_results": null
+}

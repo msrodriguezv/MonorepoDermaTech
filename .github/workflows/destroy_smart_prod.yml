@@ -1,0 +1,88 @@
+name: "PROD: SMART RECYCLE (Instances EC2 Only - Preserve Network)"
+
+on:
+  # Manual trigger to strictly control PROD recycling operations
+  #push:
+    #branches: [ developer ]
+  workflow_dispatch:
+
+jobs:
+  recycle-compute-only:
+    name: Recycle PROD Instances (Keep Network & Bastion Alive)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Restore Credentials (PROD)
+        run: |
+          mkdir -p ~/.aws
+          # Using production credentials secret
+          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+
+      # ------------------------------------------------------------------------
+      # STRATEGY: PROD IMMUTABLE INFRASTRUCTURE MAINTENANCE
+      # 1. Terminate Application Nodes (Events, State, Nodes) (Layer 2).
+      # 2. STRICTLY PROTECT Network Layer (VPC, IGW, NAT, Bastion Host) (Layer 1).
+      # ------------------------------------------------------------------------
+      
+      - name: 🔥 Terminate PROD App Instances (Protect Bastion)
+        run: |
+          echo "♻️ Starting Smart Compute Recycle in PRODUCTION (Preserving Bastion)..."
+          
+          # List of Production Profiles
+          for profile in prod-dermatech prod-node-a-dermatech prod-node-b-dermatech prod-events-dermatech prod-state-dermatech; do
+            echo "🔎 Scanning profile: $profile"
+            
+            # CRITICAL JMESPath FILTER:
+            # We query for all instances that are NOT Terminated.
+            # Then, we strictly EXCLUDE the instance tagged as 'dermatech-prod-gateway'.
+            # This ensures the Production Bastion (Layer 1) remains active for connectivity.
+            ids=$(aws ec2 describe-instances \
+              --profile $profile \
+              --region us-east-1 \
+              --filters "Name=instance-state-name,Values=running,stopped,stopping,pending" \
+              --query "Reservations[].Instances[?Tags[?Key=='Name' && Value!='dermatech-prod-gateway']].InstanceId" \
+              --output text 2>/dev/null || echo "")
+            
+            if [ -n "$ids" ]; then
+              echo " ☠️ Terminating Application Instances: $ids"
+              aws ec2 terminate-instances --profile $profile --region us-east-1 --instance-ids $ids
+            else
+              echo " ✅ No disposable instances found in $profile (or Bastion was protected)."
+            fi
+          done
+          
+          echo "⏳ Waiting for AWS termination signal propagation..."
+          sleep 15
+          echo "✅ PROD Recycle Complete."
+          echo "ℹ️ INFO: Application Nodes have been terminated."
+          echo "ℹ️ INFO: Network Infrastructure and PROD Bastion remain active."
+
+  # ============================================================================
+  # AUDIT: POST-RECYCLE VERIFICATION
+  # ============================================================================
+  verify-prod-status:
+    name: Verify PROD Persistence
+    needs: [recycle-compute-only]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restore Credentials (PROD)
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+
+      - name: 🔍 Audit Resources
+        run: |
+          echo "📊 Post-Recycle Production Resource Summary:"
+          
+          for profile in prod-dermatech prod-node-a-dermatech prod-node-b-dermatech prod-events-dermatech prod-state-dermatech; do
+            echo "Account: $profile"
+            # Verify VPCs exist (Layer 1) - Must be > 0
+            vpc_count=$(aws ec2 describe-vpcs --profile $profile --region us-east-1 --query 'length(Vpcs[?!IsDefault])' 2>/dev/null || echo "0")
+            
+            # Verify Application Instances are terminated (Layer 2) - Should be 0 (excluding protected Bastion)
+            instance_count=$(aws ec2 describe-instances --profile $profile --region us-east-1 --filters "Name=instance-state-name,Values=running,pending" --query "length(Reservations[].Instances[?Tags[?Key=='Name' && Value!='dermatech-prod-gateway']])" 2>/dev/null || echo "0")
+            
+            echo "   VPCs Active: $vpc_count (Should be > 0)"
+            echo "   App EC2s Active:  $instance_count (Should be 0)"
+          done

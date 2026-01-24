@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  # --- REDIS ---
+  redis:
+    image: redis:7.2-alpine
+    container_name: infra_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - /data/redis:/data
+    networks:
+      - state_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      retries: 5
+
+  # --- PROMETHEUS ---
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: infra_prometheus
+    restart: always
+    ports:
+      - "9090:9090"
+    volumes:
+      - /data/prometheus/config:/etc/prometheus
+      - /data/prometheus/data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+    networks:
+      - state_net
+
+  # --- GRAFANA ---
+  grafana:
+    image: grafana/grafana:10.0.0
+    container_name: infra_grafana
+    restart: always
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+    volumes:
+      - /data/grafana:/var/lib/grafana
+    networks:
+      - state_net
+
+  # --- SONARQUBE (NUEVO) ---
+  sonarqube:
+    image: sonarqube:community
+    container_name: infra_sonarqube
+    restart: always
+    depends_on:
+      - sonarqube_db
+    ports:
+      - "9000:9000"
+    environment:
+      - SONAR_JDBC_URL=jdbc:postgresql://sonarqube_db:5432/sonar
+      - SONAR_JDBC_USERNAME=sonar
+      - SONAR_JDBC_PASSWORD=${SONAR_DB_PASSWORD}
+    volumes:
+      - /data/sonarqube/data:/opt/sonarqube/data
+      - /data/sonarqube/extensions:/opt/sonarqube/extensions
+      - /data/sonarqube/logs:/opt/sonarqube/logs
+    networks:
+      - state_net
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  # --- DB PARA SONARQUBE (NUEVO - REQUERIDO) ---
+  sonarqube_db:
+    image: postgres:15-alpine
+    container_name: infra_sonar_db
+    restart: always
+    environment:
+      - POSTGRES_USER=sonar
+      - POSTGRES_PASSWORD=${SONAR_DB_PASSWORD}
+      - POSTGRES_DB=sonar
+    volumes:
+      - /data/sonarqube/db:/var/lib/postgresql/data
+    networks:
+      - state_net
+
+  # --- JMETER (NUEVO) ---
+  jmeter:
+    image: justb4/jmeter:5.5
+    container_name: infra_jmeter
+    # Mantenemos el contenedor vivo para entrar y ejecutar pruebas
+    entrypoint: ["tail", "-f", "/dev/null"]
+    volumes:
+      - /data/jmeter:/jmeter_scripts
+    networks:
+      - state_net
+
+networks:
+  state_net:
+    driver: bridge

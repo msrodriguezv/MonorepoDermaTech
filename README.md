@@ -1,96 +1,104 @@
-# DermatechMonorepo
+# Dermatech: Distributed Dermatological Management Ecosystem
 
-<a alt="Nx logo" href="https://nx.dev" target="_blank" rel="noreferrer"><img src="https://raw.githubusercontent.com/nrwl/nx/master/images/nx-logo.png" width="45"></a>
+**Status:** Active Development
+**License:** Proprietary - Universidad Central del Ecuador (UCE)
+**Department:** Faculty of Applied Sciences, Information Systems Program
 
-✨ Your new, shiny [Nx workspace](https://nx.dev) is ready ✨.
+## Project Overview
 
-[Learn more about this workspace setup and its capabilities](https://nx.dev/getting-started/intro#learn-nx?utm_source=nx_project&amp;utm_medium=readme&amp;utm_campaign=nx_projects) or run `npx nx graph` to visually explore what was created. Now, let's get you up to speed!
+Dermatech is a comprehensive software ecosystem designed to optimize and automate dermatological triage and care workflows at the Health Center of the Universidad Central del Ecuador (UCE). Addressing the operational inefficiencies of traditional manual admission processes—such as service saturation, subjective patient prioritization, and disconnected referral workflows—Dermatech implements a "Digital First" approach to modernize the patient journey.
 
-## Run tasks
+Unlike monolithic legacy systems, this solution adopts a Cloud-Native, distributed architecture utilizing microservices, event-driven communication patterns, and a hybrid deployment strategy. This design ensures scalability, data sovereignty, and cost efficiency suitable for an academic and public health environment.
 
-To run tasks with Nx use:
+## Objectives
 
-```sh
-npx nx <target> <project-name>
-```
+* **Process Optimization:** Transform the patient experience from a physical, queue-based interaction to a digital workflow using AI-assisted pre-triage and encrypted QR code admission.
+* **Architectural Resilience:** Implement a decoupled system using Event-Driven patterns and hybrid cloud infrastructure (AWS + On-Premise) to handle academic traffic spikes without service degradation.
+* **Data Integrity and Sovereignty:** Guarantee the security and immutability of medical records through strict environment isolation (QA vs. Production) and automated on-premise replication tunnels.
 
-For example:
+## System Architecture
 
-```sh
-npx nx build myproject
-```
+The system is built upon a **Microservices Architecture** comprising a minimum of 10 autonomous services, organized by business domains (Identity, Scheduling, Triage, Clinical) to strictly adhere to the Separation of Concerns principle.
 
-These targets are either [inferred automatically](https://nx.dev/concepts/inferred-tasks?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects) or defined in the `project.json` or `package.json` files.
+### Infrastructure Diagram
 
-[More about running tasks in the docs &raquo;](https://nx.dev/features/run-tasks?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
+The following diagram illustrates the Hybrid Cloud topology, featuring isolated AWS accounts for QA and Production (Multi-AZ), perimeter security via Cloudflare, and the secure VPN tunnel to the On-Premise University Server for data sovereignty.
 
-## Add new projects
+![Infrastructure Diagram](docs/infrastructure_diagram.png)
+*Figure 1: Infrastructure Architecture - Isolated Accounts (PROD Multi-AZ vs QA) and Hybrid Connectivity.*
 
-While you could add new projects to your workspace manually, you might want to leverage [Nx plugins](https://nx.dev/concepts/nx-plugins?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects) and their [code generation](https://nx.dev/features/generate-code?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects) feature.
+### Architectural Patterns
 
-To install a new plugin you can use the `nx add` command. Here's an example of adding the React plugin:
-```sh
-npx nx add @nx/react
-```
+* **Hybrid Cloud Strategy:** Core business logic resides on AWS ECS (Fargate Spot) to ensure high availability and scalability. [cite_start]Heavy persistence layers and static code analysis tools are offloaded to external PaaS providers and an on-premise university server to minimize operational costs[cite: 301, 302].
+* **Event-Driven Communication:**
+    * [cite_start]**Apache Kafka:** Utilized for high-throughput event streaming, specifically for processing massive QR scan ingestions without blocking the main thread[cite: 495].
+    * [cite_start]**RabbitMQ:** Manages asynchronous background task queues, such as email notifications and push alerts, to decouple non-critical operations from user interactions[cite: 497].
+* **CQRS (Command Query Responsibility Segregation):** The scheduling module separates read and write operations. [cite_start]Availability queries are resolved via high-speed Redis caches, while bookings are processed as transactional writes in PostgreSQL[cite: 906, 907].
+* [cite_start]**Polyglot Persistence:** Adopting the "Right Tool for the Job" philosophy, the system avoids a monolithic database in favor of[cite: 616, 622]:
+    * **PostgreSQL:** For relational, transactional data (Identity, Appointments).
+    * **MongoDB:** For unstructured clinical documents and multimedia history.
+    * **Redis:** For high-speed caching of availability slots and session management.
 
-Use the plugin's generator to create new projects. For example, to create a new React app or library:
+## Technology Stack
 
-```sh
-# Generate an app
-npx nx g @nx/react:app demo
+### Frontend (Unified Client)
+* **Framework:** Flutter (Dart)
+* **Strategy:** A single codebase compiles to three distinct platforms:
+    * **Mobile (Android/iOS):** For Students (Patients) and Nurses.
+    * **Desktop (Windows/Linux):** For Doctors (Dermatologists) requiring high-density data visualization.
+    * [cite_start]**Web:** For Administrators managing audits and configurations[cite: 477, 478].
 
-# Generate a library
-npx nx g @nx/react:lib some-lib
-```
+### Backend (Polyglot Microservices)
+* [cite_start]**NestJS (Node.js):** The primary framework for core business logic services (Auth, Patient, Scheduling) selected for its modular architecture and strong typing[cite: 504].
+* **Go (Golang):** Powering the dedicated `qr-ingest` service. [cite_start]Selected for its superior concurrency model to handle bursts of attendance requests with sub-200ms latency[cite: 501].
+* [cite_start]**Python:** Hosting the Artificial Intelligence Agent, chosen to leverage native data science libraries for probabilistic symptom analysis and risk scoring[cite: 502].
 
-You can use `npx nx list` to get a list of installed plugins. Then, run `npx nx list <plugin-name>` to learn about more specific capabilities of a particular plugin. Alternatively, [install Nx Console](https://nx.dev/getting-started/editor-setup?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects) to browse plugins and generators in your IDE.
+### Infrastructure & DevOps
+* **Containerization:** Docker & Docker Compose.
+* [cite_start]**Orchestration:** AWS ECS (Elastic Container Service) using Fargate Spot instances[cite: 326].
+* [cite_start]**IaC (Infrastructure as Code):** Terraform is used for modular and reproducible cloud resource provisioning[cite: 682].
+* [cite_start]**CI/CD:** GitHub Actions orchestrates automated testing and deployment pipelines[cite: 723].
+* [cite_start]**Security:** Cloudflare serves as the perimeter WAF, while Nginx acts as the internal API Gateway[cite: 317, 507].
 
-[Learn more about Nx plugins &raquo;](https://nx.dev/concepts/nx-plugins?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects) | [Browse the plugin registry &raquo;](https://nx.dev/plugin-registry?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
+## Functional Modules
 
-## Set up CI!
+### 1. Patient Module (Mobile App)
+* [cite_start]**AI-Assisted Pre-Triage:** A wizard interface collects symptom data, which is processed by the AI agent to assign a preliminary, invisible priority level[cite: 83].
+* **Smart Scheduling:** Users can query real-time availability. [cite_start]The system uses Redis locking to prevent double-booking during high-traffic periods[cite: 147].
+* [cite_start]**Digital Admission:** Upon booking, the system generates an encrypted QR code containing appointment metadata for rapid physical validation[cite: 86].
 
-### Step 1
+### 2. Nursing & Triage Module (Mobile/Tablet App)
+* [cite_start]**High-Speed Ingestion:** The module features a dedicated QR scanning interface capable of processing admissions with minimal latency via the Go microservice[cite: 88].
+* **Human-in-the-Loop Validation:** Nurses review the AI-suggested priority and vital signs. [cite_start]The system enforces human authority, allowing nurses to confirm or override the algorithmic classification before queuing the patient[cite: 90].
 
-To connect to Nx Cloud, run the following command:
+### 3. Clinical Module (Desktop App)
+* [cite_start]**Medical Management:** A specialized desktop interface allows dermatologists to document diagnoses and issue prescriptions efficiently[cite: 93].
+* [cite_start]**Multimedia Support:** The system supports the upload and storage of dermatological imagery directly into the MongoDB clinical record[cite: 94].
+* [cite_start]**Referral Management:** Automated generation of PDF referral sheets for external partners when internal resolution is not possible[cite: 95].
 
-```sh
-npx nx connect
-```
+### 4. Administrative Module (Web Portal)
+* [cite_start]**Audit & Analytics:** Administrators have access to dashboards for monitoring service metrics and reviewing immutable audit logs to ensure legal traceability[cite: 98].
 
-Connecting to Nx Cloud ensures a [fast and scalable CI](https://nx.dev/ci/intro/why-nx-cloud?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects) pipeline. It includes features such as:
+## Project Structure
 
-- [Remote caching](https://nx.dev/ci/features/remote-cache?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-- [Task distribution across multiple machines](https://nx.dev/ci/features/distribute-task-execution?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-- [Automated e2e test splitting](https://nx.dev/ci/features/split-e2e-tasks?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-- [Task flakiness detection and rerunning](https://nx.dev/ci/features/flaky-tasks?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
+[cite_start]The repository follows a **Monorepo** strategy managed by Nx Workspace to ensure code cohesion, atomic refactoring, and unified dependency management across the frontend and backend[cite: 672, 673].
 
-### Step 2
-
-Use the following command to configure a CI workflow for your workspace:
-
-```sh
-npx nx g ci-workflow
-```
-
-[Learn more about Nx on CI](https://nx.dev/ci/intro/ci-with-nx#ready-get-started-with-your-provider?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-
-## Install Nx Console
-
-Nx Console is an editor extension that enriches your developer experience. It lets you run tasks, generate code, and improves code autocompletion in your IDE. It is available for VSCode and IntelliJ.
-
-[Install Nx Console &raquo;](https://nx.dev/getting-started/editor-setup?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-
-## Useful links
-
-Learn more:
-
-- [Learn more about this workspace setup](https://nx.dev/getting-started/intro#learn-nx?utm_source=nx_project&amp;utm_medium=readme&amp;utm_campaign=nx_projects)
-- [Learn about Nx on CI](https://nx.dev/ci/intro/ci-with-nx?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-- [Releasing Packages with Nx release](https://nx.dev/features/manage-releases?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-- [What are Nx plugins?](https://nx.dev/concepts/nx-plugins?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-
-And join the Nx community:
-- [Discord](https://go.nx.dev/community)
-- [Follow us on X](https://twitter.com/nxdevtools) or [LinkedIn](https://www.linkedin.com/company/nrwl)
-- [Our Youtube channel](https://www.youtube.com/@nxdevtools)
-- [Our blog](https://nx.dev/blog?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
+```text
+dermatech-monorepo/
+├── apps/
+│   ├── client/
+│   │   └── dermatech-app/      # Unified Flutter frontend (Mobile/Desktop/Web)
+│   └── services/               # Polyglot Backend Services
+│       ├── auth-service/       # NestJS (Hexagonal Architecture)
+│       ├── availability-qry/   # NestJS (CQRS Read Model)
+│       ├── appointment-cmd/    # NestJS (CQRS Write Model)
+│       ├── qr-ingest/          # Go (Event-Driven Producer)
+│       ├── ai-agent/           # Python (Service-Oriented AI)
+│       ├── triage-core/        # NestJS (Rules Engine)
+│       ├── history-service/    # NestJS (Document-Oriented)
+│       └── ...
+├── libs/                       # Shared libraries (DTOs, Contracts, Validators)
+├── infrastructure/             # Terraform modules for AWS/On-Premise
+│   ├── modules/
+│   └── environments/
+└── .github/workflows/          # CI/CD Pipelinesgit 

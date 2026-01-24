@@ -1,0 +1,47 @@
+# ==============================================================================
+# .dockerignore - EXCLUSION RULES FOR DOCKER BUILD CONTEXT
+# Purpose: Prevent local dependencies, build artifacts, and sensitive data 
+# from being copied into the Docker image, optimizing build speed and size.
+# ==============================================================================
+
+# --- Dependencies & Build Artifacts ---
+# We must install dependencies fresh inside the container architecture
+node_modules
+**/node_modules
+#dist
+#build
+coverage
+
+# --- Version Control & IDE Metadata ---
+.git
+.gitignore
+.vscode
+.idea
+.nx
+.editorconfig
+
+# --- Environment & Secrets ---
+# CRITICAL: Never copy local .env files into the image build
+.env
+.env.*
+*.pem
+*.key
+
+# --- System & Temporary Files ---
+.DS_Store
+Thumbs.db
+tmp
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Frontend Specifics ---
+# Avoid copying heavy mobile assets if we are building backend
+#apps/clients/mobile_app/build
+apps/clients/mobile_app/.dart_tool
+apps/clients/mobile_app/android
+apps/clients/mobile_app/ios
+apps/clients/mobile_app/macos
+apps/clients/mobile_app/windows
+apps/clients/mobile_app/linux

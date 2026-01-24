@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  # --- FLUTTER FRONTEND ---
+  frontend:
+    image: ${DOCKER_USERNAME}/dermatech-frontend:latest
+    container_name: app_frontend
+    restart: always
+    ports:
+      - "80:80"
+    networks:
+      - app_net
+
+  # --- API GATEWAY ---
+  api-gateway:
+    image: ${DOCKER_USERNAME}/api-gateway:latest
+    container_name: app_gateway
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - AUTH_SERVICE_URL=http://auth-service:3000
+      - PATIENT_SERVICE_URL=http://patient-service:3000
+    networks:
+      - app_net
+
+  # --- AUTH SERVICE ---
+  auth-service:
+    image: ${DOCKER_USERNAME}/auth-service:latest
+    container_name: app_auth
+    restart: always
+    ports:
+      - "3001:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      
+      # --- EVENTS ACCOUNT (CORRECTED IPs) ---
+      # Kafka & RabbitMQ are on Events Node (10.1.1.50)
+      - KAFKA_BROKERS=10.1.1.50:9092
+      - KAFKA_CLIENT_ID=auth-service
+      - RABBITMQ_HOST=10.1.1.50
+      
+      # --- STATE ACCOUNT (CORRECTED IPs) ---
+      # Redis is on State Node (10.2.1.100 - CONFIRMED VIA AWS CONSOLE)
+      - REDIS_HOST=10.2.1.100
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      
+      # --- SECRETS ---
+      - JWT_SECRET=${JWT_SECRET}
+      - DATABASE_HOST=${DATABASE_HOST}
+      - DATABASE_USER=${DATABASE_USER}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - DATABASE_NAME=${DATABASE_NAME}
+    networks:
+      - app_net
+
+  # --- PATIENT SERVICE ---
+  patient-service:
+    image: ${DOCKER_USERNAME}/patient-service:latest
+    container_name: app_patient
+    restart: always
+    ports:
+      - "3002:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      
+      # --- EVENTS & STATE ---
+      - KAFKA_BROKERS=10.1.1.50:9092
+      - REDIS_HOST=10.2.1.100
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      
+      # --- DATABASE ---
+      - DATABASE_HOST=${DATABASE_HOST}
+      - DATABASE_USER=${DATABASE_USER}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - DATABASE_NAME=${DATABASE_NAME}
+    networks:
+      - app_net
+
+networks:
+  app_net:
+    driver: bridge

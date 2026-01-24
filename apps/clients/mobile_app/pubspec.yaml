@@ -1,0 +1,35 @@
+name: dermatech_mobile
+description: A new Flutter project.
+
+# 1. Environment Configuration
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+# 2. Dependencies (Libraries)
+dependencies:
+  flutter:
+    sdk: flutter
+  # HTTP client
+  dio: ^5.9.0
+  # Secure Storage
+  flutter_secure_storage: ^10.0.0
+  shared_preferences: ^2.5.4
+
+# 3. Dev Dependencies (Testing tools)
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+# --- IMPORTANT SECTION: FLUTTER CONFIGURATION ---
+# This must be at the ROOT level (no indentation), usually at the end.
+flutter:
+  # 1. Enable Material Icons
+  uses-material-design: true
+
+  # 2. Assets Registration
+  # Pay attention to indentation:
+  # 'assets:' has 2 spaces.
+  # '- assets/...' has 4 spaces.
+  assets:
+    - assets/images/
