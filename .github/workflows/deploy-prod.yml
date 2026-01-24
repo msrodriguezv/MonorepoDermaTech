@@ -72,7 +72,7 @@ jobs:
           go test -v ./... || true
 
   # ============================================================================
-  # 2. INFRASTRUCTURE (TERRAFORM - PROD)
+  # 2. INFRAESTRUCTURA (TERRAFORM - PROD)
   # ============================================================================
   base-layer:
     name: 🏗️ Deploy Base PROD (${{ matrix.account }})
@@ -196,6 +196,38 @@ jobs:
           
           ALB_DNS=$(terraform output -raw PROD_ALB_DNS_NAME)
           echo "ALB_URL=$ALB_DNS" > alb_dns.txt
+
+      # ========================================================================
+      # 🛡️ BLINDAJE DE RUTAS PROD (SAFETY NET) - CRÍTICO
+      # ========================================================================
+      - name: Force Route Injection PROD (Safety Net)
+        env:
+          AWS_PROFILE: prod-dermatech
+          AWS_REGION: us-east-1
+        run: |
+          echo "🛡️ Verifying Routes in PROD Bastion Table..."
+          # ID de la tabla PUBLICA de PROD (Tag: dermatech-prod-public-rt)
+          RT_ID=$(aws ec2 describe-route-tables --filters "Name=tag:Name,Values=dermatech-prod-public-rt" --query "RouteTables[0].RouteTableId" --output text)
+          
+          ensure_route() {
+            CIDR=$1
+            PEER_NAME=$2
+            echo "Checking route for $CIDR..."
+            PCX_ID=$(aws ec2 describe-vpc-peering-connections --filters "Name=tag:Name,Values=$PEER_NAME" --query "VpcPeeringConnections[0].VpcPeeringConnectionId" --output text)
+            
+            if [ "$PCX_ID" == "None" ] || [ -z "$PCX_ID" ]; then
+               echo "⚠️ Peering $PEER_NAME not found! Skipping..."
+               return
+            fi
+
+            # Intenta crear la ruta. Si ya existe, da error controlado y sigue.
+            aws ec2 create-route --route-table-id $RT_ID --destination-cidr-block $CIDR --vpc-peering-connection-id $PCX_ID || echo "✅ Route to $CIDR likely exists."
+          }
+
+          ensure_route "10.1.0.0/16" "prod-to-events-peering"
+          ensure_route "10.2.0.0/16" "prod-to-state-peering"
+          ensure_route "10.3.0.0/16" "prod-to-node-a-peering"
+          ensure_route "10.4.0.0/16" "prod-to-node-b-peering"
       
       - name: Upload ALB Meta
         uses: actions/upload-artifact@v4
@@ -249,16 +281,15 @@ jobs:
 
   # B. Compile Windows Desktop (Windows Runner)
   build-desktop:
-    name: 🖥️ Build Windows EXE
+    name: 🖥️ Build PROD Windows EXE
     needs: [backend-quality-gate]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v3
-      
       - uses: subosito/flutter-action@v2
         with: { channel: 'stable' }
       
-      - name: Build Windows Application
+      - name: Build Windows App (PROD)
         run: |
           cd apps/clients/mobile_app
           flutter config --enable-windows-desktop
@@ -268,10 +299,10 @@ jobs:
       - name: Package Windows Build
         run: |
           cd apps/clients/mobile_app/build/windows/x64/runner/Release
-          Compress-Archive -Path * -DestinationPath ..\..\..\..\..\..\dermatech-windows.zip
+          Compress-Archive -Path * -DestinationPath ..\..\..\..\..\..\dermatech-prod-windows.zip
 
       - uses: actions/upload-artifact@v4
-        with: { name: 'windows-app', path: 'apps/clients/mobile_app/dermatech-windows.zip' }
+        with: { name: 'windows-app', path: 'apps/clients/mobile_app/dermatech-prod-windows.zip' }
 
   # ============================================================================
   # 4. DOCKER & DEPLOY PROD
@@ -348,11 +379,13 @@ jobs:
           services:
             zookeeper:
               image: confluentinc/cp-zookeeper:7.5.0
+              restart: always
               environment: { ZOOKEEPER_CLIENT_PORT: 2181 }
               volumes: ["/data/zookeeper:/var/lib/zookeeper/data"]
               networks: [infra_net]
             kafka:
               image: confluentinc/cp-kafka:7.5.0
+              restart: always
               depends_on: [zookeeper]
               ports: ["9092:9092"]
               volumes: ["/data/kafka:/var/lib/kafka/data"]
@@ -365,6 +398,7 @@ jobs:
               networks: [infra_net]
             rabbitmq:
               image: rabbitmq:3.12-management-alpine
+              restart: always
               ports: ["5672:5672", "15672:15672"]
               volumes: ["/data/rabbitmq:/var/lib/rabbitmq"]
               environment:
@@ -373,6 +407,7 @@ jobs:
               networks: [infra_net]
             mosquitto:
               image: eclipse-mosquitto:2.0
+              restart: always
               ports: ["1883:1883", "9001:9001"]
               volumes: ["/data/mosquitto/config:/mosquitto/config"]
               networks: [infra_net]
@@ -416,11 +451,13 @@ jobs:
           services:
             redis:
               image: redis:7.2-alpine
+              restart: always
               command: redis-server --appendonly yes --requirepass ${{ secrets.REDIS_PASSWORD }}
               ports: ["6379:6379"]
               volumes: ["/data/redis:/data"]
             grafana:
               image: grafana/grafana:latest
+              restart: always
               environment: { GF_SECURITY_ADMIN_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }} }
               ports: ["3000:3000"]
               volumes: ["/data/grafana:/var/lib/grafana"]
@@ -467,16 +504,69 @@ jobs:
           cat > docker-compose.yml <<'EOF'
           version: '3.8'
           services:
-            frontend: { image: ${{ secrets.DOCKER_USERNAME }}/dermatech-frontend:latest, ports: ["80:80"], restart: always }
-            api-gateway: { image: ${{ secrets.DOCKER_USERNAME }}/api-gateway:latest, ports: ["3000:3000"], restart: always, environment: { AUTH_SERVICE_URL: "http://auth-service:3000", PATIENT_SERVICE_URL: "http://patient-service:3000", APPOINTMENT_URL: "http://appointment-cmd:3000", AVAILABILITY_URL: "http://availability-qry:3000", PARTNERS_URL: "http://external-partners:3000", TRIAGE_URL: "http://triage-engine:3000", QR_URL: "http://qr-ingest:8080", AI_URL: "http://ai-agent:5000" } }
-            auth-service: { image: ${{ secrets.DOCKER_USERNAME }}/auth-service:latest, ports: ["3001:3000"], restart: always, environment: { KAFKA_BROKERS: "${{ env.EVENTS_PRIVATE_IP }}:9092", REDIS_HOST: "${{ env.STATE_PRIVATE_IP }}", DB_HOST: "${{ secrets.DATABASE_HOST }}", DB_PASS: "${{ secrets.DATABASE_PASSWORD }}", DB_NAME: "${{ secrets.DATABASE_NAME }}" } }
-            patient-service: { image: ${{ secrets.DOCKER_USERNAME }}/patient-service:latest, ports: ["3002:3000"], restart: always, environment: { KAFKA_BROKERS: "${{ env.EVENTS_PRIVATE_IP }}:9092", DB_HOST: "${{ secrets.DATABASE_HOST }}", DB_PASS: "${{ secrets.DATABASE_PASSWORD }}" } }
-            appointment-cmd: { image: ${{ secrets.DOCKER_USERNAME }}/appointment-cmd:latest, ports: ["3003:3000"], restart: always }
-            availability-qry: { image: ${{ secrets.DOCKER_USERNAME }}/availability-qry:latest, ports: ["3004:3000"], restart: always }
-            external-partners: { image: ${{ secrets.DOCKER_USERNAME }}/external-partners:latest, ports: ["3005:3000"], restart: always }
-            qr-ingest: { image: ${{ secrets.DOCKER_USERNAME }}/qr-ingest:latest, ports: ["8080:8080"], restart: always }
-            triage-engine: { image: ${{ secrets.DOCKER_USERNAME }}/triage-engine:latest, ports: ["3006:3000"], restart: always }
-            ai-agent: { image: ${{ secrets.DOCKER_USERNAME }}/ai-agent:latest, ports: ["5000:5000"], restart: always }
+            frontend:
+              image: ${{ secrets.DOCKER_USERNAME }}/dermatech-frontend:latest
+              restart: always
+              ports: ["80:80"]
+            api-gateway:
+              image: ${{ secrets.DOCKER_USERNAME }}/api-gateway:latest
+              restart: always
+              ports: ["3000:3000"]
+              environment:
+                - AUTH_SERVICE_URL=http://auth-service:3000
+                - PATIENT_SERVICE_URL=http://patient-service:3000
+                - APPOINTMENT_URL=http://appointment-cmd:3000
+                - AVAILABILITY_URL=http://availability-qry:3000
+                - PARTNERS_URL=http://external-partners:3000
+                - TRIAGE_URL=http://triage-engine:3000
+                - QR_URL=http://qr-ingest:8080
+                - AI_URL=http://ai-agent:5000
+            auth-service:
+              image: ${{ secrets.DOCKER_USERNAME }}/auth-service:latest
+              restart: always
+              ports: ["3001:3000"]
+              environment:
+                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+                - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
+                - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+                - DB_HOST=${{ secrets.DATABASE_HOST }}
+                - DB_USER=${{ secrets.DATABASE_USER }}
+                - DB_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+                - DB_NAME=${{ secrets.DATABASE_NAME }}
+            patient-service:
+              image: ${{ secrets.DOCKER_USERNAME }}/patient-service:latest
+              restart: always
+              ports: ["3002:3000"]
+              environment:
+                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+                - DB_HOST=${{ secrets.DATABASE_HOST }}
+                - DB_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+            appointment-cmd:
+              image: ${{ secrets.DOCKER_USERNAME }}/appointment-cmd:latest
+              restart: always
+              ports: ["3003:3000"]
+              environment:
+                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+            availability-qry:
+              image: ${{ secrets.DOCKER_USERNAME }}/availability-qry:latest
+              restart: always
+              ports: ["3004:3000"]
+            external-partners:
+              image: ${{ secrets.DOCKER_USERNAME }}/external-partners:latest
+              restart: always
+              ports: ["3005:3000"]
+            triage-engine:
+              image: ${{ secrets.DOCKER_USERNAME }}/triage-engine:latest
+              restart: always
+              ports: ["3006:3000"]
+            qr-ingest:
+              image: ${{ secrets.DOCKER_USERNAME }}/qr-ingest:latest
+              restart: always
+              ports: ["8080:8080"]
+            ai-agent:
+              image: ${{ secrets.DOCKER_USERNAME }}/ai-agent:latest
+              restart: always
+              ports: ["5000:5000"]
           EOF
 
           scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/apps.yml

@@ -15,9 +15,7 @@ env:
   PUBLIC_API_URL: "http://martharodriguez_qa2.distribuidauce.org"
 
 jobs:
-  # ============================================================================
-  # 1. INITIAL VERIFICATIONS
-  # ============================================================================
+  # ... (Jobs previos test-bastion, backend-quality-gate igual que antes) ...
   test-bastion-connection:
     name: 🔌 Test Bastion Connectivity
     runs-on: ubuntu-latest
@@ -26,7 +24,6 @@ jobs:
         run: |
           mkdir -p ~/.aws
           echo "${{ secrets.AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
-
       - name: Ensure Bastion Instance is Running
         run: |
           INSTANCE_ID=$(aws ec2 describe-instances --profile qa-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-qa-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
@@ -37,7 +34,6 @@ jobs:
               aws ec2 wait instance-running --profile qa-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
             fi
           fi
-
       - name: Verify SSH Port Availability
         run: timeout 30 bash -c "until cat < /dev/null > /dev/tcp/${{ env.QA_BASTION_PUBLIC_IP }}/22; do sleep 5; done"
 
@@ -48,31 +44,23 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with: { fetch-depth: 0 }
-
-      # --- NODE.JS SUITE ---
       - uses: actions/setup-node@v3
         with: { node-version: 18, cache: 'npm' }
       - run: npm ci --legacy-peer-deps
       - run: npx nx run-many --target=test --all --parallel=3 --ci
-
-      # --- PYTHON SUITE ---
       - uses: actions/setup-python@v4
         with: { python-version: '3.11' }
       - run: |
           cd apps/services/ai-agent
           pip install flask pytest pytest-mock
           pytest test_main.py || true
-
-      # --- GO SUITE ---
       - uses: actions/setup-go@v4
         with: { go-version: '1.21' }
       - run: |
           cd apps/services/triage/qr-ingest
           go test -v ./... || true
 
-  # ============================================================================
-  # 2. INFRASTRUCTURE (TERRAFORM)
-  # ============================================================================
+  # ... (Jobs base-layer y nodes-layer IGUAL que antes, no cambian) ...
   base-layer:
     name: 🏗️ Deploy Base (${{ matrix.account }})
     needs: backend-quality-gate
@@ -187,7 +175,6 @@ jobs:
           cd infrastructure/terraform/environments/account-01-qa
           terraform init -reconfigure
           # FIX CRITICO: Quitamos el "terraform destroy" si falla. 
-          # Esto evita que se borren las rutas si hay un error transitorio.
           terraform apply -auto-approve \
             -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
             -var="state_vpc_id=${{ env.VPC_STATE }}" \
@@ -196,6 +183,39 @@ jobs:
           
           ALB_DNS=$(terraform output -raw QA_ALB_DNS_NAME)
           echo "ALB_URL=$ALB_DNS" > alb_dns.txt
+
+      # ========================================================================
+      # 🛡️ BLINDAJE DE RUTAS (SAFETY NET) - ESTE ES EL ARREGLO
+      # ========================================================================
+      - name: Force Route Injection (Safety Net)
+        env:
+          AWS_PROFILE: qa-dermatech
+          AWS_REGION: us-east-1
+        run: |
+          echo "🛡️ Verifying Routes in Bastion Table..."
+          # Obtener ID de la tabla publica (Debe existir un tag Name=dermatech-qa-public-rt)
+          RT_ID=$(aws ec2 describe-route-tables --filters "Name=tag:Name,Values=dermatech-qa-public-rt" --query "RouteTables[0].RouteTableId" --output text)
+          
+          ensure_route() {
+            CIDR=$1
+            PEER_NAME=$2
+            echo "Checking route for $CIDR..."
+            # Buscar ID del Peering
+            PCX_ID=$(aws ec2 describe-vpc-peering-connections --filters "Name=tag:Name,Values=$PEER_NAME" --query "VpcPeeringConnections[0].VpcPeeringConnectionId" --output text)
+            
+            if [ "$PCX_ID" == "None" ] || [ -z "$PCX_ID" ]; then
+               echo "⚠️ Peering $PEER_NAME not found! Skipping..."
+               return
+            fi
+
+            # Intentar crear la ruta. Si ya existe, da error pero continuamos.
+            aws ec2 create-route --route-table-id $RT_ID --destination-cidr-block $CIDR --vpc-peering-connection-id $PCX_ID || echo "✅ Route to $CIDR likely exists."
+          }
+
+          ensure_route "10.1.0.0/16" "qa-to-events-peering"
+          ensure_route "10.2.0.0/16" "qa-to-state-peering"
+          ensure_route "10.3.0.0/16" "qa-to-node-a-peering"
+          ensure_route "10.4.0.0/16" "qa-to-node-b-peering"
       
       - name: Upload ALB Endpoint
         uses: actions/upload-artifact@v4
@@ -203,88 +223,61 @@ jobs:
           name: ALB_DNS
           path: infrastructure/terraform/environments/account-01-qa/alb_dns.txt
 
-  # ============================================================================
-  # 3. BUILD MULTIPLATFORM (MANDATORY REQUIREMENT)
-  # ============================================================================
-  
-  # A. Compile Backend, Web y Android (Linux Runner)
+  # ... (Jobs compile-code, build-desktop, docker-build IGUAL que antes) ...
   compile-code:
     name: 🔨 Build Web & Android
     needs: [backend-quality-gate]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      
-      # Setup Java Android
       - uses: actions/setup-java@v3
         with: { distribution: 'zulu', java-version: '17' }
-      
-      # Setup Flutter
       - uses: subosito/flutter-action@v2
         with: { channel: 'stable' }
-      
-      # Setup Node para el Backend
       - uses: actions/setup-node@v3
         with: { node-version: 18, cache: 'npm' }
-
       - name: Install Node Dependencies
         run: npm ci --legacy-peer-deps
-
       - name: Build NestJS Services
         run: npx nx run-many --target=build --all --configuration=production
-
-      # --- FLUTTER WEB BUILD ---
       - name: Build Flutter Web
         run: |
           cd apps/clients/mobile_app
           flutter pub get
           flutter build web --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
-      
-      # --- FLUTTER ANDROID BUILD (APK) ---
       - name: Build Android APK
         run: |
           cd apps/clients/mobile_app
-          # Usamos --release y definimos la URL de la API
           flutter build apk --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
-          # Renombramos para facilitar el Release
           mv build/app/outputs/flutter-apk/app-release.apk dermatech-qa-android.apk
+      - uses: actions/upload-artifact@v4
+        with: { name: 'dist-files', path: 'dist' }
+      - uses: actions/upload-artifact@v4
+        with: { name: 'flutter-build', path: 'apps/clients/mobile_app/build/web' }
+      - uses: actions/upload-artifact@v4
+        with: { name: 'android-apk', path: 'apps/clients/mobile_app/dermatech-qa-android.apk' }
 
-      - uses: actions/upload-artifact@v4
-        with: { name: 'dist-files', path: 'dist' } # Backend JS
-      - uses: actions/upload-artifact@v4
-        with: { name: 'flutter-build', path: 'apps/clients/mobile_app/build/web' } # Web
-      - uses: actions/upload-artifact@v4
-        with: { name: 'android-apk', path: 'apps/clients/mobile_app/dermatech-qa-android.apk' } # APK
-
-  # B. Compile Windows Desktop (Windows Runner - Paralelo)
   build-desktop:
     name: 🖥️ Build Windows EXE
     needs: [backend-quality-gate]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v3
-      
       - uses: subosito/flutter-action@v2
         with: { channel: 'stable' }
-      
       - name: Build Windows Application
         run: |
           cd apps/clients/mobile_app
           flutter config --enable-windows-desktop
           flutter pub get
           flutter build windows --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
-          
       - name: Package Windows Build
         run: |
           cd apps/clients/mobile_app/build/windows/x64/runner/Release
           Compress-Archive -Path * -DestinationPath ..\..\..\..\..\..\dermatech-windows.zip
-
       - uses: actions/upload-artifact@v4
         with: { name: 'windows-app', path: 'apps/clients/mobile_app/dermatech-windows.zip' }
 
-  # ============================================================================
-  # 4. DOCKER & DEPLOY
-  # ============================================================================
   docker-build:
     name: 🐳 Docker Build & Push
     needs: compile-code
@@ -343,6 +336,7 @@ jobs:
           tags: ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:latest
           build-args: SERVICE_PATH=${{ matrix.arg }}
 
+  # ... (Deploy Events, State, Apps con fix de limpieza) ...
   deploy-events:
     name: 🚀 Deploy Events (Relay)
     needs: [qa-hub, docker-build]
@@ -581,6 +575,7 @@ jobs:
               sudo docker compose pull
               sudo docker compose up -d --remove-orphans
             "
+            # Limpieza segura
             rm /home/ec2-user/deploy-key /home/ec2-user/app-compose-${{ matrix.node_name }}.yml
           BASTION_EOF
 
