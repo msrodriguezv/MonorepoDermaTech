@@ -7,60 +7,78 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const logger = new Logger('ApiGateway');
 
+  // ===========================================================================
+  // 🛡️ CORS CONFIGURATION (Blindado para PROD y QA)
+  // ===========================================================================
+  const whitelist = [
+    'http://localhost:3000',
+    'http://localhost:4200',
+    'https://martharodriguez_qa1.distribuidauce.org',
+    'http://martharodriguez_qa2.distribuidauce.org',
+    'http://100.52.22.97',
+    'https://martharodriguez_prod1.distribuidauce.org',
+    'https://martharodriguez_prod2.distribuidauce.org',
+    'http://100.50.124.78'
+  ];
+
   app.enableCors({
-    origin: true,
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (whitelist.includes(origin)) {
+        callback(null, true);
+      } else {
+        logger.warn(`⛔ Blocked CORS from: ${origin}`);
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   });
 
   // ===========================================================================
-  // SOLUCIÓN PROFESIONAL (TARGET BASE PATH):
-  // Usamos 'app.use' para el enrutamiento (lo que satisface a TypeScript).
-  // Express cortará el prefijo, PERO lo incluimos en el 'target'.
-  // La librería unirá automáticamente: Target Base + Ruta Cortada.
+  // 🛣️ SOLUCIÓN DE ENRUTAMIENTO (Sin errores de TypeScript)
   // ===========================================================================
 
   // --- AUTH SERVICE ---
-  // Entrada: /api/v1/auth/login  -> Express deja: /login
-  // Target: .../api/v1/auth      -> Proxy une: .../api/v1/auth/login
   app.use(
     '/api/v1/auth',
     createProxyMiddleware({
-      // AQUI ESTA LA CLAVE: Incluimos la ruta base en el target
-      target: process.env.AUTH_SERVICE_URL 
-        ? `${process.env.AUTH_SERVICE_URL}/api/v1/auth` 
-        : 'http://auth-service:3000/api/v1/auth',
+      // Target limpio: Solo http://host:puerto
+      target: process.env.AUTH_SERVICE_URL || 'http://auth-service:3000',
       changeOrigin: true,
+      pathRewrite: {
+        '^/api/v1/auth': '/auth', // Esto convierte la URL pública en la interna
+      },
     }),
   );
 
   // --- PATIENT SERVICE ---
-  // Misma lógica limpia.
   app.use(
     '/api/v1/patient',
     createProxyMiddleware({
-      target: process.env.PATIENT_SERVICE_URL 
-        ? `${process.env.PATIENT_SERVICE_URL}/api/v1/patient` 
-        : 'http://patient-service:3000/api/v1/patient',
+      target: process.env.PATIENT_SERVICE_URL || 'http://patient-service:3000',
       changeOrigin: true,
+      pathRewrite: {
+        '^/api/v1/patient': '/patient',
+      },
     }),
   );
 
   // --- AI AGENT ---
-  // Este es diferente. Flask espera la raíz '/'.
-  // Express corta '/api/ai' y deja '/'.
-  // El target es la raíz. Matemáticamente encaja perfecto sin cambios.
   app.use(
     '/api/ai',
     createProxyMiddleware({
       target: process.env.AI_SERVICE_URL || 'http://ai-agent:5000',
       changeOrigin: true,
+      pathRewrite: {
+        '^/api/ai': '',
+      },
     }),
   );
 
   const PORT = process.env.PORT || 3000;
   await app.listen(PORT);
   
-  logger.log(`🚀 API Gateway CLEAN-TARGET running on port ${PORT}`);
+  logger.log(`🚀 API Gateway running on port ${PORT}`);
 }
 bootstrap();

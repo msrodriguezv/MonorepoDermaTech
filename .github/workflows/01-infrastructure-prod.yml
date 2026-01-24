@@ -1,0 +1,150 @@
+name: "01. INFRAESTRUCTURA PROD"
+
+on:
+  workflow_dispatch:
+  #push:
+    #branches: [ main ]
+    #paths:
+      #- 'infrastructure/terraform/**'
+
+env:
+  AWS_REGION: us-east-1
+  PROD_BASTION_PUBLIC_IP: 100.50.124.78
+
+jobs:
+  test-bastion:
+    name: 🔌 Verificar Bastion PROD
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Restore Credentials (PROD)
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+      - name: Ensure PROD Bastion is Running
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances --profile prod-dermatech --region us-east-1 --filters "Name=tag:Name,Values=dermatech-prod-gateway" --query "Reservations[0].Instances[0].InstanceId" --output text)
+          if [ "$INSTANCE_ID" != "None" ] && [ -n "$INSTANCE_ID" ]; then
+            STATE=$(aws ec2 describe-instances --profile prod-dermatech --region us-east-1 --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text)
+            if [ "$STATE" == "stopped" ]; then
+              aws ec2 start-instances --profile prod-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+              aws ec2 wait instance-running --profile prod-dermatech --region us-east-1 --instance-ids $INSTANCE_ID
+            fi
+          fi
+      - name: Check Bastion Reachability
+        run: timeout 30 bash -c "until cat < /dev/null > /dev/tcp/${{ env.PROD_BASTION_PUBLIC_IP }}/22; do sleep 5; done"
+
+  terraform-apply:
+    name: 🏗️ Terraform Apply PROD
+    needs: test-bastion
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - path: 'account-02-events'
+            profile: 'prod-events-dermatech'
+            output_var: 'VPC_EVENTS'
+          - path: 'account-03-state'
+            profile: 'prod-state-dermatech'
+            output_var: 'VPC_STATE'
+          - path: 'account-04-node-a'
+            profile: 'prod-node-a-dermatech'
+            output_var: 'VPC_NODE_A'
+          - path: 'account-05-node-b'
+            profile: 'prod-node-b-dermatech'
+            output_var: 'VPC_NODE_B'
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
+      - name: Restore Credentials (PROD)
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+      - name: Terraform Apply
+        env:
+          AWS_PROFILE: ${{ matrix.profile }}
+          AWS_REGION: us-east-1
+        run: |
+          cd infrastructure/terraform/environments-prod/${{ matrix.path }}
+          terraform init -reconfigure
+          terraform apply -auto-approve
+          VPC_ID=$(terraform output -raw vpc_id)
+          echo "${{ matrix.output_var }}=$VPC_ID" > vpc_id.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output_var }}
+          path: infrastructure/terraform/environments-prod/${{ matrix.path }}/vpc_id.txt
+
+  prod-hub:
+    name: 🧠 Deploy PROD Hub
+    needs: terraform-apply
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
+      - name: Restore Credentials (PROD)
+        run: |
+          mkdir -p ~/.aws
+          echo "${{ secrets.PROD_AWS_CREDENTIALS_FILE }}" > ~/.aws/credentials
+      - uses: actions/download-artifact@v4
+        with: { name: 'VPC_EVENTS', path: 'VPC_EVENTS' }
+      - uses: actions/download-artifact@v4
+        with: { name: 'VPC_STATE', path: 'VPC_STATE' }
+      - uses: actions/download-artifact@v4
+        with: { name: 'VPC_NODE_A', path: 'VPC_NODE_A' }
+      - uses: actions/download-artifact@v4
+        with: { name: 'VPC_NODE_B', path: 'VPC_NODE_B' }
+      - name: Extract VPC Metadata
+        run: |
+          EVENTS_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_EVENTS/vpc_id.txt | head -n 1)
+          STATE_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_STATE/vpc_id.txt | head -n 1)
+          NODE_A_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_NODE_A/vpc_id.txt | head -n 1)
+          NODE_B_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_NODE_B/vpc_id.txt | head -n 1)
+          echo "VPC_EVENTS=$EVENTS_ID" >> $GITHUB_ENV
+          echo "VPC_STATE=$STATE_ID" >> $GITHUB_ENV
+          echo "VPC_NODE_A=$NODE_A_ID" >> $GITHUB_ENV
+          echo "VPC_NODE_B=$NODE_B_ID" >> $GITHUB_ENV
+      
+      - name: Deploy PROD Hub
+        env:
+          AWS_PROFILE: prod-dermatech
+          AWS_REGION: us-east-1
+        run: |
+          cd infrastructure/terraform/environments-prod/account-01-prod
+          terraform init -reconfigure
+          terraform apply -auto-approve \
+            -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
+            -var="state_vpc_id=${{ env.VPC_STATE }}" \
+            -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
+            -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
+          ALB_DNS=$(terraform output -raw PROD_ALB_DNS_NAME)
+          echo "ALB_URL=$ALB_DNS" > alb_dns.txt
+
+      - name: Force Route Injection PROD (Safety Net)
+        env:
+          AWS_PROFILE: prod-dermatech
+          AWS_REGION: us-east-1
+        run: |
+          echo "🛡️ Verifying Routes in PROD Bastion Table..."
+          RT_ID=$(aws ec2 describe-route-tables --filters "Name=tag:Name,Values=dermatech-prod-public-rt" --query "RouteTables[0].RouteTableId" --output text)
+          ensure_route() {
+            CIDR=$1
+            PEER_NAME=$2
+            PCX_ID=$(aws ec2 describe-vpc-peering-connections --filters "Name=tag:Name,Values=$PEER_NAME" --query "VpcPeeringConnections[0].VpcPeeringConnectionId" --output text)
+            if [ "$PCX_ID" == "None" ] || [ -z "$PCX_ID" ]; then
+               echo "⚠️ Peering $PEER_NAME not found! Skipping..."
+               return
+            fi
+            aws ec2 create-route --route-table-id $RT_ID --destination-cidr-block $CIDR --vpc-peering-connection-id $PCX_ID || echo "✅ Route to $CIDR likely exists."
+          }
+          ensure_route "10.1.0.0/16" "prod-to-events-peering"
+          ensure_route "10.2.0.0/16" "prod-to-state-peering"
+          ensure_route "10.3.0.0/16" "prod-to-node-a-peering"
+          ensure_route "10.4.0.0/16" "prod-to-node-b-peering"
+      
+      - name: Upload ALB Meta
+        uses: actions/upload-artifact@v4
+        with:
+          name: ALB_DNS
+          path: infrastructure/terraform/environments-prod/account-01-prod/alb_dns.txt

@@ -1,0 +1,237 @@
+name: "03. BACKEND QA"
+
+on:
+  push:
+    branches: [ developer ]
+    #paths:
+      #- 'apps/services/**'
+      #- 'libs/backend/**'
+  workflow_dispatch:
+
+env:
+  QA_BASTION_PUBLIC_IP: 100.52.22.97
+  EVENTS_PRIVATE_IP: 10.1.1.50
+  STATE_PRIVATE_IP: 10.2.1.100
+
+jobs:
+  # ============================================================================
+  # 1. COMPILATION PHASE
+  # Description: Compiles the entire backend monorepo to generate 'dist' artifacts.
+  # This ensures all 'main.js' files exist before any Docker build attempts.
+  # ============================================================================
+  backend-compile:
+    name: 🏗️ Compile Backend (Pre-Build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with: { fetch-depth: 0 }
+      
+      - uses: actions/setup-node@v3
+        with: { node-version: 18, cache: 'npm' }
+        
+      - name: Install Dependencies
+        run: npm ci --legacy-peer-deps
+
+      # --- Build Strategy ---
+      # We build ALL services here to guarantee integrity. 
+      # CPU time on GitHub is cheaper than failed Docker builds or missing files.
+      - name: 🔨 Build All Services
+        run: npx nx run-many --target=build --all --configuration=production --parallel=3
+
+      # --- Artifact Persistence ---
+      # Critical: Uploads the 'dist' folder so the Docker job can access the compiled JS.
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-backend
+          path: dist
+          retention-days: 1
+
+  # ============================================================================
+  # 2. DOCKER BUILD & PUSH (STRICT FILTERING)
+  # Description: Builds and pushes Docker images ONLY for services that have changed.
+  # Uses 'dorny/paths-filter' to strictly control resource usage.
+  # ============================================================================
+  docker-build:
+    name: 🐳 Docker Build & Push
+    needs: backend-compile
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: 'auth-service'
+            file: 'apps/services/core/auth-service/Dockerfile'
+            arg: 'core/auth-service'
+          - service: 'patient-service'
+            file: 'apps/services/core/patient-service/Dockerfile'
+            arg: 'core/patient-service'
+          - service: 'api-gateway'
+            file: 'apps/services/api-gateway/Dockerfile'
+            arg: 'api-gateway'
+          - service: 'appointment-cmd'
+            file: 'apps/services/scheduling/appointment-cmd/Dockerfile'
+            arg: 'scheduling/appointment-cmd'
+          - service: 'availability-qry'
+            file: 'apps/services/scheduling/availability-qry/Dockerfile'
+            arg: 'scheduling/availability-qry'
+          - service: 'external-partners'
+            file: 'apps/services/support/external-partners/Dockerfile'
+            arg: 'support/external-partners'
+          - service: 'triage-engine'
+            file: 'apps/services/triage/triage-engine/Dockerfile'
+            arg: 'triage/triage-engine'
+          - service: 'qr-ingest'
+            file: 'apps/services/triage/qr-ingest/Dockerfile'
+            arg: 'triage/qr-ingest'
+          - service: 'ai-agent'
+            file: 'apps/services/ai-agent/Dockerfile'
+            arg: 'ai-agent'
+    steps:
+      - uses: actions/checkout@v3
+
+      # --- 1. Path Filtering ---
+      # Determines if the specific service folder has changed.
+      - uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            src:
+              - 'apps/services/${{ matrix.arg }}/**'
+
+      # --- 2. Artifact Retrieval (Conditional) ---
+      # Only download the heavy 'dist' folder if we are actually going to build.
+      - name: Download Build Artifacts
+        if: steps.filter.outputs.src == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-backend
+          path: dist
+
+      # --- 3. Docker Registry Authentication ---
+      - name: Login to Docker Hub
+        if: steps.filter.outputs.src == 'true' || github.event_name == 'workflow_dispatch'
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          
+      # --- 4. Build & Push (Conditional) ---
+      # This step SKIPS automatically if 'src' filter is false.
+      - name: Build and Push Image
+        if: steps.filter.outputs.src == 'true' || github.event_name == 'workflow_dispatch'
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}:latest
+          build-args: SERVICE_PATH=${{ matrix.arg }}
+
+  # ============================================================================
+  # 3. DEPLOYMENT (RELAY TO NODES)
+  # Description: Triggers a 'docker compose pull' on the target nodes via Bastion.
+  # Condition: Runs 'always' to ensure nodes are updated even if some builds were skipped.
+  # ============================================================================
+  deploy-apps:
+    name: 🚀 Deploy Apps (Node A/B)
+    needs: docker-build
+    if: always() 
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - node_ip: 10.3.1.10
+            node_name: node-a
+          - node_ip: 10.4.1.10
+            node_name: node-b
+    steps:
+      - name: Configure SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          
+      - name: Generate Massive Docker Compose
+        run: |
+          cat > docker-compose.yml <<'EOF'
+          version: '3.8'
+          services:
+            api-gateway:
+              image: ${{ secrets.DOCKER_USERNAME }}/api-gateway:latest
+              restart: always
+              ports: ["3000:3000"]
+              environment:
+                - AUTH_SERVICE_URL=http://auth-service:3000
+                - PATIENT_SERVICE_URL=http://patient-service:3000
+                - APPOINTMENT_URL=http://appointment-cmd:3000
+                - AVAILABILITY_URL=http://availability-qry:3000
+                - PARTNERS_URL=http://external-partners:3000
+                - TRIAGE_URL=http://triage-engine:3000
+                - QR_URL=http://qr-ingest:8080
+                - AI_URL=http://ai-agent:5000
+            auth-service:
+              image: ${{ secrets.DOCKER_USERNAME }}/auth-service:latest
+              restart: always
+              ports: ["3001:3000"]
+              environment:
+                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+                - KAFKA_GROUP_ID=${{ secrets.KAFKA_GROUP_ID }}
+                - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
+                - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+                - DB_HOST=${{ secrets.DATABASE_HOST }}
+                - DB_USER=${{ secrets.DATABASE_USER }}
+                - DB_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+                - DB_NAME=${{ secrets.DATABASE_NAME }}
+            patient-service:
+              image: ${{ secrets.DOCKER_USERNAME }}/patient-service:latest
+              restart: always
+              ports: ["3002:3000"]
+              environment:
+                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+                - DB_HOST=${{ secrets.DATABASE_HOST }}
+                - DB_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+            appointment-cmd:
+              image: ${{ secrets.DOCKER_USERNAME }}/appointment-cmd:latest
+              restart: always
+              ports: ["3003:3000"]
+              environment:
+                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+            availability-qry:
+              image: ${{ secrets.DOCKER_USERNAME }}/availability-qry:latest
+              restart: always
+              ports: ["3004:3000"]
+            external-partners:
+              image: ${{ secrets.DOCKER_USERNAME }}/external-partners:latest
+              restart: always
+              ports: ["3005:3000"]
+            triage-engine:
+              image: ${{ secrets.DOCKER_USERNAME }}/triage-engine:latest
+              restart: always
+              ports: ["3006:3000"]
+            qr-ingest:
+              image: ${{ secrets.DOCKER_USERNAME }}/qr-ingest:latest
+              restart: always
+              ports: ["8080:8080"]
+            ai-agent:
+              image: ${{ secrets.DOCKER_USERNAME }}/ai-agent:latest
+              restart: always
+              ports: ["5000:5000"]
+          EOF
+
+      - name: 🚀 Execute Deployment (Relay)
+        run: |
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.QA_BASTION_PUBLIC_IP }}:/home/ec2-user/app-compose-${{ matrix.node_name }}.yml
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@${{ env.QA_BASTION_PUBLIC_IP }}:/home/ec2-user/deploy-key
+          
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} << 'BASTION_EOF'
+            chmod 600 /home/ec2-user/deploy-key
+            scp -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key /home/ec2-user/app-compose-${{ matrix.node_name }}.yml ec2-user@${{ matrix.node_ip }}:/home/ec2-user/docker-compose.yml
+            
+            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ matrix.node_ip }} "
+              echo '${{ secrets.DOCKER_PASSWORD }}' | sudo docker login -u '${{ secrets.DOCKER_USERNAME }}' --password-stdin
+              sudo docker compose pull
+              sudo docker compose up -d --remove-orphans
+            "
+            rm /home/ec2-user/deploy-key /home/ec2-user/app-compose-${{ matrix.node_name }}.yml
+          BASTION_EOF

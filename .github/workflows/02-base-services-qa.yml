@@ -1,0 +1,124 @@
+name: "02. SERVICIOS BASE QA"
+
+on:
+  workflow_dispatch:
+
+env:
+  QA_BASTION_PUBLIC_IP: 100.52.22.97
+  EVENTS_PRIVATE_IP: 10.1.1.50
+  STATE_PRIVATE_IP: 10.2.1.100
+
+jobs:
+  deploy-events-state:
+    name: 🚀 Deploy Base Services
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+      
+      - name: Deploy Events (Kafka/RabbitMQ)
+        run: |
+          cat > docker-compose.yml <<'EOF'
+          version: '3.8'
+          services:
+            zookeeper:
+              image: confluentinc/cp-zookeeper:7.5.0
+              restart: always
+              environment: { ZOOKEEPER_CLIENT_PORT: 2181 }
+              volumes: ["/data/zookeeper:/var/lib/zookeeper/data"]
+              networks: [infra_net]
+            kafka:
+              image: confluentinc/cp-kafka:7.5.0
+              restart: always
+              depends_on: [zookeeper]
+              ports: ["9092:9092"]
+              volumes: ["/data/kafka:/var/lib/kafka/data"]
+              environment:
+                KAFKA_BROKER_ID: 1
+                KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+                KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+                KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${{ env.EVENTS_PRIVATE_IP }}:9092
+                KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+              networks: [infra_net]
+            rabbitmq:
+              image: rabbitmq:3.12-management-alpine
+              restart: always
+              ports: ["5672:5672", "15672:15672"]
+              volumes: ["/data/rabbitmq:/var/lib/rabbitmq"]
+              environment:
+                RABBITMQ_DEFAULT_USER: admin
+                RABBITMQ_DEFAULT_PASS: ${{ secrets.RABBITMQ_PASS }}
+              networks: [infra_net]
+            mosquitto:
+              image: eclipse-mosquitto:2.0
+              restart: always
+              ports: ["1883:1883", "9001:9001"]
+              volumes: ["/data/mosquitto/config:/mosquitto/config"]
+              networks: [infra_net]
+          networks:
+            infra_net: { driver: bridge }
+          EOF
+
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.QA_BASTION_PUBLIC_IP }}:/home/ec2-user/events-compose.yml
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@${{ env.QA_BASTION_PUBLIC_IP }}:/home/ec2-user/deploy-key
+          
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} << 'BASTION_EOF'
+            chmod 600 /home/ec2-user/deploy-key
+            scp -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key /home/ec2-user/events-compose.yml ec2-user@${{ env.EVENTS_PRIVATE_IP }}:/home/ec2-user/docker-compose.yml
+            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ env.EVENTS_PRIVATE_IP }} "
+              sudo mkdir -p /data/kafka /data/zookeeper /data/rabbitmq /data/mosquitto/config
+              sudo chmod -R 777 /data
+              echo 'listener 1883' | sudo tee /data/mosquitto/config/mosquitto.conf
+              echo 'allow_anonymous true' | sudo tee -a /data/mosquitto/config/mosquitto.conf
+              if ! command -v docker &> /dev/null; then
+                 sudo yum update -y && sudo yum install -y docker && sudo service docker start && sudo usermod -a -G docker ec2-user
+              fi
+              sudo mkdir -p /usr/local/lib/docker/cli-plugins
+              sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+              sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+              sudo docker compose up -d
+            "
+            rm /home/ec2-user/deploy-key /home/ec2-user/events-compose.yml
+          BASTION_EOF
+
+      - name: Deploy State (Redis/Grafana)
+        run: |
+          cat > docker-compose.yml <<'EOF'
+          version: '3.8'
+          services:
+            redis:
+              image: redis:7.2-alpine
+              restart: always
+              ports: ["6379:6379"]
+              command: redis-server --appendonly yes --requirepass ${{ secrets.REDIS_PASSWORD }}
+              volumes: ["/data/redis:/data"]
+            grafana:
+              image: grafana/grafana:latest
+              restart: always
+              ports: ["3000:3000"]
+              environment: { GF_SECURITY_ADMIN_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }} }
+              volumes: ["/data/grafana:/var/lib/grafana"]
+          EOF
+
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.QA_BASTION_PUBLIC_IP }}:/home/ec2-user/state-compose.yml
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@${{ env.QA_BASTION_PUBLIC_IP }}:/home/ec2-user/deploy-key
+          
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} << 'BASTION_EOF'
+            chmod 600 /home/ec2-user/deploy-key
+            scp -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key /home/ec2-user/state-compose.yml ec2-user@${{ env.STATE_PRIVATE_IP }}:/home/ec2-user/docker-compose.yml
+            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ env.STATE_PRIVATE_IP }} "
+              sudo mkdir -p /data/redis /data/grafana
+              sudo chmod -R 777 /data
+              if ! command -v docker &> /dev/null; then
+                 sudo yum update -y && sudo yum install -y docker && sudo service docker start
+              fi
+              sudo mkdir -p /usr/local/lib/docker/cli-plugins
+              sudo curl -SL https://github.com/docker/compose/releases/download/v2.24.1/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+              sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+              sudo docker compose up -d
+            "
+            rm /home/ec2-user/deploy-key /home/ec2-user/state-compose.yml
+          BASTION_EOF

@@ -1,0 +1,23 @@
+name: "05. SMOKE TEST PROD"
+
+on:
+  workflow_dispatch:
+  #workflow_run:
+    #workflows: ["03. BACKEND PROD", "04. FRONTEND PROD"]
+    #types:
+      #- completed
+
+jobs:
+  load-testing:
+    name: 🔥 PROD Smoke Test
+    runs-on: ubuntu-latest
+    #if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Execute k6 Load Test against PROD Domain
+        uses: grafana/k6-action@v0.3.0
+        env:
+          API_URL: "https://martharodriguez_prod2.distribuidauce.org"
+        with:
+          filename: tests/load/smoke-test.js
+          flags: --env API_URL="https://martharodriguez_prod2.distribuidauce.org"

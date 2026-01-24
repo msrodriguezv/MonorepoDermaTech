@@ -1,0 +1,215 @@
+name: "04. FRONTEND QA"
+
+on:
+  push:
+    branches: [ developer ]
+    #paths:
+      #- 'apps/clients/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PUBLIC_API_URL: "http://martharodriguez_qa2.distribuidauce.org"
+  QA_BASTION_PUBLIC_IP: 100.52.22.97
+
+jobs:
+  # ============================================================================
+  # 1. CHANGE DETECTION LOGIC
+  # ============================================================================
+  check-changes:
+    name: 🔍 Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            frontend:
+              - 'apps/clients/**'
+
+  # ============================================================================
+  # 2. ARTIFACT COMPILATION (WEB & ANDROID)
+  # ============================================================================
+  compile-code:
+    name: 🔨 Build QA Web & Android
+    needs: check-changes
+    if: needs.check-changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - uses: actions/setup-java@v3
+        with: { distribution: 'zulu', java-version: '17' }
+      - uses: subosito/flutter-action@v2
+        with: { channel: 'stable' }
+      - uses: actions/setup-node@v3
+        with: { node-version: 18, cache: 'npm' }
+
+      # --- Build Process: Flutter Web ---
+      - name: Build Flutter Web (QA)
+        run: |
+          cd apps/clients/mobile_app
+          flutter pub get
+          flutter build web --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
+      
+      # --- Build Process: Android APK ---
+      - name: Build Android APK (QA)
+        run: |
+          cd apps/clients/mobile_app
+          flutter build apk --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
+          # Note: We do NOT move the file. We upload it from the source to avoid "file not found" errors.
+      
+      # --- Artifact Upload (Explicit Paths) ---
+      - uses: actions/upload-artifact@v4
+        with: 
+          name: dist-files 
+          path: dist 
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        with: 
+          name: flutter-build 
+          path: apps/clients/mobile_app/build/web 
+
+      - uses: actions/upload-artifact@v4
+        with: 
+          name: android-apk 
+          # Exact path where Flutter generates the APK
+          path: apps/clients/mobile_app/build/app/outputs/flutter-apk/app-release.apk
+
+      # --- Docker Containerization (Web Server) ---
+      - name: Docker Registry Login
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: 'apps/clients/mobile_app/Dockerfile'
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/dermatech-frontend:latest
+          build-args: SERVICE_PATH='frontend'
+
+  # ============================================================================
+  # 3. DESKTOP COMPILATION (WINDOWS)
+  # ============================================================================
+  build-desktop:
+    name: 🖥️ Build QA Windows EXE
+    needs: check-changes
+    if: needs.check-changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: subosito/flutter-action@v2
+        with: { channel: 'stable' }
+      
+      - name: Build Windows Application (QA)
+        run: |
+          cd apps/clients/mobile_app
+          flutter config --enable-windows-desktop
+          flutter pub get
+          flutter build windows --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
+      
+      - name: Package Windows Artifact
+        run: |
+          # Use explicit PowerShell variables to avoid relative path errors
+          $Source = "apps/clients/mobile_app/build/windows/x64/runner/Release/*"
+          $Destination = "apps/clients/mobile_app/dermatech-qa-windows.zip"
+          Compress-Archive -Path $Source -DestinationPath $Destination
+
+      - uses: actions/upload-artifact@v4
+        with: 
+          name: windows-app 
+          path: apps/clients/mobile_app/dermatech-qa-windows.zip
+
+  # ============================================================================
+  # 4. DEPLOYMENT (RELAY VIA BASTION)
+  # ============================================================================
+  deploy-frontend:
+    name: 🚀 Deploy QA Frontend
+    needs: [check-changes, compile-code]
+    if: needs.check-changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - ip: 10.3.1.10
+            node_name: node-a
+          - ip: 10.4.1.10
+            node_name: node-b
+    steps:
+      - name: Configure SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+      
+      - name: Generate Docker Compose Manifest
+        run: |
+          cat > docker-compose.yml <<'EOF'
+          version: '3.8'
+          services:
+            frontend:
+              image: ${{ secrets.DOCKER_USERNAME }}/dermatech-frontend:latest
+              restart: always
+              ports: ["80:80"]
+          EOF
+          
+      - name: Execute Deployment Relay
+        run: |
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.QA_BASTION_PUBLIC_IP }}:/home/ec2-user/frontend.yml
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@${{ env.QA_BASTION_PUBLIC_IP }}:/home/ec2-user/deploy-key
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} << 'BASTION_EOF'
+            chmod 600 /home/ec2-user/deploy-key
+            scp -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key /home/ec2-user/frontend.yml ec2-user@${{ matrix.ip }}:/home/ec2-user/docker-compose.yml
+            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ matrix.ip }} "
+              echo '${{ secrets.DOCKER_PASSWORD }}' | sudo docker login -u '${{ secrets.DOCKER_USERNAME }}' --password-stdin
+              sudo docker compose pull
+              sudo docker compose up -d --remove-orphans
+            "
+            rm /home/ec2-user/deploy-key /home/ec2-user/frontend.yml
+          BASTION_EOF
+
+  # ============================================================================
+  # 5. RELEASE (CORRECTED STRUCTURE)
+  # ============================================================================
+  publish-release:
+    name: 📦 Publish QA Release
+    needs: [compile-code, build-desktop]
+    runs-on: ubuntu-latest
+    steps:
+      # Download ALL artifacts to a temporary 'artifacts' folder
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # Debug: List files to ensure they exist
+      - name: Display structure of downloaded files
+        run: ls -R artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: qa-v1.0.${{ github.run_number }}
+          name: "QA Release v1.0.${{ github.run_number }}"
+          body: |
+            ## 🚀 QA Deployment Successful
+            **Generated Artifacts:**
+            - 🤖 Android APK
+            - 🖥️ Windows EXE
+            - 🌐 Web
+            **Web URL:** ${{ env.PUBLIC_API_URL }}
+          files: |
+            # Note the path structure: artifacts/<artifact-name>/<filename>
+            artifacts/android-apk/app-release.apk
+            artifacts/windows-app/dermatech-qa-windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
