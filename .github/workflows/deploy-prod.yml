@@ -2,7 +2,7 @@ name: "PROD: V2. TURBO DEPLOY DermaTech Global Infrastructure"
 
 on:
   push:
-    branches: [ qa ]
+    branches: [ main ]
   workflow_dispatch:
 
 env:
@@ -72,7 +72,7 @@ jobs:
           go test -v ./... || true
 
   # ============================================================================
-  # 2. INFRAESTRUCTURA (TERRAFORM - PROD)
+  # 2. INFRASTRUCTURE (TERRAFORM - PROD)
   # ============================================================================
   base-layer:
     name: 🏗️ Deploy Base PROD (${{ matrix.account }})
@@ -187,7 +187,7 @@ jobs:
         run: |
           cd infrastructure/terraform/environments-prod/account-01-prod
           terraform init -reconfigure
-          # FIX SEGURIDAD: Eliminado "terraform destroy" para proteger rutas en Prod
+          # Seguridad: Sin comando destroy automático
           terraform apply -auto-approve \
             -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
             -var="state_vpc_id=${{ env.VPC_STATE }}" \
