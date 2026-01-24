@@ -276,11 +276,11 @@ jobs:
           
       - name: Package Windows Build
         run: |
-          cd apps/clients/mobile_app/build/windows/runner/Release
-          Compress-Archive -Path * -DestinationPath ..\..\..\..\..\dermatech-qa-windows.zip
+          cd apps/clients/mobile_app/build/windows/x64/runner/Release
+          Compress-Archive -Path * -DestinationPath ..\..\..\..\..\..\dermatech-windows.zip
 
       - uses: actions/upload-artifact@v4
-        with: { name: 'windows-app', path: 'apps/clients/mobile_app/dermatech-qa-windows.zip' }
+        with: { name: 'windows-app', path: 'apps/clients/mobile_app/dermatech-windows.zip' }
 
   # ============================================================================
   # 4. DOCKER & DEPLOY

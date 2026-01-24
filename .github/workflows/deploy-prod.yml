@@ -249,15 +249,16 @@ jobs:
 
   # B. Compile Windows Desktop (Windows Runner)
   build-desktop:
-    name: 🖥️ Build PROD Windows EXE
+    name: 🖥️ Build Windows EXE
     needs: [backend-quality-gate]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v3
+      
       - uses: subosito/flutter-action@v2
         with: { channel: 'stable' }
       
-      - name: Build Windows App (PROD)
+      - name: Build Windows Application
         run: |
           cd apps/clients/mobile_app
           flutter config --enable-windows-desktop
@@ -266,11 +267,11 @@ jobs:
           
       - name: Package Windows Build
         run: |
-          cd apps/clients/mobile_app/build/windows/runner/Release
-          Compress-Archive -Path * -DestinationPath ..\..\..\..\..\dermatech-prod-windows.zip
+          cd apps/clients/mobile_app/build/windows/x64/runner/Release
+          Compress-Archive -Path * -DestinationPath ..\..\..\..\..\..\dermatech-windows.zip
 
       - uses: actions/upload-artifact@v4
-        with: { name: 'windows-app', path: 'apps/clients/mobile_app/dermatech-prod-windows.zip' }
+        with: { name: 'windows-app', path: 'apps/clients/mobile_app/dermatech-windows.zip' }
 
   # ============================================================================
   # 4. DOCKER & DEPLOY PROD
