@@ -1,7 +1,7 @@
 # STEP 1: Multi-stage build for production optimization
 FROM node:18-alpine AS runner
 
-# Set production environment
+# Set production environments
 ENV NODE_ENV=production
 WORKDIR /app
 

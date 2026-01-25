@@ -1,6 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
 
-@Controller('health') // Esto crea la ruta /api/health
+@Controller('auth/health')
 export class HealthController {
   @Get()
   check() {

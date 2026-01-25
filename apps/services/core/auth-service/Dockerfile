@@ -15,7 +15,7 @@ WORKDIR /app
 ENV NODE_ENV production
 
 # 1. Dependency Layer
-# Copy package.json from the build output (Assumes build context is root)
+# Copy package.json from thee build output (Assumes build context is root)
 COPY dist/apps/services/core/auth-service/package*.json ./
 
 # Install only production dependencies

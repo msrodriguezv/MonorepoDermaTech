@@ -1,0 +1,104 @@
+name: "06. FRONTEND QA RELEASE (MANUAL)"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # Environment Constants for QA
+  PUBLIC_API_URL: "http://martharodriguez_qa2.distribuidauce.org"
+
+jobs:
+  # ============================================================================
+  # 1. BUILD ANDROID APK (Linux Runner)
+  # ============================================================================
+  build-android:
+    name: 🤖 Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - uses: actions/setup-java@v3
+        with: { distribution: 'zulu', java-version: '17' }
+      - uses: subosito/flutter-action@v2
+        with: { channel: 'stable' }
+      
+      - name: Build APK (QA)
+        run: |
+          cd apps/clients/mobile_app
+          flutter pub get
+          flutter build apk --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
+      
+      # Artifact Upload: Preserves the APK for the release job
+      - uses: actions/upload-artifact@v4
+        with: 
+          name: android-apk 
+          path: apps/clients/mobile_app/build/app/outputs/flutter-apk/app-release.apk
+
+  # ============================================================================
+  # 2. BUILD WINDOWS EXE (Windows Runner)
+  # ============================================================================
+  build-windows:
+    name: 🖥️ Build Windows EXE
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: subosito/flutter-action@v2
+        with: { channel: 'stable' }
+      
+      - name: Build Windows App (QA)
+        run: |
+          cd apps/clients/mobile_app
+          flutter config --enable-windows-desktop
+          flutter pub get
+          flutter build windows --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
+      
+      - name: Package Windows Artifact (Zip)
+        run: |
+          # Use explicit absolute paths for PowerShell compression to ensure reliability
+          $Source = "apps/clients/mobile_app/build/windows/x64/runner/Release/*"
+          $Destination = "apps/clients/mobile_app/dermatech-qa-windows.zip"
+          Compress-Archive -Path $Source -DestinationPath $Destination
+
+      # Artifact Upload: Preserves the Zip for the release job
+      - uses: actions/upload-artifact@v4
+        with: 
+          name: windows-app 
+          path: apps/clients/mobile_app/dermatech-qa-windows.zip
+
+  # ============================================================================
+  # 3. PUBLISH GITHUB RELEASE
+  # Description: Aggregates artifacts and creates a downloadable Release.
+  # ============================================================================
+  publish-release:
+    name: 📦 Publish QA Release
+    needs: [build-android, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      # Download ALL artifacts to a temporary 'artifacts' directory
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: qa-v1.0.${{ github.run_number }}
+          name: "QA Release v1.0.${{ github.run_number }}"
+          body: |
+            ## 🚀 QA Manual Release Generated
+            **Triggered Manually via Workflow Dispatch.**
+            
+            **Downloads:**
+            - 🤖 Android APK
+            - 🖥️ Windows EXE
+            
+            **Web Environment:** ${{ env.PUBLIC_API_URL }}
+          files: |
+            # Paths relative to the 'artifacts' download folder
+            artifacts/android-apk/app-release.apk
+            artifacts/windows-app/dermatech-qa-windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

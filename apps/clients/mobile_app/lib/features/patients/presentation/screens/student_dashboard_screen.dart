@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:dermatech_mobile/core/storage/storage_service.dart';
 
 // --- CORE & ARCHITECTURE IMPORTS ---
 import '../../../../core/network/api_client.dart';
@@ -19,6 +19,7 @@ import 'book_appointment_screen.dart';
 class StudentDashboardScreen extends StatefulWidget {
   // Fallback name passed from the Login flow if API fails or while loading.
   final String studentName;
+  final _storage = StorageService();
 
   const StudentDashboardScreen({
     super.key, 
@@ -75,32 +76,25 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   /// 2. Clears the local Secure Storage (Critical).
   /// 3. Navigates back to Login and wipes the navigation history.
   Future<void> _handleLogout() async {
-    const storage = FlutterSecureStorage();
-    
     try {
-      final token = await storage.read(key: 'accessToken');
+      final token = await _storage.read(key: 'accessToken');
       
       if (token != null) {
         final apiClient = ApiClient();
         final authDataSource = AuthRemoteDataSourceImpl(apiClient: apiClient);
-        
-        // Invalidate token on server (Blacklist strategy)
         await authDataSource.logout(token);
-        debugPrint("🔍 [LOGOUT] Server-side invalidation successful.");
       }
     } catch (e) {
-      // Log error but proceed with local logout to not trap the user.
       debugPrint("⚠️ [LOGOUT] Server invalidation failed: $e");
     } finally {
-      // CRITICAL: Always clear local storage and navigation stack
-      await storage.deleteAll();
+      await _storage.deleteAll();
       debugPrint("✅ [LOGOUT] Local session cleared.");
 
       if (mounted) {
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (_) => const LoginScreen()),
-          (route) => false, // Predicate: Remove all previous routes
+          (route) => false,
         );
       }
     }

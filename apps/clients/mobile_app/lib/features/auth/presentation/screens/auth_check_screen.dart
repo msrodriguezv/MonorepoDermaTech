@@ -26,7 +26,7 @@ class AuthCheckScreen extends StatefulWidget {
 
 class _AuthCheckScreenState extends State<AuthCheckScreen> {
   // Instance of the unified storage service (Web-safe)
-  final _storage = StorageService(); // <-- CAMBIO CRÍTICO: Usamos el wrapper inteligente
+  final _storage = StorageService();
 
   @override
   void initState() {

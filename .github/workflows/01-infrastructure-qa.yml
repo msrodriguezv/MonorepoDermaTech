@@ -2,14 +2,17 @@ name: "01. INFRAESTRUCTURA QA"
 
 on:
   workflow_dispatch:
-  #push:
-    #branches: [ qa ]
-    #paths:
-      #- 'infrastructure/terraform/**'
 
 env:
   AWS_REGION: us-east-1
   QA_BASTION_PUBLIC_IP: 100.52.22.97
+  
+  # CIDR Blocks
+  QA_CIDR: "10.0.0.0/16"
+  EVENTS_CIDR: "10.1.0.0/16"
+  STATE_CIDR: "10.2.0.0/16"
+  NODE_A_CIDR: "10.3.0.0/16"
+  NODE_B_CIDR: "10.4.0.0/16"
 
 jobs:
   test-bastion:
@@ -109,6 +112,7 @@ jobs:
           echo "VPC_STATE=$STATE_ID" >> $GITHUB_ENV
           echo "VPC_NODE_A=$NODE_A_ID" >> $GITHUB_ENV
           echo "VPC_NODE_B=$NODE_B_ID" >> $GITHUB_ENV
+      
       - name: Deploy Orchestrator Hub
         env:
           AWS_PROFILE: qa-dermatech
@@ -116,32 +120,280 @@ jobs:
         run: |
           cd infrastructure/terraform/environments/account-01-qa
           terraform init -reconfigure
+          
+          # CRÍTICO: Solo apply, NUNCA destroy
           terraform apply -auto-approve \
             -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
             -var="state_vpc_id=${{ env.VPC_STATE }}" \
             -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
             -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
+          
           ALB_DNS=$(terraform output -raw QA_ALB_DNS_NAME)
           echo "ALB_URL=$ALB_DNS" > alb_dns.txt
-      
-      - name: Force Route Injection (Safety Net)
+
+      # ========================================================================
+      # 🛡️ CONFIGURACIÓN COMPLETA DE NETWORKING (CRÍTICO)
+      # ========================================================================
+      - name: 🔧 Configure Complete Network Mesh
         env:
-          AWS_PROFILE: qa-dermatech
           AWS_REGION: us-east-1
         run: |
-          echo "🛡️ Verifying Routes in Bastion Table..."
-          RT_ID=$(aws ec2 describe-route-tables --filters "Name=tag:Name,Values=dermatech-qa-public-rt" --query "RouteTables[0].RouteTableId" --output text)
-          ensure_route() {
-            CIDR=$1
-            PEER_NAME=$2
-            PCX_ID=$(aws ec2 describe-vpc-peering-connections --filters "Name=tag:Name,Values=$PEER_NAME" --query "VpcPeeringConnections[0].VpcPeeringConnectionId" --output text)
-            if [ "$PCX_ID" == "None" ] || [ -z "$PCX_ID" ]; then
-               echo "⚠️ Peering $PEER_NAME not found! Skipping..."
-               return
+          echo "======================================================================"
+          echo "🛡️ CONFIGURANDO MALLA COMPLETA DE NETWORKING"
+          echo "======================================================================"
+          
+          # Función para obtener Route Table ID
+          get_route_table_id() {
+            local profile=$1
+            local vpc_id=$2
+            
+            # Intentar primero con tag específico
+            RT_ID=$(aws ec2 describe-route-tables \
+              --profile $profile \
+              --region us-east-1 \
+              --filters "Name=vpc-id,Values=$vpc_id" "Name=tag:Name,Values=*public*" \
+              --query "RouteTables[0].RouteTableId" \
+              --output text 2>/dev/null)
+            
+            # Si no encuentra, buscar la main route table
+            if [ "$RT_ID" == "None" ] || [ -z "$RT_ID" ]; then
+              RT_ID=$(aws ec2 describe-route-tables \
+                --profile $profile \
+                --region us-east-1 \
+                --filters "Name=vpc-id,Values=$vpc_id" "Name=association.main,Values=true" \
+                --query "RouteTables[0].RouteTableId" \
+                --output text)
             fi
-            aws ec2 create-route --route-table-id $RT_ID --destination-cidr-block $CIDR --vpc-peering-connection-id $PCX_ID || echo "✅ Route to $CIDR likely exists."
+            
+            echo $RT_ID
           }
-          ensure_route "10.1.0.0/16" "qa-to-events-peering"
-          ensure_route "10.2.0.0/16" "qa-to-state-peering"
-          ensure_route "10.3.0.0/16" "qa-to-node-a-peering"
-          ensure_route "10.4.0.0/16" "qa-to-node-b-peering"
+          
+          # Función para obtener Peering Connection ID
+          get_peering_id() {
+            local profile=$1
+            local tag_name=$2
+            aws ec2 describe-vpc-peering-connections \
+              --profile $profile \
+              --region us-east-1 \
+              --filters "Name=tag:Name,Values=$tag_name" "Name=status-code,Values=active" \
+              --query "VpcPeeringConnections[0].VpcPeeringConnectionId" \
+              --output text
+          }
+          
+          # Función para crear ruta (idempotente)
+          create_route_safe() {
+            local profile=$1
+            local rt_id=$2
+            local cidr=$3
+            local pcx_id=$4
+            local description=$5
+            
+            if [ "$rt_id" == "None" ] || [ -z "$rt_id" ] || [ "$pcx_id" == "None" ] || [ -z "$pcx_id" ]; then
+              echo "⚠️  SKIP: $description (RT or PCX not found)"
+              echo "   RT_ID=$rt_id, PCX_ID=$pcx_id"
+              return
+            fi
+            
+            echo "➕ Creating route: $cidr -> $pcx_id in $rt_id ($description)"
+            aws ec2 create-route \
+              --profile $profile \
+              --region us-east-1 \
+              --route-table-id $rt_id \
+              --destination-cidr-block $cidr \
+              --vpc-peering-connection-id $pcx_id 2>&1 | grep -v "RouteAlreadyExists" || echo "   ✅ Route exists or created"
+          }
+          
+          # ===================================================================
+          # 1. QA BASTION -> TODAS LAS CUENTAS
+          # ===================================================================
+          echo ""
+          echo "1️⃣  CONFIGURANDO RUTAS DESDE QA BASTION"
+          echo "-----------------------------------------------"
+          
+          QA_VPC_ID=$(aws ec2 describe-vpcs \
+            --profile qa-dermatech \
+            --region us-east-1 \
+            --filters "Name=tag:Name,Values=*qa*" \
+            --query "Vpcs[0].VpcId" \
+            --output text)
+          
+          QA_RT=$(get_route_table_id "qa-dermatech" "$QA_VPC_ID")
+          echo "QA Route Table: $QA_RT"
+          
+          PCX_EVENTS=$(get_peering_id "qa-dermatech" "qa-to-events-peering")
+          PCX_STATE=$(get_peering_id "qa-dermatech" "qa-to-state-peering")
+          PCX_NODE_A=$(get_peering_id "qa-dermatech" "qa-to-node-a-peering")
+          PCX_NODE_B=$(get_peering_id "qa-dermatech" "qa-to-node-b-peering")
+          
+          create_route_safe "qa-dermatech" "$QA_RT" "${{ env.EVENTS_CIDR }}" "$PCX_EVENTS" "QA -> Events"
+          create_route_safe "qa-dermatech" "$QA_RT" "${{ env.STATE_CIDR }}" "$PCX_STATE" "QA -> State"
+          create_route_safe "qa-dermatech" "$QA_RT" "${{ env.NODE_A_CIDR }}" "$PCX_NODE_A" "QA -> Node-A"
+          create_route_safe "qa-dermatech" "$QA_RT" "${{ env.NODE_B_CIDR }}" "$PCX_NODE_B" "QA -> Node-B"
+          
+          # ===================================================================
+          # 2. EVENTS -> QA (Return Route)
+          # ===================================================================
+          echo ""
+          echo "2️⃣  CONFIGURANDO RUTA DE RETORNO: EVENTS -> QA"
+          echo "-----------------------------------------------"
+          
+          EVENTS_RT=$(get_route_table_id "events-dermatech" "${{ env.VPC_EVENTS }}")
+          echo "Events Route Table: $EVENTS_RT"
+          
+          create_route_safe "events-dermatech" "$EVENTS_RT" "${{ env.QA_CIDR }}" "$PCX_EVENTS" "Events -> QA"
+          
+          # ===================================================================
+          # 3. STATE -> QA (Return Route)
+          # ===================================================================
+          echo ""
+          echo "3️⃣  CONFIGURANDO RUTA DE RETORNO: STATE -> QA"
+          echo "-----------------------------------------------"
+          
+          STATE_RT=$(get_route_table_id "state-dermatech" "${{ env.VPC_STATE }}")
+          echo "State Route Table: $STATE_RT"
+          
+          create_route_safe "state-dermatech" "$STATE_RT" "${{ env.QA_CIDR }}" "$PCX_STATE" "State -> QA"
+          
+          # ===================================================================
+          # 4. NODE-A -> QA (Return Route)
+          # ===================================================================
+          echo ""
+          echo "4️⃣  CONFIGURANDO RUTA DE RETORNO: NODE-A -> QA"
+          echo "-----------------------------------------------"
+          
+          NODE_A_RT=$(get_route_table_id "node-a-dermatech" "${{ env.VPC_NODE_A }}")
+          echo "Node-A Route Table: $NODE_A_RT"
+          
+          create_route_safe "node-a-dermatech" "$NODE_A_RT" "${{ env.QA_CIDR }}" "$PCX_NODE_A" "Node-A -> QA"
+          
+          # ===================================================================
+          # 5. NODE-B -> QA (Return Route)
+          # ===================================================================
+          echo ""
+          echo "5️⃣  CONFIGURANDO RUTA DE RETORNO: NODE-B -> QA"
+          echo "-----------------------------------------------"
+          
+          NODE_B_RT=$(get_route_table_id "node-b-dermatech" "${{ env.VPC_NODE_B }}")
+          echo "Node-B Route Table: $NODE_B_RT"
+          
+          create_route_safe "node-b-dermatech" "$NODE_B_RT" "${{ env.QA_CIDR }}" "$PCX_NODE_B" "Node-B -> QA"
+          
+          # ===================================================================
+          # 6. RUTAS ENTRE SPOKES (Events, State, Node-A, Node-B)
+          # ===================================================================
+          echo ""
+          echo "6️⃣  CONFIGURANDO RUTAS ENTRE SPOKES"
+          echo "-----------------------------------------------"
+          
+          # Node-A <-> Events
+          PCX_NODE_A_EVENTS=$(get_peering_id "node-a-dermatech" "node-a-to-events")
+          create_route_safe "node-a-dermatech" "$NODE_A_RT" "${{ env.EVENTS_CIDR }}" "$PCX_NODE_A_EVENTS" "Node-A -> Events"
+          create_route_safe "events-dermatech" "$EVENTS_RT" "${{ env.NODE_A_CIDR }}" "$PCX_NODE_A_EVENTS" "Events -> Node-A"
+          
+          # Node-A <-> State
+          PCX_NODE_A_STATE=$(get_peering_id "node-a-dermatech" "node-a-to-state")
+          create_route_safe "node-a-dermatech" "$NODE_A_RT" "${{ env.STATE_CIDR }}" "$PCX_NODE_A_STATE" "Node-A -> State"
+          create_route_safe "state-dermatech" "$STATE_RT" "${{ env.NODE_A_CIDR }}" "$PCX_NODE_A_STATE" "State -> Node-A"
+          
+          # Node-B <-> Events
+          PCX_NODE_B_EVENTS=$(get_peering_id "node-b-dermatech" "node-b-to-events")
+          create_route_safe "node-b-dermatech" "$NODE_B_RT" "${{ env.EVENTS_CIDR }}" "$PCX_NODE_B_EVENTS" "Node-B -> Events"
+          create_route_safe "events-dermatech" "$EVENTS_RT" "${{ env.NODE_B_CIDR }}" "$PCX_NODE_B_EVENTS" "Events -> Node-B"
+          
+          # Node-B <-> State
+          PCX_NODE_B_STATE=$(get_peering_id "node-b-dermatech" "node-b-to-state")
+          create_route_safe "node-b-dermatech" "$NODE_B_RT" "${{ env.STATE_CIDR }}" "$PCX_NODE_B_STATE" "Node-B -> State"
+          create_route_safe "state-dermatech" "$STATE_RT" "${{ env.NODE_B_CIDR }}" "$PCX_NODE_B_STATE" "State -> Node-B"
+          
+          # Events <-> State
+          PCX_EVENTS_STATE=$(get_peering_id "events-dermatech" "events-to-state-peering")
+          create_route_safe "events-dermatech" "$EVENTS_RT" "${{ env.STATE_CIDR }}" "$PCX_EVENTS_STATE" "Events -> State"
+          create_route_safe "state-dermatech" "$STATE_RT" "${{ env.EVENTS_CIDR }}" "$PCX_EVENTS_STATE" "State -> Events"
+          
+          echo ""
+          echo "======================================================================"
+          echo "✅ MALLA DE NETWORKING COMPLETADA"
+          echo "======================================================================"
+
+      # ========================================================================
+      # 🔒 SECURITY GROUPS
+      # ========================================================================
+      - name: 🔒 Configure Security Groups
+        env:
+          AWS_REGION: us-east-1
+        run: |
+          echo "======================================================================"
+          echo "🔒 CONFIGURANDO SECURITY GROUPS"
+          echo "======================================================================"
+          
+          # Función para obtener SG por VPC
+          get_sg_id() {
+            local profile=$1
+            local vpc_id=$2
+            aws ec2 describe-security-groups \
+              --profile $profile \
+              --region us-east-1 \
+              --filters "Name=vpc-id,Values=$vpc_id" \
+              --query "SecurityGroups[?GroupName!='default'].GroupId | [0]" \
+              --output text
+          }
+          
+          # Función para permitir tráfico
+          allow_traffic() {
+            local profile=$1
+            local sg_id=$2
+            local cidr=$3
+            local description=$4
+            
+            if [ "$sg_id" == "None" ] || [ -z "$sg_id" ]; then
+              echo "⚠️  SKIP: $description (SG not found)"
+              return
+            fi
+            
+            echo "🔓 Allowing all traffic from $cidr to $sg_id ($description)"
+            aws ec2 authorize-security-group-ingress \
+              --profile $profile \
+              --region us-east-1 \
+              --group-id $sg_id \
+              --protocol all \
+              --cidr $cidr 2>&1 | grep -v "InvalidPermission.Duplicate" || echo "   ✅ Rule exists"
+          }
+          
+          # Get VPC IDs
+          QA_VPC_ID=$(aws ec2 describe-vpcs --profile qa-dermatech --region us-east-1 --filters "Name=tag:Name,Values=*qa*" --query "Vpcs[0].VpcId" --output text)
+          
+          # Get Security Groups
+          QA_SG=$(get_sg_id "qa-dermatech" "$QA_VPC_ID")
+          EVENTS_SG=$(get_sg_id "events-dermatech" "${{ env.VPC_EVENTS }}")
+          STATE_SG=$(get_sg_id "state-dermatech" "${{ env.VPC_STATE }}")
+          NODE_A_SG=$(get_sg_id "node-a-dermatech" "${{ env.VPC_NODE_A }}")
+          NODE_B_SG=$(get_sg_id "node-b-dermatech" "${{ env.VPC_NODE_B }}")
+          
+          echo "Security Groups encontrados:"
+          echo "  QA: $QA_SG"
+          echo "  Events: $EVENTS_SG"
+          echo "  State: $STATE_SG"
+          echo "  Node-A: $NODE_A_SG"
+          echo "  Node-B: $NODE_B_SG"
+          
+          # Permitir tráfico desde QA a todas las cuentas
+          allow_traffic "events-dermatech" "$EVENTS_SG" "${{ env.QA_CIDR }}" "QA -> Events"
+          allow_traffic "state-dermatech" "$STATE_SG" "${{ env.QA_CIDR }}" "QA -> State"
+          allow_traffic "node-a-dermatech" "$NODE_A_SG" "${{ env.QA_CIDR }}" "QA -> Node-A"
+          allow_traffic "node-b-dermatech" "$NODE_B_SG" "${{ env.QA_CIDR }}" "QA -> Node-B"
+          
+          # Permitir tráfico entre spokes
+          allow_traffic "events-dermatech" "$EVENTS_SG" "${{ env.NODE_A_CIDR }}" "Node-A -> Events"
+          allow_traffic "events-dermatech" "$EVENTS_SG" "${{ env.NODE_B_CIDR }}" "Node-B -> Events"
+          allow_traffic "state-dermatech" "$STATE_SG" "${{ env.NODE_A_CIDR }}" "Node-A -> State"
+          allow_traffic "state-dermatech" "$STATE_SG" "${{ env.NODE_B_CIDR }}" "Node-B -> State"
+          
+          echo ""
+          echo "======================================================================"
+          echo "✅ SECURITY GROUPS CONFIGURADOS"
+          echo "======================================================================"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ALB_DNS
+          path: infrastructure/terraform/environments/account-01-qa/alb_dns.txt

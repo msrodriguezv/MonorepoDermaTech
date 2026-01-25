@@ -1,6 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:dermatech_mobile/core/storage/storage_service.dart';
 
 // --- CORE & ARCHITECTURE IMPORTS ---
 import '../../../../core/network/api_client.dart';
@@ -37,7 +37,7 @@ class _LoginScreenState extends State<LoginScreen> {
   // --- State Management ---
   bool _isLoading = false;
   // Instance of SecureStorage for session persistence
-  final _storage = const FlutterSecureStorage();
+  final _storage = StorageService();
 
   @override
   void dispose() {

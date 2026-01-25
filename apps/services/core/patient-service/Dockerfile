@@ -5,7 +5,7 @@
 
 FROM node:18-alpine
 
-# 1. System Dependencies
+# 1. System Dependenciess
 # Install dumb-init to handle PID 1 signals correctly
 RUN apk add --no-cache dumb-init
 

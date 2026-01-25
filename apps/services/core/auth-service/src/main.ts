@@ -8,7 +8,7 @@ if (!global.crypto) {
 }
 
 import { NestFactory } from '@nestjs/core';
-import { Logger, ValidationPipe } from '@nestjs/common'; // Eliminado VersioningType
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
@@ -32,18 +32,6 @@ async function bootstrap() {
 
   const app = await NestFactory.create(AppModule);
 
-  // ===========================================================================
-  // ⚠️ ROUTING STRATEGY (CRITICAL FOR GATEWAY)
-  // ===========================================================================
-  // We REMOVE 'app.setGlobalPrefix' and 'app.enableVersioning'.
-  // Why? The API Gateway handles the Public Surface (/api/v1/...).
-  // It strips the prefix and forwards requests to this service.
-  // 
-  // Incoming from Gateway: http://auth-service:3000/auth/login
-  // Controller Route:      @Controller('auth') + @Post('login')
-  // Result:                MATCH ✅
-  // ===========================================================================
-
   // 2. Global Validation
   app.useGlobalPipes(new ValidationPipe({
     whitelist: true,
@@ -52,7 +40,7 @@ async function bootstrap() {
   }));
 
   // ===========================================================================
-  // 🛡️ SECURITY: PROD CORS CONFIGURATION
+  //  SECURITY: PROD CORS CONFIGURATION
   // ===========================================================================
   const whitelist = [
     // --- Local Development ---

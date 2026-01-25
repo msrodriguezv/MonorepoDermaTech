@@ -1,4 +1,4 @@
-# STEP 1: Use a slim Python 3.11 image for production
+# STEP 1: Usse a slim Python 3.11 image for production
 FROM python:3.11-slim
 
 # Set environment variables to prevent Python from writing .pyc files
