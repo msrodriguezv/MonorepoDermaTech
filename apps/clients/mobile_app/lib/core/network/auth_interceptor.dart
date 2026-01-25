@@ -1,30 +1,39 @@
 import 'package:dio/dio.dart';
-import 'package:dermatech_mobile/core/storage/storage_service.dart';
+import '../storage/storage_service.dart';
 import '../../config/environment.dart';
 
 class AuthInterceptor extends Interceptor {
-  final StorageService _storage;        
+  final StorageService _storage = StorageService();
   final Dio _dio;
-  
+
   bool _isRefreshing = false;
 
-  // Actualizar constructor para aceptar o instanciar StorageService
-  AuthInterceptor(this._dio) : _storage = StorageService(); 
+  AuthInterceptor(this._dio);
 
   @override
-  Future<void> onRequest(RequestOptions options, RequestInterceptorHandler handler) async {
-    // Ahora _storage.read usa internamente SharedPreferences en Web, no fallará.
-    final accessToken = await _storage.read(key: 'accessToken');
+  Future<void> onRequest(
+    RequestOptions options,
+    RequestInterceptorHandler handler,
+  ) async {
+    final token = await _storage.read(key: 'accessToken');
 
-    if (accessToken != null && accessToken.isNotEmpty) {
-      options.headers['Authorization'] = 'Bearer $accessToken';
+    if (token != null && token.isNotEmpty) {
+      options.headers['Authorization'] = 'Bearer $token';
     }
 
-    return handler.next(options);
+    handler.next(options);
   }
 
   @override
-  Future<void> onError(DioException err, ErrorInterceptorHandler handler) async {
+  Future<void> onError(
+    DioException err,
+    ErrorInterceptorHandler handler,
+  ) async {
+    // ❌ No intentar refresh en endpoints de auth
+    if (err.requestOptions.path.contains('/auth')) {
+      return handler.next(err);
+    }
+
     if (err.response?.statusCode == 401) {
       final refreshToken = await _storage.read(key: 'refreshToken');
 
@@ -32,37 +41,44 @@ class AuthInterceptor extends Interceptor {
         _isRefreshing = true;
 
         try {
-          final refreshDio = Dio(BaseOptions(baseUrl: Environment.authBaseUrl));
-          
-          final response = await refreshDio.post('/auth/refresh', data: {
-            'refreshToken': refreshToken
-          });
+          final refreshDio = Dio(
+            BaseOptions(baseUrl: Environment.apiGatewayBaseUrl),
+          );
 
-          if (response.statusCode == 200 || response.statusCode == 201) {
-            final newAccessToken = response.data['accessToken'] ?? response.data['backendTokens']['accessToken'];
-            final newRefreshToken = response.data['refreshToken'] ?? response.data['backendTokens']['refreshToken'];
+          final response = await refreshDio.post(
+            '/api/v1/auth/refresh',
+            data: {'refreshToken': refreshToken},
+          );
 
-            // Guardar nuevos tokens sin error
-            await _storage.write(key: 'accessToken', value: newAccessToken);
-            
-            if (newRefreshToken != null) {
-              await _storage.write(key: 'refreshToken', value: newRefreshToken);
-            }
+          final newAccessToken = response.data['accessToken'];
+          final newRefreshToken = response.data['refreshToken'];
 
-            _isRefreshing = false;
+          await _storage.write(
+            key: 'accessToken',
+            value: newAccessToken,
+          );
 
-            final opts = err.requestOptions;
-            opts.headers['Authorization'] = 'Bearer $newAccessToken';
-            
-            final clonedRequest = await _dio.fetch(opts);
-            return handler.resolve(clonedRequest);
+          if (newRefreshToken != null) {
+            await _storage.write(
+              key: 'refreshToken',
+              value: newRefreshToken,
+            );
           }
-        } catch (e) {
+
           _isRefreshing = false;
-          await _storage.deleteAll(); // Limpieza segura
+
+          final RequestOptions opts = err.requestOptions;
+          opts.headers['Authorization'] = 'Bearer $newAccessToken';
+
+          final Response retryResponse = await _dio.fetch(opts);
+          return handler.resolve(retryResponse);
+        } catch (_) {
+          _isRefreshing = false;
+          await _storage.deleteAll();
         }
       }
     }
-    return handler.next(err);
+
+    handler.next(err);
   }
 }

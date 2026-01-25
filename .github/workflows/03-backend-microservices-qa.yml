@@ -33,12 +33,12 @@ jobs:
             auth-service: 'apps/services/core/auth-service/**'
             patient-service: 'apps/services/core/patient-service/**'
             api-gateway: 'apps/services/api-gateway/**'
-            appointment-cmd: 'apps/services/scheduling/appointment-cmd/**'
-            availability-qry: 'apps/services/scheduling/availability-qry/**'
-            external-partners: 'apps/services/support/external-partners/**'
-            triage-engine: 'apps/services/triage/triage-engine/**'
-            qr-ingest: 'apps/services/triage/qr-ingest/**'
-            ai-agent: 'apps/services/ai-agent/**'
+            # appointment-cmd: 'apps/services/scheduling/appointment-cmd/**'
+            # availability-qry: 'apps/services/scheduling/availability-qry/**'
+            # external-partners: 'apps/services/support/external-partners/**'
+            # triage-engine: 'apps/services/triage/triage-engine/**'
+            # qr-ingest: 'apps/services/triage/qr-ingest/**'
+            # ai-agent: 'apps/services/ai-agent/**'
 
       # --- 2. SETUP SSH ---
       - name: Configure SSH Key
@@ -56,16 +56,17 @@ jobs:
           NODE_B: 10.4.1.10
         run: |
           # Define Service Metadata (Name -> Path,Arg)
+          # COMENTADO: Dejamos solo los 3 servicios principales activos
           declare -A CONFIG=(
             ["auth-service"]="apps/services/core/auth-service/Dockerfile,core/auth-service"
             ["patient-service"]="apps/services/core/patient-service/Dockerfile,core/patient-service"
             ["api-gateway"]="apps/services/api-gateway/Dockerfile,api-gateway"
-            ["appointment-cmd"]="apps/services/scheduling/appointment-cmd/Dockerfile,scheduling/appointment-cmd"
-            ["availability-qry"]="apps/services/scheduling/availability-qry/Dockerfile,scheduling/availability-qry"
-            ["external-partners"]="apps/services/support/external-partners/Dockerfile,support/external-partners"
-            ["triage-engine"]="apps/services/triage/triage-engine/Dockerfile,triage/triage-engine"
-            ["qr-ingest"]="apps/services/triage/qr-ingest/Dockerfile,triage/qr-ingest"
-            ["ai-agent"]="apps/services/ai-agent/Dockerfile,ai-agent"
+            # ["appointment-cmd"]="apps/services/scheduling/appointment-cmd/Dockerfile,scheduling/appointment-cmd"
+            # ["availability-qry"]="apps/services/scheduling/availability-qry/Dockerfile,scheduling/availability-qry"
+            # ["external-partners"]="apps/services/support/external-partners/Dockerfile,support/external-partners"
+            # ["triage-engine"]="apps/services/triage/triage-engine/Dockerfile,triage/triage-engine"
+            # ["qr-ingest"]="apps/services/triage/qr-ingest/Dockerfile,triage/qr-ingest"
+            # ["ai-agent"]="apps/services/ai-agent/Dockerfile,ai-agent"
           )
 
           ALL_SERVICES="${!CONFIG[@]}"
@@ -75,12 +76,12 @@ jobs:
           if [[ "${{ steps.filter.outputs.auth-service }}" == "true" ]]; then CHANGED_SERVICES="$CHANGED_SERVICES auth-service"; fi
           if [[ "${{ steps.filter.outputs.patient-service }}" == "true" ]]; then CHANGED_SERVICES="$CHANGED_SERVICES patient-service"; fi
           if [[ "${{ steps.filter.outputs.api-gateway }}" == "true" ]]; then CHANGED_SERVICES="$CHANGED_SERVICES api-gateway"; fi
-          if [[ "${{ steps.filter.outputs.appointment-cmd }}" == "true" ]]; then CHANGED_SERVICES="$CHANGED_SERVICES appointment-cmd"; fi
-          if [[ "${{ steps.filter.outputs.availability-qry }}" == "true" ]]; then CHANGED_SERVICES="$CHANGED_SERVICES availability-qry"; fi
-          if [[ "${{ steps.filter.outputs.external-partners }}" == "true" ]]; then CHANGED_SERVICES="$CHANGED_SERVICES external-partners"; fi
-          if [[ "${{ steps.filter.outputs.triage-engine }}" == "true" ]]; then CHANGED_SERVICES="$CHANGED_SERVICES triage-engine"; fi
-          if [[ "${{ steps.filter.outputs.qr-ingest }}" == "true" ]]; then CHANGED_SERVICES="$CHANGED_SERVICES qr-ingest"; fi
-          if [[ "${{ steps.filter.outputs.ai-agent }}" == "true" ]]; then CHANGED_SERVICES="$CHANGED_SERVICES ai-agent"; fi
+          # if [[ "${{ steps.filter.outputs.appointment-cmd }}" == "true" ]]; then CHANGED_SERVICES="$CHANGED_SERVICES appointment-cmd"; fi
+          # if [[ "${{ steps.filter.outputs.availability-qry }}" == "true" ]]; then CHANGED_SERVICES="$CHANGED_SERVICES availability-qry"; fi
+          # if [[ "${{ steps.filter.outputs.external-partners }}" == "true" ]]; then CHANGED_SERVICES="$CHANGED_SERVICES external-partners"; fi
+          # if [[ "${{ steps.filter.outputs.triage-engine }}" == "true" ]]; then CHANGED_SERVICES="$CHANGED_SERVICES triage-engine"; fi
+          # if [[ "${{ steps.filter.outputs.qr-ingest }}" == "true" ]]; then CHANGED_SERVICES="$CHANGED_SERVICES qr-ingest"; fi
+          # if [[ "${{ steps.filter.outputs.ai-agent }}" == "true" ]]; then CHANGED_SERVICES="$CHANGED_SERVICES ai-agent"; fi
           
           echo "📝 Changed in Git: $CHANGED_SERVICES"
 
@@ -186,6 +187,9 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
 
+      # IMPORTANTE: Mantenemos el docker-compose COMPLETO para evitar errores de validación
+      # en el script (que busca ai-agent). Sin embargo, el script solo descargará (pull)
+      # y levantará (up) los servicios que estén en la lista TARGETS (auth, patient, gateway).
       - name: Generate Compose File
         run: |
           cat > docker-compose.yml << EOF
@@ -196,6 +200,7 @@ jobs:
               restart: always
               ports: ["3000:3000"]
               environment:
+                - PORT=3000
                 - JWT_SECRET=${{ secrets.JWT_SECRET }}
                 - AUTH_SERVICE_URL=http://auth-service:3000
                 - PATIENT_SERVICE_URL=http://patient-service:3000
@@ -210,6 +215,7 @@ jobs:
               restart: always
               ports: ["3001:3000"]
               environment:
+                - PORT=3000
                 - NODE_ENV=${{ secrets.NODE_ENV }}
                 - JWT_SECRET=${{ secrets.JWT_SECRET }}
                 - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
@@ -231,6 +237,7 @@ jobs:
               restart: always
               ports: ["3002:3000"]
               environment:
+                - PORT=3000
                 - JWT_SECRET=${{ secrets.JWT_SECRET }}
                 - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
                 - KAFKA_CLIENT_ID=patient-service              
@@ -251,6 +258,7 @@ jobs:
               restart: always
               ports: ["3003:3000"]
               environment:
+                - PORT=3000
                 - JWT_SECRET=${{ secrets.JWT_SECRET }}
                 - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
                 - KAFKA_CLIENT_ID=appointment-cmd
@@ -268,9 +276,10 @@ jobs:
               restart: always
               ports: ["3004:3000"]
               environment:
+                - PORT=3000
                 - JWT_SECRET=${{ secrets.JWT_SECRET }}
                 - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
-                - KAFKA_CLIENT_ID=availability-qry-service             
+                - KAFKA_CLIENT_ID=availability-qry-service            
                 - KAFKA_GROUP_ID=availability-service-group
                 - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
                 - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}

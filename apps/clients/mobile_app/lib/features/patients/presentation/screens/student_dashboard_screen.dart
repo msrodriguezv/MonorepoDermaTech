@@ -12,14 +12,11 @@ import '../../data/models/patient_profile_model.dart';
 import 'book_appointment_screen.dart'; 
 
 /// **StudentDashboardScreen**
-///
-/// Main interface for the Student role.
-/// Displays profile information, QR access code, and appointment management.
-/// Converted to [StatefulWidget] to handle asynchronous profile data fetching.
 class StudentDashboardScreen extends StatefulWidget {
   // Fallback name passed from the Login flow if API fails or while loading.
   final String studentName;
-  final _storage = StorageService();
+  
+  // ❌ ELIMINADO: final _storage = StorageService(); de aquí para respetar el const constructor.
 
   const StudentDashboardScreen({
     super.key, 
@@ -36,6 +33,9 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   PatientProfileModel? _profile;
   String? _errorMessage;
 
+  // ✅ AGREGADO: La instancia se crea aquí, dentro del Estado.
+  final _storage = StorageService(); 
+
   @override
   void initState() {
     super.initState();
@@ -43,11 +43,8 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   }
 
   /// **_fetchProfileData**
-  /// Asynchronously retrieves the detailed patient profile from the backend.
-  /// Handles loading states and exception management.
   Future<void> _fetchProfileData() async {
     try {
-      // Manual Dependency Injection
       final apiClient = ApiClient();
       final patientDataSource = PatientRemoteDataSourceImpl(apiClient: apiClient);
 
@@ -71,12 +68,9 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   }
 
   /// **_handleLogout**
-  /// Executes the Secure Logout Flow.
-  /// 1. Attempts to invalidate the token on the server (Best Effort).
-  /// 2. Clears the local Secure Storage (Critical).
-  /// 3. Navigates back to Login and wipes the navigation history.
   Future<void> _handleLogout() async {
     try {
+      // ✅ Ahora _storage sí es accesible aquí
       final token = await _storage.read(key: 'accessToken');
       
       if (token != null) {
@@ -87,6 +81,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
     } catch (e) {
       debugPrint("⚠️ [LOGOUT] Server invalidation failed: $e");
     } finally {
+      // ✅ Local Cleanup
       await _storage.deleteAll();
       debugPrint("✅ [LOGOUT] Local session cleared.");
 
@@ -114,7 +109,6 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
     }
 
     // --- ERROR STATE ---
-    // Minimalist design without clutter/ugly icons.
     if (_errorMessage != null) {
       return Scaffold(
         body: Center(
@@ -150,7 +144,6 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
     }
 
     // --- SUCCESS STATE (Render Data) ---
-    // Uses the fetched profile data or safe fallbacks.
     final String displayFaculty = _profile?.faculty ?? "Facultad no registrada";
     final String displayCareer = _profile?.career ?? "Carrera no registrada";
     final String displaySemester = "${_profile?.currentSemester ?? 1}° Semestre";
@@ -158,7 +151,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
     final String displayName = _profile?.fullName ?? widget.studentName;
 
     return Scaffold(
-      backgroundColor: Colors.grey[50], // Slightly lighter background for cleanliness
+      backgroundColor: Colors.grey[50],
       
       // --- APP BAR ---
       appBar: AppBar(
@@ -324,7 +317,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
             ),
             const SizedBox(height: 15),
             
-            // Mock Data - To be replaced with FutureBuilder
+            // Mock Data
             const _AppointmentCard(
               date: "10 Oct, 2025",
               time: "14:30 PM",
@@ -376,8 +369,6 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
 
 // --- HELPER COMPONENTS ---
 
-/// **_AppointmentCard**
-/// Reusable widget to display appointment summary details.
 class _AppointmentCard extends StatelessWidget {
   final String date;
   final String time;
@@ -401,7 +392,6 @@ class _AppointmentCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        // Clean left border indicator
         border: Border(left: BorderSide(color: color, width: 4)),
         boxShadow: [
           BoxShadow(
@@ -414,7 +404,6 @@ class _AppointmentCard extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Left: Date & Doctor Info
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -435,7 +424,6 @@ class _AppointmentCard extends StatelessWidget {
             ],
           ),
           
-          // Right: Status Chip
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(

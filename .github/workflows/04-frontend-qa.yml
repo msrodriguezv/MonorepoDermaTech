@@ -1,8 +1,8 @@
 name: "04. FRONTEND QA (WEB DEPLOY)"
 
 on:
-  # push:
-  #   branches: [ developer ]
+  push:
+    branches: [ developer ]
   #   paths:
   #     - 'apps/clients/**'
   workflow_dispatch:
