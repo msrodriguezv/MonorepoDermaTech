@@ -30,7 +30,9 @@ async function bootstrap() {
     process.exit(1);
   }
 
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    logger: ['log', 'error', 'warn', 'debug', 'verbose'], 
+  })
 
   // 2. Global Validation
   app.useGlobalPipes(new ValidationPipe({
@@ -39,40 +41,8 @@ async function bootstrap() {
     transform: true,
   }));
 
-  // ===========================================================================
-  //  SECURITY: PROD CORS CONFIGURATION
-  // ===========================================================================
-  const whitelist = [
-    // --- Local Development ---
-    'http://localhost:3000',
-    'http://localhost:4200',
-    
-    // --- QA Environment ---
-    'https://martharodriguez_qa1.distribuidauce.org',  // ALB DNS/Domain
-    'http://martharodriguez_qa2.distribuidauce.org',   // Static IP Domain (HTTP per env vars)
-    'http://100.52.22.97',                             // QA Static IP
-    'http://dermatech-qa-alb-868632428.us-east-1.elb.amazonaws.com',
-
-    // --- PROD Environment ---
-    'https://martharodriguez_prod1.distribuidauce.org', // ALB DNS/Domain
-    'https://martharodriguez_prod2.distribuidauce.org', // Static IP Domain
-    'http://100.50.124.78',                             // PROD Static IP
-    'http://dermatech-prod-alb-433169419.us-east-1.elb.amazonaws.com'
-  ];
-
   app.enableCors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, or server-to-server)
-      if (!origin) {
-        return callback(null, true);
-      }
-      if (whitelist.includes(origin)) {
-        callback(null, true);
-      } else {
-        logger.warn(`⛔ Blocked CORS from: ${origin}`);
-        callback(new Error('Not allowed by CORS'));
-      }
-    },
+    origin: true, // Aceptar todas las conexiones (especialmente la del Gateway)
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   });

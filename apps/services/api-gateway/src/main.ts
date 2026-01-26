@@ -19,7 +19,7 @@ async function bootstrap() {
     'https://martharodriguez_qa1.distribuidauce.org', 
     'http://martharodriguez_qa2.distribuidauce.org', 
     'http://100.52.22.97',
-    'http://dermatech-qa-alb-868632428.us-east-1.elb.amazonaws.com',
+    'http://dermatech-qa-alb-868632428.us-east-1.elb.amazonaws.com', 
     'https://martharodriguez_prod1.distribuidauce.org',
     'https://martharodriguez_prod2.distribuidauce.org',
     'http://100.50.124.78',
@@ -63,7 +63,7 @@ async function bootstrap() {
     res.end(JSON.stringify({ error: 'Service unavailable' }));
   };
 
-  // --- AUTH SERVICE ---
+  // --- AUTH SERVICE (SIN CAMBIOS) ---
   app.use(
     '/api/v1/auth',
     createProxyMiddleware({
@@ -76,37 +76,28 @@ async function bootstrap() {
     } as Options), 
   );
 
-  // --- PATIENT SERVICE (CORREGIDO TS & LÓGICA) ---
+  // --- PATIENT SERVICE (CORREGIDO TS ERROR) ---
   app.use(
-    '/api/v1/patients',
-    createProxyMiddleware({  // 1. Quitamos <IncomingMessage, ServerResponse> de aquí
+    '/api/v1/patients', 
+    createProxyMiddleware({
       target: process.env.PATIENT_SERVICE_URL || 'http://patient-service:3000',
       changeOrigin: true,
-
-      // 2. MANTENEMOS LA FUNCIÓN (Importante para evitar el 404)
-      // Si usabas el objeto {'^...': ''} borraba el path y causaba el error 404.
+      
+      // 1. RECONSTRUCCIÓN DE RUTA (FIX: Quitamos 'req' para calmar a ESLint)
       pathRewrite: (path) => {
-        const finalPath = '/api/v1/patients' + path;
-        return finalPath.replace('//', '/');
+        // El 'path' aquí suele llegar cortado. Lo volvemos a armar.
+        const finalPath = '/api/v1/patients' + path; 
+        return finalPath.replace('//', '/'); 
       },
 
-      // 3. EL LOGGER SIN ERRORES DE TIPADO
+      // 2. EL CHIVATO (LOGGER)
+      // FIX: Quitamos 'res' que no se usaba
       onProxyReq: (proxyReq: ClientRequest, req: IncomingMessage) => {
-        const auth = req.headers['authorization'];
-
-        logger.log(
-          `[PatientService] ${req.method} ${proxyReq.path} | Auth: ${
-            auth ? '✅ OK' : '❌ MISSING'
-          }`,
-        );
-
-        if (auth) {
-          logger.log(`[PatientService] Token Preview: ${auth.substring(0, 25)}...`);
-        }
+        logger.log(`[PatientService] ➡️ Proxying ${req.method} to: ${proxyReq.path}`);
       },
 
       onError: handleProxyError,
-    } as Options), // 4. AÑADIMOS ESTO para que TS acepte 'onProxyReq'
+    } as Options),
   );
 
   // --- APPOINTMENT SERVICE ---

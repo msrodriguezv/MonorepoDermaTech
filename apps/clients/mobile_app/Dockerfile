@@ -3,7 +3,7 @@
 # Context: Requires 'flutter build web' artifact from the workflow.
 # ==============================================================================
 
-FROM nginx:alpine
+FROM nginx:stable
 
 # 1. Clean Default Config
 # Remove default Nginx welcome page

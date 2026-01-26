@@ -1,6 +1,10 @@
 name: "01. INFRAESTRUCTURA QA"
 
 on:
+  # push:
+  #   branches: [ qa ]
+  #   paths:
+  #     - 'infrastructure/terraform/**'
   workflow_dispatch:
 
 env:

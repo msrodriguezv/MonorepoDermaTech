@@ -1,15 +1,22 @@
 name: "01. INFRAESTRUCTURA PROD"
 
 on:
+  # push:
+  #   branches: [ main ]
+  #   paths:
+  #     - 'infrastructure/terraform/**'
   workflow_dispatch:
-  #push:
-    #branches: [ main ]
-    #paths:
-      #- 'infrastructure/terraform/**'
 
 env:
   AWS_REGION: us-east-1
   PROD_BASTION_PUBLIC_IP: 100.50.124.78
+  
+  # CIDR Blocks (Production)
+  PROD_CIDR: "10.0.0.0/16"
+  EVENTS_CIDR: "10.1.0.0/16"
+  STATE_CIDR: "10.2.0.0/16"
+  NODE_A_CIDR: "10.3.0.0/16"
+  NODE_B_CIDR: "10.4.0.0/16"
 
 jobs:
   test-bastion:
@@ -42,16 +49,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - path: 'account-02-events'
+          - account: 'Events'
+            path: 'account-02-events'
             profile: 'prod-events-dermatech'
             output_var: 'VPC_EVENTS'
-          - path: 'account-03-state'
+          - account: 'State'
+            path: 'account-03-state'
             profile: 'prod-state-dermatech'
             output_var: 'VPC_STATE'
-          - path: 'account-04-node-a'
+          - account: 'Node A'
+            path: 'account-04-node-a'
             profile: 'prod-node-a-dermatech'
             output_var: 'VPC_NODE_A'
-          - path: 'account-05-node-b'
+          - account: 'Node B'
+            path: 'account-05-node-b'
             profile: 'prod-node-b-dermatech'
             output_var: 'VPC_NODE_B'
     steps:
@@ -118,33 +129,206 @@ jobs:
             -var="state_vpc_id=${{ env.VPC_STATE }}" \
             -var="node_a_vpc_id=${{ env.VPC_NODE_A }}" \
             -var="node_b_vpc_id=${{ env.VPC_NODE_B }}"
+          
           ALB_DNS=$(terraform output -raw PROD_ALB_DNS_NAME)
           echo "ALB_URL=$ALB_DNS" > alb_dns.txt
 
-      - name: Force Route Injection PROD (Safety Net)
+      # ========================================================================
+      # 🛡️ CONFIGURACIÓN COMPLETA DE NETWORKING (ADAPTADA DE QA A PROD)
+      # ========================================================================
+      - name: 🔧 Configure Complete Network Mesh PROD
         env:
-          AWS_PROFILE: prod-dermatech
           AWS_REGION: us-east-1
         run: |
-          echo "🛡️ Verifying Routes in PROD Bastion Table..."
-          RT_ID=$(aws ec2 describe-route-tables --filters "Name=tag:Name,Values=dermatech-prod-public-rt" --query "RouteTables[0].RouteTableId" --output text)
-          ensure_route() {
-            CIDR=$1
-            PEER_NAME=$2
-            PCX_ID=$(aws ec2 describe-vpc-peering-connections --filters "Name=tag:Name,Values=$PEER_NAME" --query "VpcPeeringConnections[0].VpcPeeringConnectionId" --output text)
-            if [ "$PCX_ID" == "None" ] || [ -z "$PCX_ID" ]; then
-               echo "⚠️ Peering $PEER_NAME not found! Skipping..."
-               return
+          echo "======================================================================"
+          echo "🛡️ CONFIGURANDO MALLA COMPLETA DE NETWORKING EN PROD"
+          echo "======================================================================"
+          
+          # Función para obtener Route Table ID
+          get_route_table_id() {
+            local profile=$1
+            local vpc_id=$2
+            
+            RT_ID=$(aws ec2 describe-route-tables \
+              --profile $profile \
+              --region us-east-1 \
+              --filters "Name=vpc-id,Values=$vpc_id" "Name=tag:Name,Values=*public*" \
+              --query "RouteTables[0].RouteTableId" \
+              --output text 2>/dev/null)
+            
+            if [ "$RT_ID" == "None" ] || [ -z "$RT_ID" ]; then
+              RT_ID=$(aws ec2 describe-route-tables \
+                --profile $profile \
+                --region us-east-1 \
+                --filters "Name=vpc-id,Values=$vpc_id" "Name=association.main,Values=true" \
+                --query "RouteTables[0].RouteTableId" \
+                --output text)
             fi
-            aws ec2 create-route --route-table-id $RT_ID --destination-cidr-block $CIDR --vpc-peering-connection-id $PCX_ID || echo "✅ Route to $CIDR likely exists."
+            echo $RT_ID
           }
-          ensure_route "10.1.0.0/16" "prod-to-events-peering"
-          ensure_route "10.2.0.0/16" "prod-to-state-peering"
-          ensure_route "10.3.0.0/16" "prod-to-node-a-peering"
-          ensure_route "10.4.0.0/16" "prod-to-node-b-peering"
-      
-      - name: Upload ALB Meta
-        uses: actions/upload-artifact@v4
+          
+          # Función para obtener Peering ID
+          get_peering_id() {
+            local profile=$1
+            local tag_name=$2
+            aws ec2 describe-vpc-peering-connections \
+              --profile $profile \
+              --region us-east-1 \
+              --filters "Name=tag:Name,Values=$tag_name" "Name=status-code,Values=active" \
+              --query "VpcPeeringConnections[0].VpcPeeringConnectionId" \
+              --output text
+          }
+          
+          # Función para crear ruta
+          create_route_safe() {
+            local profile=$1
+            local rt_id=$2
+            local cidr=$3
+            local pcx_id=$4
+            local description=$5
+            
+            if [ "$rt_id" == "None" ] || [ -z "$rt_id" ] || [ "$pcx_id" == "None" ] || [ -z "$pcx_id" ]; then
+              echo "⚠️  SKIP: $description (RT or PCX not found)"
+              return
+            fi
+            
+            echo "➕ Creating route: $cidr -> $pcx_id in $rt_id ($description)"
+            aws ec2 create-route \
+              --profile $profile \
+              --region us-east-1 \
+              --route-table-id $rt_id \
+              --destination-cidr-block $cidr \
+              --vpc-peering-connection-id $pcx_id 2>&1 | grep -v "RouteAlreadyExists" || echo "  ✅ Route exists"
+          }
+          
+          # ===================================================================
+          # 1. PROD BASTION -> TODAS LAS CUENTAS
+          # ===================================================================
+          PROD_VPC_ID=$(aws ec2 describe-vpcs \
+            --profile prod-dermatech \
+            --region us-east-1 \
+            --filters "Name=tag:Name,Values=*prod*" \
+            --query "Vpcs[0].VpcId" \
+            --output text)
+          
+          PROD_RT=$(get_route_table_id "prod-dermatech" "$PROD_VPC_ID")
+          
+          PCX_EVENTS=$(get_peering_id "prod-dermatech" "prod-to-events-peering")
+          PCX_STATE=$(get_peering_id "prod-dermatech" "prod-to-state-peering")
+          PCX_NODE_A=$(get_peering_id "prod-dermatech" "prod-to-node-a-peering")
+          PCX_NODE_B=$(get_peering_id "prod-dermatech" "prod-to-node-b-peering")
+          
+          create_route_safe "prod-dermatech" "$PROD_RT" "${{ env.EVENTS_CIDR }}" "$PCX_EVENTS" "PROD -> Events"
+          create_route_safe "prod-dermatech" "$PROD_RT" "${{ env.STATE_CIDR }}" "$PCX_STATE" "PROD -> State"
+          create_route_safe "prod-dermatech" "$PROD_RT" "${{ env.NODE_A_CIDR }}" "$PCX_NODE_A" "PROD -> Node-A"
+          create_route_safe "prod-dermatech" "$PROD_RT" "${{ env.NODE_B_CIDR }}" "$PCX_NODE_B" "PROD -> Node-B"
+          
+          # ===================================================================
+          # 2. RETURN ROUTES (SPOKES -> PROD)
+          # ===================================================================
+          EVENTS_RT=$(get_route_table_id "prod-events-dermatech" "${{ env.VPC_EVENTS }}")
+          create_route_safe "prod-events-dermatech" "$EVENTS_RT" "${{ env.PROD_CIDR }}" "$PCX_EVENTS" "Events -> PROD"
+          
+          STATE_RT=$(get_route_table_id "prod-state-dermatech" "${{ env.VPC_STATE }}")
+          create_route_safe "prod-state-dermatech" "$STATE_RT" "${{ env.PROD_CIDR }}" "$PCX_STATE" "State -> PROD"
+          
+          NODE_A_RT=$(get_route_table_id "prod-node-a-dermatech" "${{ env.VPC_NODE_A }}")
+          create_route_safe "prod-node-a-dermatech" "$NODE_A_RT" "${{ env.PROD_CIDR }}" "$PCX_NODE_A" "Node-A -> PROD"
+          
+          NODE_B_RT=$(get_route_table_id "prod-node-b-dermatech" "${{ env.VPC_NODE_B }}")
+          create_route_safe "prod-node-b-dermatech" "$NODE_B_RT" "${{ env.PROD_CIDR }}" "$PCX_NODE_B" "Node-B -> PROD"
+          
+          # ===================================================================
+          # 3. INTER-SPOKE ROUTES
+          # ===================================================================
+          # Node-A <-> Events
+          PCX_NODE_A_EVENTS=$(get_peering_id "prod-node-a-dermatech" "node-a-to-events")
+          create_route_safe "prod-node-a-dermatech" "$NODE_A_RT" "${{ env.EVENTS_CIDR }}" "$PCX_NODE_A_EVENTS" "Node-A -> Events"
+          create_route_safe "prod-events-dermatech" "$EVENTS_RT" "${{ env.NODE_A_CIDR }}" "$PCX_NODE_A_EVENTS" "Events -> Node-A"
+          
+          # Node-A <-> State
+          PCX_NODE_A_STATE=$(get_peering_id "prod-node-a-dermatech" "node-a-to-state")
+          create_route_safe "prod-node-a-dermatech" "$NODE_A_RT" "${{ env.STATE_CIDR }}" "$PCX_NODE_A_STATE" "Node-A -> State"
+          create_route_safe "prod-state-dermatech" "$STATE_RT" "${{ env.NODE_A_CIDR }}" "$PCX_NODE_A_STATE" "State -> Node-A"
+          
+          # Node-B <-> Events
+          PCX_NODE_B_EVENTS=$(get_peering_id "prod-node-b-dermatech" "node-b-to-events")
+          create_route_safe "prod-node-b-dermatech" "$NODE_B_RT" "${{ env.EVENTS_CIDR }}" "$PCX_NODE_B_EVENTS" "Node-B -> Events"
+          create_route_safe "prod-events-dermatech" "$EVENTS_RT" "${{ env.NODE_B_CIDR }}" "$PCX_NODE_B_EVENTS" "Events -> Node-B"
+          
+          # Node-B <-> State
+          PCX_NODE_B_STATE=$(get_peering_id "prod-node-b-dermatech" "node-b-to-state")
+          create_route_safe "prod-node-b-dermatech" "$NODE_B_RT" "${{ env.STATE_CIDR }}" "$PCX_NODE_B_STATE" "Node-B -> State"
+          create_route_safe "prod-state-dermatech" "$STATE_RT" "${{ env.NODE_B_CIDR }}" "$PCX_NODE_B_STATE" "State -> Node-B"
+          
+          # Events <-> State
+          PCX_EVENTS_STATE=$(get_peering_id "prod-events-dermatech" "events-to-state-peering")
+          create_route_safe "prod-events-dermatech" "$EVENTS_RT" "${{ env.STATE_CIDR }}" "$PCX_EVENTS_STATE" "Events -> State"
+          create_route_safe "prod-state-dermatech" "$STATE_RT" "${{ env.EVENTS_CIDR }}" "$PCX_EVENTS_STATE" "State -> Events"
+
+      # ========================================================================
+      # 🔒 SECURITY GROUPS (ADAPTADO A PROD)
+      # ========================================================================
+      - name: 🔒 Configure Security Groups PROD
+        env:
+          AWS_REGION: us-east-1
+        run: |
+          echo "======================================================================"
+          echo "🔒 CONFIGURANDO SECURITY GROUPS EN PROD"
+          echo "======================================================================"
+          
+          get_sg_id() {
+            local profile=$1
+            local vpc_id=$2
+            aws ec2 describe-security-groups \
+              --profile $profile \
+              --region us-east-1 \
+              --filters "Name=vpc-id,Values=$vpc_id" \
+              --query "SecurityGroups[?GroupName!='default'].GroupId | [0]" \
+              --output text
+          }
+          
+          allow_traffic() {
+            local profile=$1
+            local sg_id=$2
+            local cidr=$3
+            local description=$4
+            
+            if [ "$sg_id" == "None" ] || [ -z "$sg_id" ]; then
+              echo "⚠️  SKIP: $description (SG not found)"
+              return
+            fi
+            
+            echo "🔓 Allowing all traffic from $cidr to $sg_id ($description)"
+            aws ec2 authorize-security-group-ingress \
+              --profile $profile \
+              --region us-east-1 \
+              --group-id $sg_id \
+              --protocol all \
+              --cidr $cidr 2>&1 | grep -v "InvalidPermission.Duplicate" || echo "  ✅ Rule exists"
+          }
+          
+          PROD_VPC_ID=$(aws ec2 describe-vpcs --profile prod-dermatech --region us-east-1 --filters "Name=tag:Name,Values=*prod*" --query "Vpcs[0].VpcId" --output text)
+          
+          PROD_SG=$(get_sg_id "prod-dermatech" "$PROD_VPC_ID")
+          EVENTS_SG=$(get_sg_id "prod-events-dermatech" "${{ env.VPC_EVENTS }}")
+          STATE_SG=$(get_sg_id "prod-state-dermatech" "${{ env.VPC_STATE }}")
+          NODE_A_SG=$(get_sg_id "prod-node-a-dermatech" "${{ env.VPC_NODE_A }}")
+          NODE_B_SG=$(get_sg_id "prod-node-b-dermatech" "${{ env.VPC_NODE_B }}")
+          
+          # Allow traffic from PROD Hub to all spokes
+          allow_traffic "prod-events-dermatech" "$EVENTS_SG" "${{ env.PROD_CIDR }}" "PROD -> Events"
+          allow_traffic "prod-state-dermatech" "$STATE_SG" "${{ env.PROD_CIDR }}" "PROD -> State"
+          allow_traffic "prod-node-a-dermatech" "$NODE_A_SG" "${{ env.PROD_CIDR }}" "PROD -> Node-A"
+          allow_traffic "prod-node-b-dermatech" "$NODE_B_SG" "${{ env.PROD_CIDR }}" "PROD -> Node-B"
+          
+          # Allow inter-spoke traffic
+          allow_traffic "prod-events-dermatech" "$EVENTS_SG" "${{ env.NODE_A_CIDR }}" "Node-A -> Events"
+          allow_traffic "prod-events-dermatech" "$EVENTS_SG" "${{ env.NODE_B_CIDR }}" "Node-B -> Events"
+          allow_traffic "prod-state-dermatech" "$STATE_SG" "${{ env.NODE_A_CIDR }}" "Node-A -> State"
+          allow_traffic "prod-state-dermatech" "$STATE_SG" "${{ env.NODE_B_CIDR }}" "Node-B -> State"
+
+      - uses: actions/upload-artifact@v4
         with:
           name: ALB_DNS
           path: infrastructure/terraform/environments-prod/account-01-prod/alb_dns.txt

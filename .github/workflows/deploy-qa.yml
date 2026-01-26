@@ -1,8 +1,8 @@
 name: "QA: V2. TURBO DEPLOY DermaTech Global Infrastructure"
 
 on:
-  push:
-    branches: [ qa ]
+  #push:
+    #branches: [ qa ]
   workflow_dispatch:
 
 env:

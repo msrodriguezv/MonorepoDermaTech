@@ -5,6 +5,7 @@ import '../../../../core/network/api_client.dart';
 import '../../data/datasources/auth_remote_data_source.dart';
 import '../../data/models/auth_models.dart';
 import 'login_screen.dart';
+import 'package:dio/dio.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -49,7 +50,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         content: Text(message),
         backgroundColor: isWarning ? Colors.orange[800] : Colors.green,
         behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 5), // Longer duration for readability
+        duration: const Duration(seconds: 5),
       ),
     );
 
@@ -59,19 +60,62 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  /// Handles the registration process including timeout resilience.
+  String _getFriendlyErrorMessage(Object error) {
+    String errorMessage = '';
+
+    if (error is DioException && error.response?.data != null) {
+      final data = error.response?.data;
+      if (data is Map && data.containsKey('message')) {
+        errorMessage = data['message'].toString();
+      } else {
+        errorMessage = data.toString();
+      }
+    } else {
+      errorMessage = error.toString();
+    }
+
+    final String errorLower = errorMessage.toLowerCase();
+
+    if (errorLower.contains('restricted') || errorLower.contains('@uce.edu.ec')) {
+      return 'Correo inválido. El registro es exclusivo para correos institucionales (@uce.edu.ec).';
+    }
+
+    if (errorLower.contains('alumni') || errorLower.contains('graduated')) {
+      return 'Registro no permitido. Eres graduado o ex-alumno. El sistema es solo para estudiantes activos.';
+    }
+
+    if (errorLower.contains('financial hold') || errorLower.contains('administrative')) {
+      return 'Bloqueo administrativo. Tienes una deuda o trámite pendiente con la universidad.';
+    }
+
+    if (errorLower.contains('withdrawn') || errorLower.contains('dropout')) {
+      return 'Estado inactivo. Tu matrícula figura como retirada o dada de baja.';
+    }
+
+    if (errorLower.contains('already exists') || (error is DioException && error.response?.statusCode == 409)) {
+      return 'Este correo ya está registrado. Intenta iniciar sesión.';
+    }
+
+    if (error is DioException && 
+        (error.type == DioExceptionType.connectionTimeout || 
+        error.type == DioExceptionType.receiveTimeout)) {
+      return 'El servidor tardó en responder. Es posible que tu cuenta ya se haya creado. Intenta entrar.';
+    }
+
+    return 'Ocurrió un error inesperado. Intenta más tarde.';
+  }
+
   Future<void> _submitRegister() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
 
-    // UX: Show floating snackbar to indicate processing
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Processing registration... Please wait.'), 
-        backgroundColor: _dermaNavyBlue,
+        content: Text('Verificando datos con la Universidad...'),
+        duration: Duration(seconds: 2), 
         behavior: SnackBarBehavior.floating,
-        duration: Duration(seconds: 4),
+        backgroundColor: _dermaNavyBlue, 
       ),
     );
 
@@ -85,53 +129,30 @@ class _RegisterScreenState extends State<RegisterScreen> {
         role: 'STUDENT', 
       );
 
-      // Attempt to register via API
       await dataSource.register(request);
 
       if (!mounted) return;
 
-      // Happy Path: Immediate success response from backend
-      _navigateToLogin(message: 'Account created successfully! Please login.');
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      _navigateToLogin(message: '¡Cuenta creada! Por favor inicia sesión.');
 
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       
-      String errorMessage = error.toString();
+      final String displayMessage = _getFriendlyErrorMessage(error);
 
-      // --- CRITICAL FIX: TIMEOUT HANDLING ---
-      // If the backend takes too long (e.g., synchronous email sending), 
-      // Dio throws a receive timeout. However, the DB record usually exists.
-      // We redirect the user to login instead of showing an error.
-      if (errorMessage.contains('receive timeout') || 
-          errorMessage.contains('connection timeout') || 
-          errorMessage.contains('deadline exceeded')) {
-        
-        _navigateToLogin(
-          message: 'The process took longer than expected, but your account is likely created. Please try logging in.',
-          isWarning: true
-        );
-        return; 
-      }
-      
-      // Handle "User already exists" (409 Conflict)
-      if (errorMessage.contains('409')) {
-        errorMessage = 'El usuario ya existe. Intenta iniciar sesión.';
-      } else {
-        // Sanitize technical error messages for the user
-        errorMessage = errorMessage
-            .replaceAll('Exception:', '')
-            .replaceAll('DioException', '')
-            .trim();
-      }
-
-      // Show standard error snackbar for non-timeout errors
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(errorMessage),
+          content: Text(
+            displayMessage,
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
           backgroundColor: Colors.redAccent,
-          behavior: SnackBarBehavior.floating,
+          behavior: SnackBarBehavior.floating, 
           margin: const EdgeInsets.all(20),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          duration: const Duration(seconds: 5),
         ),
       );
     } finally {

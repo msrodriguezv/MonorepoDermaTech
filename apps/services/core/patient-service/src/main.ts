@@ -19,10 +19,14 @@ import { Transport, MicroserviceOptions } from '@nestjs/microservices';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const logger = new Logger('Bootstrap');
+
+
+  const logger = new Logger('PatientService');
   
   // 1. Create the application instance
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    logger: ['log', 'error', 'warn', 'debug', 'verbose'], 
+  })
   
   const configService = app.get(ConfigService);
 

@@ -1,21 +1,17 @@
-name: "04. FRONTEND QA (WEB DEPLOY)"
+name: "04. FRONTEND QA"
 
 on:
   push:
     branches: [ developer ]
-  #   paths:
-  #     - 'apps/clients/**'
   workflow_dispatch:
 
 env:
-  # Environment Constants for QA
   PUBLIC_API_URL: "http://martharodriguez_qa2.distribuidauce.org"
   QA_BASTION_PUBLIC_IP: 100.52.22.97
 
 jobs:
   # ============================================================================
   # 1. CHANGE DETECTION LOGIC
-  # Description: Prevents redundant builds if changes occur outside the client app.
   # ============================================================================
   check-changes:
     name: 🔍 Detect Changes
@@ -33,29 +29,24 @@ jobs:
 
   # ============================================================================
   # 2. WEB BUILD & DOCKERIZATION
-  # Description: Compiles Flutter Web and pushes the Docker image to Registry.
   # ============================================================================
   build-web:
     name: 🔨 Build & Push Web
     needs: check-changes
-    # Execution Condition: Runs only if frontend changes detected OR manual trigger
     if: needs.check-changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       
-      # --- Environment Setup ---
       - uses: subosito/flutter-action@v2
         with: { channel: 'stable' }
       
-      # --- Build Process: Flutter Web Only ---
       - name: Build Flutter Web (QA)
         run: |
           cd apps/clients/mobile_app
           flutter pub get
           flutter build web --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
 
-      # --- Docker Containerization ---
       - name: Docker Registry Login
         uses: docker/login-action@v2
         with:
@@ -72,8 +63,7 @@ jobs:
           build-args: SERVICE_PATH='frontend'
 
   # ============================================================================
-  # 3. DEPLOYMENT (RELAY VIA BASTION)
-  # Description: Updates the running containers on Private Nodes via Jump Box.
+  # 3. DEPLOYMENT (SAFE MODE)
   # ============================================================================
   deploy-frontend:
     name: 🚀 Deploy QA Web Server
@@ -95,7 +85,7 @@ jobs:
       
       - name: Generate Docker Compose Manifest
         run: |
-          cat > docker-compose.yml <<'EOF'
+          cat > docker-compose-frontend.yml <<'EOF'
           version: '3.8'
           services:
             frontend:
@@ -106,23 +96,29 @@ jobs:
           
       - name: Execute Deployment Relay
         run: |
+          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
           # 1. Transfer Payload to Bastion (Jump Box)
-          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.QA_BASTION_PUBLIC_IP }}:/home/ec2-user/frontend.yml
-          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@${{ env.QA_BASTION_PUBLIC_IP }}:/home/ec2-user/deploy-key
+          scp $SSH_OPTS -i ~/.ssh/id_rsa docker-compose-frontend.yml ec2-user@${{ env.QA_BASTION_PUBLIC_IP }}:/home/ec2-user/frontend-manifest.yml
+          scp $SSH_OPTS -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@${{ env.QA_BASTION_PUBLIC_IP }}:/home/ec2-user/deploy-key
           
           # 2. Execute Remote Commands via Bastion
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} << 'BASTION_EOF'
+          ssh $SSH_OPTS -i ~/.ssh/id_rsa ec2-user@${{ env.QA_BASTION_PUBLIC_IP }} << 'BASTION_EOF'
             chmod 600 /home/ec2-user/deploy-key
             
             # 3. Jump to Private Node
-            scp -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key /home/ec2-user/frontend.yml ec2-user@${{ matrix.ip }}:/home/ec2-user/docker-compose.yml
+            scp $SSH_OPTS -i /home/ec2-user/deploy-key /home/ec2-user/frontend-manifest.yml ec2-user@${{ matrix.ip }}:/home/ec2-user/docker-compose-frontend.yml
             
             # 4. Pull and Restart Container
-            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ matrix.ip }} "
+            ssh $SSH_OPTS -i /home/ec2-user/deploy-key ec2-user@${{ matrix.ip }} "
               echo '${{ secrets.DOCKER_PASSWORD }}' | sudo docker login -u '${{ secrets.DOCKER_USERNAME }}' --password-stdin
-              sudo docker compose pull
-              sudo docker compose up -d --remove-orphans
+              
+              sudo docker compose -f docker-compose-frontend.yml pull
+              sudo docker compose -f docker-compose-frontend.yml up -d
+
+              #  Secure Clean
+              sudo docker image prune -f
             "
             # 5. Cleanup
-            rm /home/ec2-user/deploy-key /home/ec2-user/frontend.yml
+            rm /home/ec2-user/deploy-key /home/ec2-user/frontend-manifest.yml
           BASTION_EOF

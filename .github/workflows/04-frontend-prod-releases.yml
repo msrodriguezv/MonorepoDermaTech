@@ -1,6 +1,8 @@
 name: "06. FRONTEND PROD RELEASE (MANUAL)"
 
 on:
+  #push:
+    #branches: [developer]
   workflow_dispatch:
 
 permissions:

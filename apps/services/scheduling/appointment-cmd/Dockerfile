@@ -1,5 +1,5 @@
 # STEP 1: Multi-stage build for production optimization
-FROM node:18-alpine AS runner
+FROM node:18-slim AS runner
 
 # Set production environments
 ENV NODE_ENV=production

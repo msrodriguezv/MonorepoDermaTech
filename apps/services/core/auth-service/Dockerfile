@@ -4,10 +4,10 @@
 # Security: Runs as non-root user 'node'.
 # ==============================================================================
 
-FROM node:18-alpine
+FROM node:18-slim
 
 # Install dumb-init to handle PID 1 signals correctly
-RUN apk add --no-cache dumb-init
+RUN apt-get update && apt-get install -y dumb-init
 
 WORKDIR /app
 

@@ -169,15 +169,15 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void _handleLoginError(Object error) {
-    String displayMessage = "An unexpected error occurred.";
+    String displayMessage = "Se produjo un error inesperado";
 
     if (error is DioException) {
       if (error.response?.statusCode == 401) {
-        displayMessage = "Incorrect credentials.";
+        displayMessage = "Credenciales Incorrectas";
       } else if (error.response?.statusCode == 404) {
-        displayMessage = "User not found.";
+        displayMessage = "Usuario no Encontrado";
       } else if (error.type == DioExceptionType.connectionTimeout) {
-        displayMessage = "Server connection timeout.";
+        displayMessage = "Se agoto el tiempo de conexion con el servidor";
       } else {
         final backendMsg = error.response?.data['message'];
         if (backendMsg != null) displayMessage = backendMsg.toString();
@@ -236,7 +236,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
 
                             const Text(
-                              'Login',
+                              'Iniciar Sesion',
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                 fontSize: 32,
@@ -254,12 +254,12 @@ class _LoginScreenState extends State<LoginScreen> {
                               keyboardType: TextInputType.emailAddress,
                               style: const TextStyle(color: _dermaNavyBlue),
                               validator: (value) {
-                                if (value == null || value.isEmpty) return 'Please enter your email';
-                                if (!value.contains('@')) return 'Invalid email format';
+                                if (value == null || value.isEmpty) return 'Por favor ingresa tu correo';
+                                if (!value.contains('@')) return 'Formato de correo invalido';
                                 return null;
                               },
                               decoration: _inputDecoration(
-                                label: 'Email',
+                                label: 'Correo',
                                 icon: Icons.email_outlined,
                               ),
                             ),
@@ -273,11 +273,11 @@ class _LoginScreenState extends State<LoginScreen> {
                               obscureText: true,
                               style: const TextStyle(color: _dermaNavyBlue),
                               validator: (value) {
-                                if (value == null || value.isEmpty) return 'Please enter your password';
+                                if (value == null || value.isEmpty) return 'Por favor ingresa tu clave';
                                 return null;
                               },
                               decoration: _inputDecoration(
-                                label: 'Password',
+                                label: 'Clave',
                                 icon: Icons.lock_outline,
                               ),
                             ),
@@ -303,7 +303,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                     child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5)
                                   )
                                 : const Text(
-                                    'LOGIN',
+                                    'Ingresar',
                                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                                   ),
                             ),
@@ -314,7 +314,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Text("Don't have an account? ", style: TextStyle(color: Colors.grey.shade600)),
+                                Text("¿No tienes cuenta aun? ", style: TextStyle(color: Colors.grey.shade600)),
                                 GestureDetector(
                                   onTap: () {
                                     if (!_isLoading) {
@@ -325,7 +325,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                     }
                                   },
                                   child: const Text(
-                                    'Register',
+                                    'Registrate',
                                     style: TextStyle(color: _dermaAccentBlue, fontWeight: FontWeight.bold),
                                   ),
                                 ),

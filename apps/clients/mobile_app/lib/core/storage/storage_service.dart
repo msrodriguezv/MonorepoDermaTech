@@ -10,15 +10,12 @@ class StorageService {
   factory StorageService() => _instance;
   StorageService._internal();
 
-  // Configuración para Android/iOS
-  final _secureStorage = const FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
+  final _secureStorage = const FlutterSecureStorage();
 
   /// Guardar datos (Token, Role, etc)
   Future<void> write({required String key, required String value}) async {
     if (kIsWeb) {
-      // EN WEB: Usamos SharedPreferences (Texto Plano) para evitar encriptación corrupta
+      // EN WEB: Usamos SharedPreferences porque no hay HTTPS (Secure Context)
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(key, value);
     } else {

@@ -1,10 +1,10 @@
-name: "04. FRONTEND PROD (WEB DEPLOY)"
+name: "04. FRONTEND PROD"
 
 on:
-  push:
-    branches: [ main ] # Production typically monitors 'main'
-    paths:
-      - 'apps/clients/**'
+  #push:
+    #branches: [ developer ]
+    #paths:
+      #- 'apps/clients/**'
   workflow_dispatch:
 
 env:
