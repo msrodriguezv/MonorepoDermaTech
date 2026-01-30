@@ -16,21 +16,24 @@ async function bootstrap() {
     'http://localhost:3000',
     'http://localhost:4200',
     'http://localhost:80',
-    'https://martharodriguez_qa1.distribuidauce.org', 
-    'http://martharodriguez_qa2.distribuidauce.org', 
+    'https://martharodriguez_qa1.distribuidauce.org',
+    'http://martharodriguez_qa2.distribuidauce.org',
     'http://100.52.22.97',
-    'http://dermatech-qa-alb-868632428.us-east-1.elb.amazonaws.com', 
+    'http://dermatech-qa-alb-868632428.us-east-1.elb.amazonaws.com',
     'https://martharodriguez_prod1.distribuidauce.org',
     'https://martharodriguez_prod2.distribuidauce.org',
     'http://100.50.124.78',
-    /^http:\/\/10\.\d+\.\d+\.\d+/, 
+    /^http:\/\/10\.\d+\.\d+\.\d+/,
     /^http:\/\/172\.(1[6-9]|2\d|3[01])\.\d+\.\d+/,
   ];
 
   app.enableCors({
-    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    origin: (
+      origin: string | undefined,
+      callback: (err: Error | null, allow?: boolean) => void
+    ) => {
       if (!origin) return callback(null, true);
-      const isAllowed = whitelist.some(allowed => {
+      const isAllowed = whitelist.some((allowed) => {
         if (typeof allowed === 'string') return allowed === origin;
         return allowed.test(origin);
       });
@@ -57,7 +60,11 @@ async function bootstrap() {
   // 🛣️ MICROSERVICES ROUTING
   // ===========================================================================
 
-  const handleProxyError = (err: Error, req: IncomingMessage, res: ServerResponse) => {
+  const handleProxyError = (
+    err: Error,
+    req: IncomingMessage,
+    res: ServerResponse
+  ) => {
     logger.error(`Proxy Error: ${err.message}`);
     res.writeHead(503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Service unavailable' }));
@@ -73,40 +80,50 @@ async function bootstrap() {
         return path.replace(/^\//, '/auth/');
       },
       onError: handleProxyError,
-    } as Options), 
+    } as Options)
   );
 
-  // --- PATIENT SERVICE (CORREGIDO TS ERROR) ---
+  // --- PATIENT SERVICE  ---
   app.use(
-    '/api/v1/patients', 
+    '/api/v1/patients',
     createProxyMiddleware({
       target: process.env.PATIENT_SERVICE_URL || 'http://patient-service:3000',
       changeOrigin: true,
-      
+
       // 1. RECONSTRUCCIÓN DE RUTA (FIX: Quitamos 'req' para calmar a ESLint)
       pathRewrite: (path) => {
         // El 'path' aquí suele llegar cortado. Lo volvemos a armar.
-        const finalPath = '/api/v1/patients' + path; 
-        return finalPath.replace('//', '/'); 
+        const finalPath = '/api/v1/patients' + path;
+        return finalPath.replace('//', '/');
       },
 
       // 2. EL CHIVATO (LOGGER)
-      // FIX: Quitamos 'res' que no se usaba
       onProxyReq: (proxyReq: ClientRequest, req: IncomingMessage) => {
-        logger.log(`[PatientService] ➡️ Proxying ${req.method} to: ${proxyReq.path}`);
+        logger.log(
+          `[PatientService] ➡️ Proxying ${req.method} to: ${proxyReq.path}`
+        );
       },
 
       onError: handleProxyError,
-    } as Options),
+    } as Options)
   );
 
   // --- APPOINTMENT SERVICE ---
   app.use(
-    '/api/v1/appointment',
+    '/api/v1/appointments',
     createProxyMiddleware({
       target: process.env.APPOINTMENT_URL || 'http://appointment-cmd:3000',
       changeOrigin: true,
-      pathRewrite: { '^/api/v1/appointment': '/appointment' },
+      
+      pathRewrite: (path) => {
+        const finalPath = '/api/v1/appointments' + path;
+        return finalPath.replace('//', '/');
+      },
+      
+      onProxyReq: (proxyReq: ClientRequest, req: IncomingMessage) => {
+         logger.log(`[AppointmentService] ➡️ Proxying ${req.method} to: ${proxyReq.path}`);
+      },
+
       onError: handleProxyError,
     } as Options),
   );
@@ -119,7 +136,7 @@ async function bootstrap() {
       changeOrigin: true,
       pathRewrite: { '^/api/v1/availability': '/availability' },
       onError: handleProxyError,
-    } as Options),
+    } as Options)
   );
 
   // --- AI AGENT ---
@@ -128,9 +145,9 @@ async function bootstrap() {
     createProxyMiddleware({
       target: process.env.AI_SERVICE_URL || 'http://ai-agent:5000',
       changeOrigin: true,
-      pathRewrite: { '^/api/ai': '' }, 
+      pathRewrite: { '^/api/ai': '' },
       onError: handleProxyError,
-    } as Options),
+    } as Options)
   );
 
   const PORT = process.env.PORT || 3000;

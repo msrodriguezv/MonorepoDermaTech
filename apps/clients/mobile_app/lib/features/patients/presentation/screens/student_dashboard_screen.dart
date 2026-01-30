@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:intl/intl.dart';
 import 'package:dermatech_mobile/core/storage/storage_service.dart';
 
 // --- CORE & ARCHITECTURE IMPORTS ---
@@ -8,18 +10,16 @@ import '../../../auth/presentation/screens/login_screen.dart';
 
 // --- FEATURE IMPORTS ---
 import '../../data/datasources/patient_remote_data_source.dart';
+import '../../../appointments/data/datasources/appointment_remote_data_source.dart';
 import '../../data/models/patient_profile_model.dart';
-import 'book_appointment_screen.dart'; 
+import '../../../appointments/data/models/appointment_model.dart';
+import 'book_appointment_screen.dart';
 
-/// **StudentDashboardScreen**
 class StudentDashboardScreen extends StatefulWidget {
-  // Fallback name passed from the Login flow if API fails or while loading.
   final String studentName;
-  
-  // ❌ ELIMINADO: final _storage = StorageService(); de aquí para respetar el const constructor.
 
   const StudentDashboardScreen({
-    super.key, 
+    super.key,
     required this.studentName,
   });
 
@@ -28,63 +28,63 @@ class StudentDashboardScreen extends StatefulWidget {
 }
 
 class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
-  // --- STATE VARIABLES ---
   bool _isLoading = true;
   PatientProfileModel? _profile;
+  List<AppointmentModel> _appointments = [];
   String? _errorMessage;
 
-  // ✅ AGREGADO: La instancia se crea aquí, dentro del Estado.
-  final _storage = StorageService(); 
+  final _storage = StorageService();
 
   @override
   void initState() {
     super.initState();
-    _fetchProfileData();
+    _fetchDashboardData();
   }
 
-  /// **_fetchProfileData**
-  Future<void> _fetchProfileData() async {
+  Future<void> _fetchDashboardData() async {
     try {
       final apiClient = ApiClient();
-      final patientDataSource = PatientRemoteDataSourceImpl(apiClient: apiClient);
-
-      final profile = await patientDataSource.getPatientProfile();
+      final dataSource = PatientRemoteDataSourceImpl(apiClient: apiClient);
+      final appointmentDataSource = AppointmentRemoteDataSourceImpl(apiClient: apiClient);
+      
+      final results = await Future.wait([
+        dataSource.getPatientProfile(),
+        appointmentDataSource.getMyAppointments(),
+      ]);
 
       if (mounted) {
         setState(() {
-          _profile = profile;
+          _profile = results[0] as PatientProfileModel;
+          _appointments = results[1] as List<AppointmentModel>;
+          
+          _appointments.sort((a, b) => b.date.compareTo(a.date));
+          
           _isLoading = false;
         });
       }
     } catch (error) {
       if (mounted) {
         setState(() {
-          _errorMessage = "Error loading data. Please try again.";
+          _errorMessage = "No pudimos cargar tu información. Revisa tu conexión.";
           _isLoading = false;
         });
       }
-      debugPrint("❌ [DASHBOARD] Profile fetch failed: $error");
+      debugPrint("[DASHBOARD] Error: $error");
     }
   }
 
-  /// **_handleLogout**
   Future<void> _handleLogout() async {
     try {
-      // ✅ Ahora _storage sí es accesible aquí
       final token = await _storage.read(key: 'accessToken');
-      
       if (token != null) {
         final apiClient = ApiClient();
         final authDataSource = AuthRemoteDataSourceImpl(apiClient: apiClient);
         await authDataSource.logout(token);
       }
     } catch (e) {
-      debugPrint("⚠️ [LOGOUT] Server invalidation failed: $e");
+      debugPrint("⚠️ [LOGOUT] Warning: $e");
     } finally {
-      // ✅ Local Cleanup
       await _storage.deleteAll();
-      debugPrint("✅ [LOGOUT] Local session cleared.");
-
       if (mounted) {
         Navigator.pushAndRemoveUntil(
           context,
@@ -97,265 +97,108 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // --- LOADING STATE ---
     if (_isLoading) {
       return const Scaffold(
         body: Center(
-          child: CircularProgressIndicator(
-            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF0A2342)),
-          ),
-        ),
+            child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF0A2342)))),
       );
     }
 
-    // --- ERROR STATE ---
     if (_errorMessage != null) {
       return Scaffold(
         body: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 40.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Text(
-                  "Unable to load dashboard",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.grey),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  _errorMessage!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.redAccent),
-                ),
-                const SizedBox(height: 30),
-                OutlinedButton(
-                  onPressed: _fetchProfileData,
-                  child: const Text("Retry Connection"),
-                ),
-                TextButton(
-                  onPressed: _handleLogout, 
-                  child: const Text("Logout", style: TextStyle(color: Colors.grey)),
-                )
-              ],
-            ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
+              ElevatedButton(
+                  onPressed: _fetchDashboardData, child: const Text("Reintentar"))
+            ],
           ),
         ),
       );
     }
 
-    // --- SUCCESS STATE (Render Data) ---
-    final String displayFaculty = _profile?.faculty ?? "Facultad no registrada";
-    final String displayCareer = _profile?.career ?? "Carrera no registrada";
-    final String displaySemester = "${_profile?.currentSemester ?? 1}° Semestre";
-    final String displayCode = _profile?.studentCode ?? "N/A";
-    final String displayName = _profile?.fullName ?? widget.studentName;
+    // Datos del Perfil
+    final displayFaculty = _profile?.faculty ?? "Facultad no registrada";
+    final displayCareer = _profile?.career ?? "Carrera no registrada";
+    final displaySemester = "${_profile?.currentSemester ?? 1}° Semestre";
+    final displayCode = _profile?.studentCode ?? "N/A";
+    final displayName = _profile?.fullName ?? widget.studentName;
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
-      
-      // --- APP BAR ---
       appBar: AppBar(
-        title: const Text("Mi Perfil - DermaTech", style: TextStyle(color: Colors.white, fontSize: 18)),
-        backgroundColor: const Color(0xFF0A2342), 
+        title: const Text("Mi Perfil - DermaTech",
+            style: TextStyle(color: Colors.white, fontSize: 18)),
+        backgroundColor: const Color(0xFF0A2342),
         elevation: 0,
-        automaticallyImplyLeading: false, 
+        automaticallyImplyLeading: false,
         actions: [
           IconButton(
             icon: const Icon(Icons.logout_rounded, color: Colors.white),
-            tooltip: "Cerrar Sesión",
-            onPressed: _handleLogout, 
+            onPressed: _handleLogout,
           )
         ],
       ),
-
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            
-            // 1. PROFILE CARD
-            Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF0A2342), Color(0xFF00A8E8)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF00A8E8).withOpacity(0.3), 
-                    blurRadius: 15, 
-                    offset: const Offset(0, 8)
-                  )
-                ],
-              ),
-              child: Row(
-                children: [
-                  const CircleAvatar(
-                    radius: 32,
-                    backgroundColor: Colors.white,
-                    child: Icon(Icons.person, size: 36, color: Color(0xFF0A2342)),
-                  ),
-                  const SizedBox(width: 20),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "Hola, $displayName", 
-                          style: const TextStyle(
-                            fontSize: 20, 
-                            fontWeight: FontWeight.bold, 
-                            color: Colors.white,
-                            letterSpacing: 0.5,
-                          )
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          displayFaculty, 
-                          style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 12)
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          "$displayCareer - $displaySemester", 
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            // 1. HEADER CARD (Perfil)
+            _buildProfileHeader(displayName, displayFaculty, displayCareer, displaySemester),
 
             const SizedBox(height: 30),
 
-            // 2. QR ACCESS PASS
-            Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.grey.shade200),
-                boxShadow: [
-                  BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))
-                ],
-              ),
-              child: Column(
-                children: [
-                  const Text(
-                    "TU PASE DE ACCESO", 
-                    style: TextStyle(
-                      color: Colors.grey, 
-                      letterSpacing: 1.5, 
-                      fontSize: 11, 
-                      fontWeight: FontWeight.bold
-                    )
-                  ),
-                  const SizedBox(height: 24),
-                  
-                  // QR Visualization
-                  Container(
-                    width: 180,
-                    height: 180,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      border: Border.all(color: Colors.black, width: 4),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        const Icon(Icons.qr_code_2_rounded, size: 160, color: Colors.black),
-                        Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: const BoxDecoration(
-                            color: Colors.white,
-                            shape: BoxShape.circle
-                          ),
-                          child: const Icon(Icons.local_hospital_rounded, color: Color(0xFF0A2342), size: 24),
-                        )
-                      ],
-                    ),
-                  ),
-                  
-                  const SizedBox(height: 20),
-                  
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF5F7FA), 
-                      borderRadius: BorderRadius.circular(30)
-                    ),
-                    child: Text(
-                      displayCode, 
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold, 
-                        letterSpacing: 1.2, 
-                        color: Color(0xFF0A2342),
-                        fontSize: 16
-                      )
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    "Presenta este código en Triaje", 
-                    style: TextStyle(color: Color(0xFF00A8E8), fontWeight: FontWeight.w600, fontSize: 13)
-                  ),
-                ],
-              ),
-            ),
-            
+            // 2. QR ACCESS PASS (Real)
+            _buildQrCard(displayCode),
+
             const SizedBox(height: 35),
 
-            // 3. APPOINTMENTS SECTION
+            // 3. APPOINTMENTS SECTION (Lista Real)
             const Text(
-              "Próximas Citas", 
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF0A2342))
+              "Mis Citas Médicas",
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF0A2342)),
             ),
             const SizedBox(height: 15),
-            
-            // Mock Data
-            const _AppointmentCard(
-              date: "10 Oct, 2025",
-              time: "14:30 PM",
-              status: "Programada",
-              doctor: "Dr. Juan Pérez",
-              color: Colors.blue,
-            ),
-            const _AppointmentCard(
-              date: "15 Nov, 2025",
-              time: "09:00 AM",
-              status: "Pendiente",
-              doctor: "Por asignar",
-              color: Colors.orange,
-            ),
+
+            if (_appointments.isEmpty)
+              _buildEmptyState()
+            else
+              ..._appointments.map((appt) => _AppointmentCard(appointment: appt)),
 
             const SizedBox(height: 25),
-            
-            // 4. ACTION BUTTON
+
+            // 4. BOTÓN AGENDAR
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.push(
+                onPressed: () async {
+                  await Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (context) => const BookAppointmentScreen()),
+                    MaterialPageRoute(
+                        builder: (context) => const BookAppointmentScreen()),
                   );
+                  // Al volver, recargamos los datos por si agendó algo nuevo
+                  _fetchDashboardData();
                 },
-                icon: const Icon(Icons.calendar_month_rounded, color: Colors.white, size: 20),
-                label: const Text(
-                  "Agendar Nueva Cita", 
-                  style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)
-                ),
+                icon: const Icon(Icons.calendar_month_rounded,
+                    color: Colors.white, size: 20),
+                label: const Text("Agendar Nueva Cita",
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold)),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF00A8E8),
                   padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  elevation: 2,
-                  shadowColor: const Color(0xFF00A8E8).withOpacity(0.4),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
                 ),
               ),
             ),
@@ -365,40 +208,181 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
       ),
     );
   }
+
+  Widget _buildProfileHeader(String name, String faculty, String career, String semester) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF0A2342), Color(0xFF00A8E8)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+              color: const Color(0xFF00A8E8).withOpacity(0.3),
+              blurRadius: 15,
+              offset: const Offset(0, 8))
+        ],
+      ),
+      child: Row(
+        children: [
+          const CircleAvatar(
+            radius: 32,
+            backgroundColor: Colors.white,
+            child: Icon(Icons.person, size: 36, color: Color(0xFF0A2342)),
+          ),
+          const SizedBox(width: 20),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text("Hola, $name",
+                    style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white)),
+                const SizedBox(height: 8),
+                Text(faculty,
+                    style: TextStyle(
+                        color: Colors.white.withOpacity(0.9), fontSize: 12)),
+                const SizedBox(height: 4),
+                Text("$career - $semester",
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQrCard(String studentCode) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 4))
+        ],
+      ),
+      child: Column(
+        children: [
+          const Text("TU PASE DE ACCESO",
+              style: TextStyle(
+                  color: Colors.grey,
+                  letterSpacing: 1.5,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold)),
+          const SizedBox(height: 24),
+          
+          // QR REAL usando qr_flutter
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(color: Colors.black, width: 2),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: QrImageView(
+              data: studentCode, // DATOS REALES
+              version: QrVersions.auto,
+              size: 160.0,
+              foregroundColor: const Color(0xFF0A2342),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+                color: const Color(0xFFF5F7FA),
+                borderRadius: BorderRadius.circular(30)),
+            child: Text(studentCode,
+                style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
+                    color: Color(0xFF0A2342),
+                    fontSize: 16)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+          color: Colors.white, borderRadius: BorderRadius.circular(12)),
+      child: const Center(
+        child: Text("No tienes citas próximas.",
+            style: TextStyle(color: Colors.grey)),
+      ),
+    );
+  }
 }
 
-// --- HELPER COMPONENTS ---
-
+// --- CARD DINÁMICO ---
 class _AppointmentCard extends StatelessWidget {
-  final String date;
-  final String time;
-  final String status;
-  final String doctor;
-  final Color color;
+  final AppointmentModel appointment;
 
-  const _AppointmentCard({
-    required this.date,
-    required this.time,
-    required this.status,
-    required this.doctor,
-    required this.color,
-  });
+  const _AppointmentCard({required this.appointment});
 
   @override
   Widget build(BuildContext context) {
+    // Lógica de colores según estado
+    Color statusColor;
+    String statusText;
+
+    switch (appointment.status.toUpperCase()) {
+      case 'SCHEDULED':
+      case 'CONFIRMED':
+        statusColor = Colors.blue;
+        statusText = "Programada";
+        break;
+      case 'PENDING':
+        statusColor = Colors.orange;
+        statusText = "Pendiente";
+        break;
+      case 'COMPLETED':
+        statusColor = Colors.green;
+        statusText = "Finalizada";
+        break;
+      case 'CANCELLED':
+        statusColor = Colors.red;
+        statusText = "Cancelada";
+        break;
+      default:
+        statusColor = Colors.grey;
+        statusText = appointment.status;
+    }
+
+    // Formateo de fecha
+    final formattedDate = DateFormat('dd MMM, yyyy', 'es').format(appointment.date);
+    final formattedTime = DateFormat('hh:mm a').format(appointment.date);
+
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border(left: BorderSide(color: color, width: 4)),
+        border: Border(left: BorderSide(color: statusColor, width: 4)),
         boxShadow: [
           BoxShadow(
-            color: Colors.grey.withOpacity(0.05), 
-            blurRadius: 8, 
-            offset: const Offset(0, 2)
-          )
+              color: Colors.grey.withOpacity(0.05),
+              blurRadius: 8,
+              offset: const Offset(0, 2))
         ],
       ),
       child: Row(
@@ -407,33 +391,38 @@ class _AppointmentCard extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                date, 
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF0A2342))
-              ),
+              Text(formattedDate,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                      color: Color(0xFF0A2342))),
               const SizedBox(height: 6),
               Row(
                 children: [
-                  Icon(Icons.access_time_rounded, size: 14, color: Colors.grey[600]),
+                  Icon(Icons.access_time_rounded,
+                      size: 14, color: Colors.grey[600]),
                   const SizedBox(width: 6),
-                  Text(time, style: TextStyle(color: Colors.grey[600], fontSize: 13)),
+                  Text(formattedTime,
+                      style: TextStyle(color: Colors.grey[600], fontSize: 13)),
                 ],
               ),
               const SizedBox(height: 8),
-              Text(doctor, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+              Text(appointment.doctorName,
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w500)),
             ],
           ),
-          
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: color.withOpacity(0.08),
+              color: statusColor.withOpacity(0.08),
               borderRadius: BorderRadius.circular(20),
             ),
-            child: Text(
-              status, 
-              style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 11)
-            ),
+            child: Text(statusText,
+                style: TextStyle(
+                    color: statusColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 11)),
           )
         ],
       ),

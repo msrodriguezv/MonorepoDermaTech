@@ -1,13 +1,10 @@
 import 'package:flutter/material.dart';
-
-// --- AUTH GUARD IMPORT ---
-// This is entry point that handles session persistence.
+import 'package:intl/date_symbol_data_local.dart'; 
 import 'features/auth/presentation/screens/auth_check_screen.dart';
 
-void main() {
-  // Ensure that the Flutter engine is fully initialized before executing any logic.
-  // This is critical when using platform channels (like FlutterSecureStorage) at startup.
+void main() async{
   WidgetsFlutterBinding.ensureInitialized();
+  await initializeDateFormatting('es');
   
   runApp(const DermatechApp());
 }

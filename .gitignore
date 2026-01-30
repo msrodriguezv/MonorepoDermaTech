@@ -25,6 +25,7 @@ build/
 develop-eggs/
 eggs/
 lib/
+!apps/clients/mobile_app/lib/
 lib64/
 parts/
 sdist/

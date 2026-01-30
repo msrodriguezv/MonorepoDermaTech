@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 // --- CORE & ARCHITECTURE IMPORTS ---
 import '../../../../core/network/api_client.dart';
@@ -7,6 +8,7 @@ import '../../../../core/network/api_client.dart';
 import '../models/profile_status_model.dart';
 import '../models/update_profile_model.dart';
 import '../models/patient_profile_model.dart';
+import '../../../appointments/data/models/appointment_model.dart';
 
 abstract class PatientRemoteDataSource {
   Future<ProfileStatusModel> getProfileStatus();
@@ -62,6 +64,25 @@ class PatientRemoteDataSourceImpl implements PatientRemoteDataSource {
          throw Exception(backendMessage);
        }
        rethrow;
+    }
+  }
+
+  Future<List<AppointmentModel>> getMyAppointments() async {
+    try {
+      // Usamos la URL base de environment (asegúrate de que apunte a /appointments)
+      // Si tu gateway separa servicios, ajusta la ruta. 
+      // Asumo: GET /appointments/my-history
+      final response = await apiClient.get('/appointments/my-history');
+
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data;
+        return data.map((json) => AppointmentModel.fromJson(json)).toList();
+      } else {
+        throw Exception('Failed to load appointments');
+      }
+    } catch (e) {
+      debugPrint(" Error fetching appointments: $e");
+      return [];
     }
   }
 }

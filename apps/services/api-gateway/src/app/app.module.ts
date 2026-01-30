@@ -1,14 +1,22 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 
-/**
- * Root Module for the API Gateway.
- * * Since this application acts primarily as a Reverse Proxy using 'http-proxy-middleware',
- * we do not need standard Controllers or Services here. The routing logic is 
- * handled in the bootstrap phase (main.ts).
- */
 @Module({
-  imports: [],
+  imports: [
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60000,
+        limit: 100,
+      },
+    ]),
+  ],
   controllers: [],
-  providers: [],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
 export class AppModule {}

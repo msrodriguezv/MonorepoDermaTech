@@ -11,7 +11,8 @@ import { DoctorController } from './controllers/doctor.controller';
 import { AppointmentController } from './controllers/appointment.controller';
 import { BookAppointmentHandler } from './cqrs/commands/handlers/book-appointment.handler';
 import { CreateDoctorHandler } from './cqrs/commands/handlers/create-doctor.handler';
-import { TriagePatientHandler } from './cqrs/commands/handlers/triage-patient.handler'; 
+import { TriagePatientHandler } from './cqrs/commands/handlers/triage-patient.handler';
+import { GetStudentAppointmentsHandler } from './cqrs/queries/handlers/get-student-appointments.handler';
 import { GetClinicalQueueHandler } from './cqrs/queries/handlers/get-clinical-queue.handler'; 
 // --- EVENT HANDLERS (Infrastructure Bridge) ---
 import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish-appointment-created.handler';
@@ -37,7 +38,7 @@ import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish
           options: {
             client: {
               clientId: config.get<string>('KAFKA_CLIENT_ID', 'appointment-cmd'),
-              brokers: [config.get<string>('KAFKA_BROKER', 'localhost:9092')],
+              brokers: config.get<string>('KAFKA_BROKERS', 'localhost:9092').split(','),
               retry: { retries: 10, initialRetryTime: 300 },
             },
             producer: {
@@ -84,7 +85,8 @@ import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish
     TriagePatientHandler,  
 
     // --- Query Handlers (Read Logic / Views) ---
-    GetClinicalQueueHandler,  
+    GetClinicalQueueHandler, 
+    GetStudentAppointmentsHandler, 
 
     // --- Event Handlers (Output Logic / Bridge) ---
     PublishAppointmentCreatedHandler 

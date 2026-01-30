@@ -26,7 +26,7 @@ async function bootstrap() {
 
   // 1. API Versioning & Prefix
   // URIs will look like: http://localhost:3002/api/v1/scheduling/appointments
-  const globalPrefix = 'api/v1/scheduling'; 
+  const globalPrefix = 'api/v1'; 
   app.setGlobalPrefix(globalPrefix);
 
   // 2. Global Validation Pipe (Security Layer)

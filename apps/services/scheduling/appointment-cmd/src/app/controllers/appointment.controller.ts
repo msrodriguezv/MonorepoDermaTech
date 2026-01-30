@@ -1,32 +1,32 @@
-import { Controller, Get, Patch, Param, Body, Post } from '@nestjs/common';
+import { Controller, Get, Patch, Param, Body, Post, UseGuards } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { JwtAuthGuard, RolesGuard, Roles, User } from '@dermatech/shared-guards';
+import { UserRole, JwtPayload } from '@dermatech/shared-dtos';
 
-// Imports of your Commands and Queries
-import { GetClinicalQueueQuery } from '../cqrs/queries/get-clinical-queue.query';
+import { GetStudentAppointmentsQuery } from '../cqrs/queries/impl/get-student-appointments.query';
+import { GetClinicalQueueQuery } from '../cqrs/queries/impl/get-clinical-queue.query';
 import { TriagePatientCommand } from '../cqrs/commands/impl/triage-patient.command';
-import { BookAppointmentCommand } from '../cqrs/commands/impl/book-appointment.command'; // Ensure this exists if you use POST
+import { BookAppointmentCommand } from '../cqrs/commands/impl/book-appointment.command';
 
-// DTOs & Enums
 import { TriageDecisionDto } from '../dto/triage-decision.dto';
 import { AppointmentStatus } from '../entities/appointment.entity';
-import { BookAppointmentDto } from '../dto/book-appointment.dto'; // Ensure this DTO exists
+import { BookAppointmentDto } from '../dto/book-appointment.dto';
 
 @ApiTags('Appointments & Clinical Workflow')
+@ApiBearerAuth()
 @Controller('appointments')
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class AppointmentController {
   constructor(
     private readonly commandBus: CommandBus,
     private readonly queryBus: QueryBus,
   ) {}
 
-  // --- READ ENDPOINTS (Queries) ---
-
   @Get('queue/nurse')
   @ApiOperation({ summary: 'Get Triage Queue (Patients waiting for Nurse)' })
   @ApiResponse({ status: 200, description: 'List of patients with SCHEDULED status.' })
   async getNurseQueue() {
-    // Executes the Query Handler to fetch data
     return this.queryBus.execute(
       new GetClinicalQueueQuery(AppointmentStatus.SCHEDULED)
     );
@@ -41,18 +41,21 @@ export class AppointmentController {
     );
   }
 
-  // --- WRITE ENDPOINTS (Commands) ---
+  @Get('my-history')
+  @Roles(UserRole.STUDENT)
+  @ApiOperation({ summary: 'Get logged-in student appointment history' })
+  @ApiResponse({ status: 200, description: 'List of student appointments.' })
+  async getMyAppointments(@User() user: JwtPayload) {
+    return this.queryBus.execute(
+      new GetStudentAppointmentsQuery(user.sub)
+    );
+  }
 
   @Post()
   @ApiOperation({ summary: 'Book a new Appointment (Student)' })
-  async bookAppointment(@Body() dto: BookAppointmentDto) {
-    // FIX: The command expects (studentId, dto). 
-    // Usually, you get studentId from @User() decorator. 
-    // For now, we pass a placeholder string to fix the compilation error.
-    const studentId = 'temp-student-id'; 
-
+  async bookAppointment(@Body() dto: BookAppointmentDto, @User() user: JwtPayload) {
     return this.commandBus.execute(
-      new BookAppointmentCommand(studentId, dto) // <--- Agregamos el primer argumento
+      new BookAppointmentCommand(user.sub, dto)
     );
   }
 
@@ -63,7 +66,6 @@ export class AppointmentController {
     @Param('id') id: string,
     @Body() dto: TriageDecisionDto
   ) {
-    // Executes the Command Handler to perform the logic
     return this.commandBus.execute(
       new TriagePatientCommand(id, dto)
     );

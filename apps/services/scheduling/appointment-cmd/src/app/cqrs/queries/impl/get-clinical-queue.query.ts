@@ -1,4 +1,4 @@
-import { AppointmentStatus } from '../../entities/appointment.entity';
+import { AppointmentStatus } from '../../../entities/appointment.entity';
 
 /**
  * Query to fetch the clinical queue based on status.

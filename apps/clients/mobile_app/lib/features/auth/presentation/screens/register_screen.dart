@@ -160,11 +160,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
   }
 
-  // Wrapper for cleaner call in happy path
-  void _navigateToLoginHelper(String successMessage) {
-    _navigateToLogin(message: successMessage);
-  }
-
   @override
   Widget build(BuildContext context) {
     // Screen size for responsive logic

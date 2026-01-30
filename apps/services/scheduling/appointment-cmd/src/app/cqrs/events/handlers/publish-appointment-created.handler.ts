@@ -65,7 +65,7 @@ export class PublishAppointmentCreatedHandler
       
       // Subscribe to response topics (NestJS requirement for ClientKafka)
       // Even though we use fire-and-forget pattern, this is mandatory
-      this.kafkaClient.subscribeToResponseOf('booking.events');
+      //this.kafkaClient.subscribeToResponseOf('booking.events');
       
       // Establish connection to Kafka broker cluster
       await this.kafkaClient.connect();
@@ -156,8 +156,6 @@ export class PublishAppointmentCreatedHandler
     if (!this.isKafkaConnected) {
       this.logger.error('❌ Kafka not connected. Event will be lost!');
       this.logger.warn('💡 TODO: Implement retry queue or DLQ for resilience');
-      // TODO: Push to retry queue (Bull/BullMQ) or DLQ for later processing
-      // Example: await this.retryQueue.add('failed-event', event);
       return;
     }
 
@@ -175,8 +173,6 @@ export class PublishAppointmentCreatedHandler
     };
 
     try {
-      // Publish event to Kafka topic using fire-and-forget pattern
-      // emit() returns an Observable but we don't await acknowledgment
       this.kafkaClient.emit('booking.events', integrationEvent);
       
       this.logger.log(`✅ [Kafka] Event published to topic 'booking.events'`);
@@ -185,8 +181,6 @@ export class PublishAppointmentCreatedHandler
       this.logger.error(`❌ Failed to publish event: ${error.message}`);
       this.logger.error(`Event payload: ${JSON.stringify(integrationEvent)}`);
       
-      // Re-throw error to allow CQRS framework to handle failure
-      // This enables potential retry mechanisms at the CQRS level
       throw error;
     }
   }

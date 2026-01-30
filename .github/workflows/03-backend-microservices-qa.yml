@@ -33,8 +33,9 @@ jobs:
             auth-service: 'apps/services/core/auth-service/**'
             patient-service: 'apps/services/core/patient-service/**'
             api-gateway: 'apps/services/api-gateway/**'
+            appointment-cmd: 'apps/services/scheduling/appointment-cmd/**'
+
             # ⬇️ SERVICIOS COMENTADOS TEMPORALMENTE
-            # appointment-cmd: 'apps/services/scheduling/appointment-cmd/**'
             # availability-qry: 'apps/services/scheduling/availability-qry/**'
             # external-partners: 'apps/services/support/external-partners/**'
             # triage-engine: 'apps/services/triage/triage-engine/**'
@@ -92,8 +93,8 @@ jobs:
             ["auth-service"]="apps/services/core/auth-service/Dockerfile,core/auth-service"
             ["patient-service"]="apps/services/core/patient-service/Dockerfile,core/patient-service"
             ["api-gateway"]="apps/services/api-gateway/Dockerfile,api-gateway"
+            ["appointment-cmd"]="apps/services/scheduling/appointment-cmd/Dockerfile,scheduling/appointment-cmd"
             # ⬇️ SERVICIOS COMENTADOS (No se generarán en la matriz)
-            # ["appointment-cmd"]="apps/services/scheduling/appointment-cmd/Dockerfile,scheduling/appointment-cmd"
             # ["availability-qry"]="apps/services/scheduling/availability-qry/Dockerfile,scheduling/availability-qry"
             # ["external-partners"]="apps/services/support/external-partners/Dockerfile,support/external-partners"
             # ["triage-engine"]="apps/services/triage/triage-engine/Dockerfile,triage/triage-engine"
@@ -102,7 +103,7 @@ jobs:
           )
 
           # Lista restringida a SOLO los activos para evitar que detecte los otros como "Missing"
-          ALL_SERVICES=("auth-service" "patient-service" "api-gateway")
+          ALL_SERVICES=("auth-service" "patient-service" "api-gateway" "appointment-cmd")
           # ALL_SERVICES=("auth-service" "patient-service" "api-gateway" "appointment-cmd" "availability-qry" "external-partners" "triage-engine" "qr-ingest" "ai-agent")
           
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -125,7 +126,7 @@ jobs:
 
           # --- STEP B: Inspect Running Containers (SSH) ---
           # Comando para listar solo los servicios que nos interesan
-          REMOTE_CMD='sudo docker ps --format "{{.Names}}" 2>/dev/null | grep -E "^(auth-service|patient-service|api-gateway)$" || true'
+          REMOTE_CMD='sudo docker ps --format "{{.Names}}" 2>/dev/null | grep -E "^(auth-service|patient-service|api-gateway|appointment-cmd)$" || true'
           
           echo "📡 Connecting to Nodes..."
           RUNNING_A=$(ssh -o ConnectTimeout=15 node-a "$REMOTE_CMD" 2>&1) || { echo "⚠️ Failed Node A"; RUNNING_A=""; }
@@ -315,7 +316,18 @@ jobs:
               ports: ["3003:3000"]
               environment:
                 - PORT=3000
+                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+                - KAFKA_CLIENT_ID=appointment-cmd              
+                - KAFKA_GROUP_ID=appointment-service-group
+                - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
+                - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
                 - JWT_SECRET=${{ secrets.JWT_SECRET }}
+                - DB_HOST=${{ secrets.DATABASE_HOST }}
+                - DB_USER=${{ secrets.DATABASE_USER }}
+                - DB_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+                - DB_NAME=${{ secrets.DATABASE_NAME }}
+                - DB_PORT=${{ secrets.DATABASE_PORT }}
+                - DB_SYNC=${{ secrets.DATABASE_SYNC }}
             availability-qry:
               image: ${{ secrets.DOCKER_USERNAME }}/availability-qry:latest
               restart: always

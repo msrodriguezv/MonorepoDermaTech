@@ -14,6 +14,8 @@ dependencies:
   # Secure Storage
   flutter_secure_storage: ^10.0.0
   shared_preferences: ^2.5.4
+  qr_flutter: ^4.1.0
+  intl: ^0.20.2
 
 # 3. Dev Dependencies (Testing tools)
 dev_dependencies:

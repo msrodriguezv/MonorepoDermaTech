@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import 'create_patient_screen.dart';
-import 'patient_detail_screen.dart';
 class PatientListScreen extends StatelessWidget {
   const PatientListScreen({super.key});
 
