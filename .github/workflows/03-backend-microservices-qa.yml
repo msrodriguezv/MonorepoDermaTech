@@ -1,8 +1,8 @@
 name: "03. BACKEND QA"
 
 on:
-  push:
-    branches: [developer]
+  #push:
+    #branches: [developer]
   workflow_dispatch:
 
 env:
@@ -34,13 +34,13 @@ jobs:
             patient-service: 'apps/services/core/patient-service/**'
             api-gateway: 'apps/services/api-gateway/**'
             appointment-cmd: 'apps/services/scheduling/appointment-cmd/**'
+            availability-qry: 'apps/services/scheduling/availability-qry/**'
+            qr-ingest: 'apps/services/triage/qr-ingest/**'
+            triage-engine: 'apps/services/triage/triage-engine/**'
+            ai-agent: 'apps/services/ai-agent/**'
 
             # ⬇️ SERVICIOS COMENTADOS TEMPORALMENTE
-            # availability-qry: 'apps/services/scheduling/availability-qry/**'
             # external-partners: 'apps/services/support/external-partners/**'
-            # triage-engine: 'apps/services/triage/triage-engine/**'
-            # qr-ingest: 'apps/services/triage/qr-ingest/**'
-            # ai-agent: 'apps/services/ai-agent/**'
 
       # --- 2. SETUP SSH ---
       - name: Configure SSH Key
@@ -94,16 +94,17 @@ jobs:
             ["patient-service"]="apps/services/core/patient-service/Dockerfile,core/patient-service"
             ["api-gateway"]="apps/services/api-gateway/Dockerfile,api-gateway"
             ["appointment-cmd"]="apps/services/scheduling/appointment-cmd/Dockerfile,scheduling/appointment-cmd"
+            ["availability-qry"]="apps/services/scheduling/availability-qry/Dockerfile,scheduling/availability-qry"
+            ["triage-engine"]="apps/services/triage/triage-engine/Dockerfile,triage/triage-engine"
+            ["qr-ingest"]="apps/services/triage/qr-ingest/Dockerfile,triage/qr-ingest"
+            ["ai-agent"]="apps/services/ai-agent/Dockerfile,ai-agent"
+            
             # ⬇️ SERVICIOS COMENTADOS (No se generarán en la matriz)
-            # ["availability-qry"]="apps/services/scheduling/availability-qry/Dockerfile,scheduling/availability-qry"
             # ["external-partners"]="apps/services/support/external-partners/Dockerfile,support/external-partners"
-            # ["triage-engine"]="apps/services/triage/triage-engine/Dockerfile,triage/triage-engine"
-            # ["qr-ingest"]="apps/services/triage/qr-ingest/Dockerfile,triage/qr-ingest"
-            # ["ai-agent"]="apps/services/ai-agent/Dockerfile,ai-agent"
           )
 
           # Lista restringida a SOLO los activos para evitar que detecte los otros como "Missing"
-          ALL_SERVICES=("auth-service" "patient-service" "api-gateway" "appointment-cmd")
+          ALL_SERVICES=("auth-service" "patient-service" "api-gateway" "appointment-cmd" "availability-qry" "qr-ingest" "triage-engine" "ai-agent")
           # ALL_SERVICES=("auth-service" "patient-service" "api-gateway" "appointment-cmd" "availability-qry" "external-partners" "triage-engine" "qr-ingest" "ai-agent")
           
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -265,8 +266,8 @@ jobs:
                 - AVAILABILITY_URL=http://availability-qry:3000
                 - PARTNERS_URL=http://external-partners:3000
                 - TRIAGE_URL=http://triage-engine:3000
-                - QR_URL=http://qr-ingest:8080
-                - AI_URL=http://ai-agent:5000
+                - QR_URL=http://qr-ingest:3000
+                - AI_URL=http://ai-agent:3000
             auth-service:
               image: ${{ secrets.DOCKER_USERNAME }}/auth-service:latest
               restart: always
@@ -328,6 +329,7 @@ jobs:
                 - DB_NAME=${{ secrets.DATABASE_NAME }}
                 - DB_PORT=${{ secrets.DATABASE_PORT }}
                 - DB_SYNC=${{ secrets.DATABASE_SYNC }}
+
             availability-qry:
               image: ${{ secrets.DOCKER_USERNAME }}/availability-qry:latest
               restart: always
@@ -335,29 +337,59 @@ jobs:
               environment:
                 - PORT=3000
                 - JWT_SECRET=${{ secrets.JWT_SECRET }}
+                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+                - KAFKA_CLIENT_ID=availability-qry-service
+                - KAFKA_GROUP_ID=availability-service-group
+                - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
+                - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+                - DB_HOST=${{ secrets.DATABASE_HOST }}
+                - DB_USER=${{ secrets.DATABASE_USER }}
+                - DB_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+                - DB_NAME=${{ secrets.DATABASE_NAME }}
+                - DB_PORT=${{ secrets.DATABASE_PORT }}
+                - DB_SYNC=${{ secrets.DATABASE_SYNC }}
+
             external-partners:
               image: ${{ secrets.DOCKER_USERNAME }}/external-partners:latest
               restart: always
               ports: ["3005:3000"]
               environment:
+                - PORT=3000
                 - JWT_SECRET=${{ secrets.JWT_SECRET }}
-            triage-engine:
-              image: ${{ secrets.DOCKER_USERNAME }}/triage-engine:latest
-              restart: always
-              ports: ["3006:3000"]
-              environment:
-                - JWT_SECRET=${{ secrets.JWT_SECRET }}
+
             qr-ingest:
               image: ${{ secrets.DOCKER_USERNAME }}/qr-ingest:latest
               restart: always
-              ports: ["8080:8080"]
+              ports: ["3006:3000"]
               environment:
+                - PORT=3000
                 - JWT_SECRET=${{ secrets.JWT_SECRET }}
+
+            triage-engine:
+              image: ${{ secrets.DOCKER_USERNAME }}/triage-engine:latest
+              restart: always
+              ports: ["3007:3000"] 
+              environment:
+                - PORT=3000
+                - QR_SERVICE_URL=http://qr-ingest:3000/generate
+                - AI_SERVICE_URL=http://ai-agent:3000/analyze
+                # KAFKA
+                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+                - KAFKA_CLIENT_ID=triage-engine-server
+                - KAFKA_GROUP_ID=triage-engine-group
+                - DB_HOST=${{ secrets.DATABASE_HOST }}
+                - DB_USER=${{ secrets.DATABASE_USER }}
+                - DB_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+                - DB_NAME=${{ secrets.DATABASE_NAME }}
+                - DB_PORT=${{ secrets.DATABASE_PORT }}
+                - DB_SYNC=${{ secrets.DATABASE_SYNC }}
+
             ai-agent:
               image: ${{ secrets.DOCKER_USERNAME }}/ai-agent:latest
               restart: always
-              ports: ["5000:5000"]
+              ports: ["3008:3000"] 
               environment:
+                - PORT=3000
                 - JWT_SECRET=${{ secrets.JWT_SECRET }}
           EOF
 

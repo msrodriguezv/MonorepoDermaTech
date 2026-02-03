@@ -13,7 +13,6 @@ import { TriageDecisionDto } from '../dto/triage-decision.dto';
 import { AppointmentStatus } from '../entities/appointment.entity';
 import { BookAppointmentDto } from '../dto/book-appointment.dto';
 
-@ApiTags('Appointments & Clinical Workflow')
 @ApiBearerAuth()
 @Controller('appointments')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -24,6 +23,7 @@ export class AppointmentController {
   ) {}
 
   @Get('queue/nurse')
+  @ApiTags('Appointments & Clinical Workflow')
   @ApiOperation({ summary: 'Get Triage Queue (Patients waiting for Nurse)' })
   @ApiResponse({ status: 200, description: 'List of patients with SCHEDULED status.' })
   async getNurseQueue() {
@@ -33,6 +33,7 @@ export class AppointmentController {
   }
 
   @Get('queue/doctor/:doctorId')
+  @ApiTags('Appointments & Clinical Workflow')
   @ApiOperation({ summary: 'Get Doctor Queue (Patients waiting for Consultation)' })
   @ApiResponse({ status: 200, description: 'List of patients triaged and waiting for specific doctor.' })
   async getDoctorQueue(@Param('doctorId') doctorId: string) {
@@ -43,6 +44,7 @@ export class AppointmentController {
 
   @Get('my-history')
   @Roles(UserRole.STUDENT)
+  @ApiTags('Appointments (Student)')
   @ApiOperation({ summary: 'Get logged-in student appointment history' })
   @ApiResponse({ status: 200, description: 'List of student appointments.' })
   async getMyAppointments(@User() user: JwtPayload) {
@@ -52,6 +54,8 @@ export class AppointmentController {
   }
 
   @Post()
+  @Roles(UserRole.STUDENT)
+  @ApiTags('Appointments (Student)')
   @ApiOperation({ summary: 'Book a new Appointment (Student)' })
   async bookAppointment(@Body() dto: BookAppointmentDto, @User() user: JwtPayload) {
     return this.commandBus.execute(
@@ -60,6 +64,7 @@ export class AppointmentController {
   }
 
   @Patch(':id/triage')
+  @ApiTags('Appointments & Clinical Workflow')
   @ApiOperation({ summary: 'Nurse completes Triage (Update Status & Notes)' })
   @ApiResponse({ status: 200, description: 'Appointment status updated to WAITING_FOR_DOCTOR or REFERRED.' })
   async triagePatient(

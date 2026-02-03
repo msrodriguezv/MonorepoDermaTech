@@ -1,21 +1,17 @@
 name: "04. FRONTEND PROD"
 
 on:
-  #push:
-    #branches: [ developer ]
-    #paths:
-      #- 'apps/clients/**'
+  push:
+    branches: [ developer ]
   workflow_dispatch:
 
 env:
-  # Production Environment Constants
   PUBLIC_API_URL: "https://martharodriguez_prod2.distribuidauce.org"
   PROD_BASTION_PUBLIC_IP: 100.50.124.78
 
 jobs:
   # ============================================================================
   # 1. CHANGE DETECTION LOGIC
-  # Description: Optimization to avoid redundant builds if only backend changed.
   # ============================================================================
   check-changes:
     name: 🔍 Detect Changes
@@ -33,29 +29,25 @@ jobs:
 
   # ============================================================================
   # 2. WEB BUILD & DOCKERIZATION
-  # Description: Compiles Flutter Web for Production and pushes to Docker Hub.
   # ============================================================================
   build-web:
     name: 🔨 Build & Push Web (PROD)
     needs: check-changes
-    # Execution Condition: Runs only if frontend changes detected OR manual trigger
     if: needs.check-changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       
-      # --- Environment Setup ---
       - uses: subosito/flutter-action@v2
         with: { channel: 'stable' }
       
-      # --- Build Process: Flutter Web Only ---
+      # Build con la URL de Producción (HTTPS)
       - name: Build Flutter Web (PROD)
         run: |
           cd apps/clients/mobile_app
           flutter pub get
           flutter build web --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
 
-      # --- Docker Containerization ---
       - name: Docker Registry Login
         uses: docker/login-action@v2
         with:
@@ -73,7 +65,6 @@ jobs:
 
   # ============================================================================
   # 3. DEPLOYMENT (RELAY VIA BASTION)
-  # Description: Updates the running containers on Production Nodes via Jump Box.
   # ============================================================================
   deploy-frontend:
     name: 🚀 Deploy PROD Web Server
@@ -93,9 +84,10 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
       
+      # Usamos nombre especifico para evitar conflictos
       - name: Generate Docker Compose Manifest
         run: |
-          cat > docker-compose.yml <<'EOF'
+          cat > docker-compose-frontend.yml <<'EOF'
           version: '3.8'
           services:
             frontend:
@@ -106,23 +98,30 @@ jobs:
           
       - name: Execute Deployment Relay
         run: |
-          # 1. Transfer Payload to Bastion (Prod Jump Box)
-          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/frontend.yml
-          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/deploy-key
+          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+          # 1. Transfer Payload to PROD Bastion
+          scp $SSH_OPTS -i ~/.ssh/id_rsa docker-compose-frontend.yml ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/frontend-manifest.yml
+          scp $SSH_OPTS -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/deploy-key
           
           # 2. Execute Remote Commands via Bastion
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} << 'BASTION_EOF'
+          ssh $SSH_OPTS -i ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} << 'BASTION_EOF'
             chmod 600 /home/ec2-user/deploy-key
             
             # 3. Jump to Private Node (Internal Network)
-            scp -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key /home/ec2-user/frontend.yml ec2-user@${{ matrix.ip }}:/home/ec2-user/docker-compose.yml
+            scp $SSH_OPTS -i /home/ec2-user/deploy-key /home/ec2-user/frontend-manifest.yml ec2-user@${{ matrix.ip }}:/home/ec2-user/docker-compose-frontend.yml
             
             # 4. Pull and Restart Container
-            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ matrix.ip }} "
+            ssh $SSH_OPTS -i /home/ec2-user/deploy-key ec2-user@${{ matrix.ip }} "
               echo '${{ secrets.DOCKER_PASSWORD }}' | sudo docker login -u '${{ secrets.DOCKER_USERNAME }}' --password-stdin
-              sudo docker compose pull
-              sudo docker compose up -d --remove-orphans
+              
+              # Pull using specific file
+              sudo docker compose -f docker-compose-frontend.yml pull
+              sudo docker compose -f docker-compose-frontend.yml up -d
+
+              # Secure Clean (Igual que QA)
+              sudo docker image prune -f
             "
             # 5. Security Cleanup
-            rm /home/ec2-user/deploy-key /home/ec2-user/frontend.yml
+            rm /home/ec2-user/deploy-key /home/ec2-user/frontend-manifest.yml
           BASTION_EOF

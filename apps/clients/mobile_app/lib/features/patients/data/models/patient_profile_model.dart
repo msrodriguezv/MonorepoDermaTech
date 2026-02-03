@@ -29,7 +29,7 @@ class PatientProfileModel {
       email: json['email'] ?? '',
       faculty: json['faculty'] ?? 'No asignada',
       career: json['career'] ?? 'No asignada',
-      // Handles both string or int input for semester to be safe
+      // Handles both string or int input for semester to be safe1
       currentSemester: int.tryParse(json['current_semester']?.toString() ?? '1') ?? 1,
       bloodType: json['bloodType'] ?? 'N/A',
     );

@@ -8,6 +8,7 @@ import { Request, Response } from 'express';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const logger = new Logger('ApiGateway');
+  const schedulingTarget = process.env.APPOINTMENT_URL || 'http://appointment-cmd:3000';
 
   // ===========================================================================
   // 🛡️ CORS CONFIGURATION
@@ -90,14 +91,11 @@ async function bootstrap() {
       target: process.env.PATIENT_SERVICE_URL || 'http://patient-service:3000',
       changeOrigin: true,
 
-      // 1. RECONSTRUCCIÓN DE RUTA (FIX: Quitamos 'req' para calmar a ESLint)
       pathRewrite: (path) => {
-        // El 'path' aquí suele llegar cortado. Lo volvemos a armar.
         const finalPath = '/api/v1/patients' + path;
         return finalPath.replace('//', '/');
       },
 
-      // 2. EL CHIVATO (LOGGER)
       onProxyReq: (proxyReq: ClientRequest, req: IncomingMessage) => {
         logger.log(
           `[PatientService] ➡️ Proxying ${req.method} to: ${proxyReq.path}`
@@ -108,44 +106,65 @@ async function bootstrap() {
     } as Options)
   );
 
-  // --- APPOINTMENT SERVICE ---
-  app.use(
+app.use(
     '/api/v1/appointments',
     createProxyMiddleware({
-      target: process.env.APPOINTMENT_URL || 'http://appointment-cmd:3000',
+      target: schedulingTarget,
       changeOrigin: true,
-      
       pathRewrite: (path) => {
         const finalPath = '/api/v1/appointments' + path;
         return finalPath.replace('//', '/');
       },
-      
       onProxyReq: (proxyReq: ClientRequest, req: IncomingMessage) => {
-         logger.log(`[AppointmentService] ➡️ Proxying ${req.method} to: ${proxyReq.path}`);
+        logger.log(`[Appointment] ➡️ Proxying ${req.method} to: ${proxyReq.path}`);
       },
-
       onError: handleProxyError,
     } as Options),
   );
 
-  // --- AVAILABILITY SERVICE ---
   app.use(
+    '/api/v1/doctors',
+    createProxyMiddleware({
+      target: schedulingTarget,
+      changeOrigin: true,
+      pathRewrite: (path) => {
+        const finalPath = '/api/v1/doctors' + path;
+        return finalPath.replace('//', '/');
+      },
+      onProxyReq: (proxyReq: ClientRequest, req: IncomingMessage) => {
+        logger.log(`[Doctors] ➡️ Proxying ${req.method} to: ${proxyReq.path}`);
+      },
+      onError: handleProxyError,
+    } as Options),
+  );
+
+app.use(
     '/api/v1/availability',
     createProxyMiddleware({
       target: process.env.AVAILABILITY_URL || 'http://availability-qry:3000',
       changeOrigin: true,
-      pathRewrite: { '^/api/v1/availability': '/availability' },
+      pathRewrite: (path) => {
+        const finalPath = '/api/v1/availability' + path;
+        return finalPath.replace('//', '/');
+      },
+      onProxyReq: (proxyReq: ClientRequest, req: IncomingMessage) => {
+        logger.log(`[Availability] ➡️ Proxying ${req.method} to: ${proxyReq.path}`);
+      },
       onError: handleProxyError,
     } as Options)
   );
 
-  // --- AI AGENT ---
   app.use(
     '/api/ai',
     createProxyMiddleware({
       target: process.env.AI_SERVICE_URL || 'http://ai-agent:5000',
       changeOrigin: true,
-      pathRewrite: { '^/api/ai': '' },
+      pathRewrite: (path) => {
+        return path.replace('//', '/');
+      },
+      onProxyReq: (proxyReq: ClientRequest, req: IncomingMessage) => {
+        logger.log(`[AI Agent] ➡️ Proxying ${req.method} to: ${proxyReq.path}`);
+      },
       onError: handleProxyError,
     } as Options)
   );

@@ -1,44 +1,56 @@
-import { Controller, Post, Body, UseGuards, HttpStatus, Logger } from '@nestjs/common';
-import { CommandBus } from '@nestjs/cqrs';
+import { Controller, Post, Get, Patch, Body, Param, UseGuards, HttpStatus, Logger } from '@nestjs/common';
+import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 
-// SHARED LIBS IMPORTS (Security & Contracts)
-import { JwtAuthGuard, RolesGuard, Roles } from '@dermatech/shared-guards';
-import { UserRole } from '@dermatech/shared-dtos';
+import { JwtAuthGuard, RolesGuard, Roles, User } from '@dermatech/shared-guards';
+import { UserRole, JwtPayload } from '@dermatech/shared-dtos';
 
-// LOCAL IMPORTS
 import { CreateDoctorDto } from '../dto/create-doctor.dto';
+import { UpdateDoctorDto } from '../dto/update-doctor.dto';
 import { CreateDoctorCommand } from '../cqrs/commands/impl/create-doctor.command';
+import { UpdateDoctorCommand } from '../cqrs/commands/impl/update-doctor.command';
+import { GetAllDoctorsQuery } from '../cqrs/queries/impl/get-all-doctors.query';
 import { Doctor } from '../entities/doctor.entity';
 
-/**
- * Controller for managing Doctor profiles (Write Operations).
- * Restricted to ADMIN role.
- */
-@ApiTags('Doctors (Admin)')
+@ApiTags('Doctors (Admin & Public)')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('doctors')
 export class DoctorController {
   private readonly logger = new Logger(DoctorController.name);
 
-  constructor(private readonly commandBus: CommandBus) {}
+  constructor(
+    private readonly commandBus: CommandBus,
+    private readonly queryBus: QueryBus,
+  ) {}
 
-  /**
-   * Endpoint: Register a new Doctor.
-   * Access: ADMIN only.
-   */
   @Post()
-  @Roles(UserRole.ADMIN) // Security Enforced
-  @ApiOperation({ summary: 'Register a new doctor profile' })
-  @ApiResponse({ status: HttpStatus.CREATED, description: 'Doctor created successfully', type: Doctor })
-  @ApiResponse({ status: HttpStatus.FORBIDDEN, description: 'Insufficient permissions' })
-  @ApiResponse({ status: HttpStatus.CONFLICT, description: 'User is already a doctor' })
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Register a new doctor profile (Admin)' })
+  @ApiResponse({ status: HttpStatus.CREATED, type: Doctor })
   async createDoctor(@Body() dto: CreateDoctorDto): Promise<Doctor> {
     this.logger.log(`REST Request: Create Doctor for UserID ${dto.userId}`);
-    
-    return await this.commandBus.execute(
-      new CreateDoctorCommand(dto),
-    );
+    return await this.commandBus.execute(new CreateDoctorCommand(dto));
+  }
+
+  @Get()
+  @Roles(UserRole.ADMIN, UserRole.STUDENT) 
+  @ApiOperation({ summary: 'List doctors (Students see Active only, Admins see All)' })
+  @ApiResponse({ status: HttpStatus.OK, type: [Doctor] })
+  async findAll(@User() user: JwtPayload): Promise<Doctor[]> {
+    const isAdmin = user.role === UserRole.ADMIN;
+    return await this.queryBus.execute(new GetAllDoctorsQuery(isAdmin));
+  }
+
+  @Patch(':id')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Update or Deactivate (Soft Delete) a Doctor' })
+  @ApiResponse({ status: HttpStatus.OK, type: Doctor })
+  async updateDoctor(
+    @Param('id') id: string,
+    @Body() dto: UpdateDoctorDto,
+  ): Promise<Doctor> {
+    this.logger.log(`REST Request: Update Doctor ${id}`);
+    return await this.commandBus.execute(new UpdateDoctorCommand(id, dto));
   }
 }

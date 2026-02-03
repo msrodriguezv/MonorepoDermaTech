@@ -7,27 +7,31 @@ import { ClientsModule, Transport } from '@nestjs/microservices';
 import { SharedAuthModule } from '@dermatech/shared-guards';
 import { Doctor } from './entities/doctor.entity';
 import { Appointment } from './entities/appointment.entity';
+
 import { DoctorController } from './controllers/doctor.controller';
 import { AppointmentController } from './controllers/appointment.controller';
+
+// Commands
 import { BookAppointmentHandler } from './cqrs/commands/handlers/book-appointment.handler';
 import { CreateDoctorHandler } from './cqrs/commands/handlers/create-doctor.handler';
+import { UpdateDoctorHandler } from './cqrs/commands/handlers/update-doctor.handler'; // <--- NUEVO
 import { TriagePatientHandler } from './cqrs/commands/handlers/triage-patient.handler';
+
+// Queries
 import { GetStudentAppointmentsHandler } from './cqrs/queries/handlers/get-student-appointments.handler';
 import { GetClinicalQueueHandler } from './cqrs/queries/handlers/get-clinical-queue.handler'; 
-// --- EVENT HANDLERS (Infrastructure Bridge) ---
-import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish-appointment-created.handler';
+import { GetAllDoctorsHandler } from './cqrs/queries/handlers/get-all-doctors.handler'; // <--- NUEVO
 
+// Events
+import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish-appointment-created.handler';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ 
       isGlobal: true,
     }),
-
-    CqrsModule,       // Enables Command/Event/Query Bus
-    SharedAuthModule, // Imports JWT Strategies and Guards
-
-    // 3. Kafka Configuration (Event Output)
+    CqrsModule,
+    SharedAuthModule,
     ClientsModule.registerAsync([
       {
         name: 'KAFKA_SERVICE_APPOINTMENT', 
@@ -54,8 +58,6 @@ import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish
         }),
       },
     ]),
-
-    // 4. Database Persistence Layer
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -70,25 +72,23 @@ import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish
         synchronize: true, 
       }),
     }),
-    
-    // Register Entities for this specific module scope
     TypeOrmModule.forFeature([Doctor, Appointment]),
   ],
   controllers: [
     DoctorController, 
-    AppointmentController // Contains the endpoints for Triage and Queues
+    AppointmentController
   ],
   providers: [
-    // --- Command Handlers (Input Logic / Write) ---
-    CreateDoctorHandler, 
+    // Commands
+    CreateDoctorHandler,
+    UpdateDoctorHandler, 
     BookAppointmentHandler,
     TriagePatientHandler,  
-
-    // --- Query Handlers (Read Logic / Views) ---
+    // Queries
     GetClinicalQueueHandler, 
-    GetStudentAppointmentsHandler, 
-
-    // --- Event Handlers (Output Logic / Bridge) ---
+    GetStudentAppointmentsHandler,
+    GetAllDoctorsHandler,
+    // Events
     PublishAppointmentCreatedHandler 
   ],
 })

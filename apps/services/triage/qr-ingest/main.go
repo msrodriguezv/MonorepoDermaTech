@@ -2,114 +2,55 @@ package main
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"log" // 👈 Usamos este paquete para imprimir en consola
-	"time"
+	"log"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/swagger"
-	"github.com/google/uuid"
 	"github.com/skip2/go-qrcode"
-
-	// Importa la documentación generada
-	_ "qr-ingest/docs"
 )
 
-// Estructura de entrada
-type IngestRequest struct {
-	StudentId string   `json:"studentId" example:"EST-SWAGGER-01"`
-	Symptoms  []string `json:"symptoms" example:"dolor, mareo"`
+// --- ESTRUCTURAS ---
+type QrGenerationRequest struct {
+	Content string `json:"content"` // El texto que irá dentro del QR
 }
 
-// Estructura de respuesta
-type IngestResponse struct {
-	Status        string `json:"status" example:"SUCCESS"`
-	Message       string `json:"message" example:"Procesado Correctamente"`
-	AppointmentId string `json:"appointmentId" example:"550e8400..."`
-	QrData        string `json:"qr_data" example:"DERMA|EST|UUID"`
-	QrImage       string `json:"qr_image" example:"data:image/png;base64..."`
+type QrGenerationResponse struct {
+	QrBase64 string `json:"qr_image"` // La imagen en base64
 }
 
-// Estructura Kafka
-type KafkaMessage struct {
-	StudentId     string   `json:"studentId"`
-	Symptoms      []string `json:"symptoms"`
-	AppointmentId string   `json:"appointmentId"`
-	QrData        string   `json:"qrData"`
-	Timestamp     string   `json:"timestamp"`
-}
-
-// @title           DermaTech Triage API
-// @version         1.0
-// @description     Microservicio de Ingesta (Lineal)
-// @host            localhost:3006
-// @BasePath        /api
-
-// @Summary      Generar QR
-// @Description  Recibe datos y devuelve el QR generado (Imagen + Texto)
-// @Tags         Triage
-// @Accept       json
-// @Produce      json
-// @Param        request body IngestRequest true "Datos"
-// @Success      200  {object}  IngestResponse
-// @Router       /triage/ingest [post]
-func ingestHandler(c *fiber.Ctx) error {
-	var req IngestRequest
+// --- HANDLER ---
+func generateHandler(c *fiber.Ctx) error {
+	var req QrGenerationRequest
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Body inválido"})
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid Body"})
 	}
 
-	log.Printf("🔄 Procesando estudiante: %s", req.StudentId)
+	log.Printf("🔄 Generando QR para contenido: %s", req.Content)
 
-	newUuid := uuid.New().String()
-	qrContent := fmt.Sprintf("DERMA|%s|%s", req.StudentId, newUuid)
-
-	// Generar Imagen QR
-	png, err := qrcode.Encode(qrContent, qrcode.Medium, 256)
+	// Generar Imagen QR (Nivel Medium, 256px)
+	png, err := qrcode.Encode(req.Content, qrcode.Medium, 256)
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Error generando imagen"})
+		return c.Status(500).JSON(fiber.Map{"error": "Error generando imagen QR"})
 	}
+
 	qrBase64 := base64.StdEncoding.EncodeToString(png)
 	qrImageUrl := "data:image/png;base64," + qrBase64
 
-	// Enviar a Kafka
-	msg := KafkaMessage{
-		StudentId:     req.StudentId,
-		Symptoms:      req.Symptoms,
-		AppointmentId: newUuid,
-		QrData:        qrContent,
-		Timestamp:     time.Now().Format(time.RFC3339),
-	}
-	msgBytes, _ := json.Marshal(msg)
-	// producer.Produce(...)
-	log.Printf("✅ Kafka Msg: %s", string(msgBytes))
-
-	return c.JSON(IngestResponse{
-		Status:        "SUCCESS",
-		Message:       "Procesado Correctamente",
-		AppointmentId: newUuid,
-		QrData:        qrContent,
-		QrImage:       qrImageUrl,
+	return c.JSON(QrGenerationResponse{
+		QrBase64: qrImageUrl,
 	})
 }
 
+// --- MAIN ---
 func main() {
 	app := fiber.New()
 
-	// Configuración de Swagger
-	app.Get("/swagger/*", swagger.HandlerDefault)
+	// Endpoint interno para microservicios
+	app.Post("/generate", generateHandler)
 
-	// Rutas de API
-	app.Post("/api/triage/ingest", ingestHandler)
-
-	// 👇 AQUÍ ESTÁN LOS MENSAJES QUE PEDISTE (Con la sintaxis correcta de Go)
 	fmt.Println("---------------------------------------------------------")
-	fmt.Println("🛡️  Servidor GO (QrIngest) corriendo en puerto 3006")
-	
-	// Esta es la línea con el link clicable:
-	log.Println("📄 Swagger UI disponible en: http://localhost:3006/swagger/")
+	fmt.Println("🛡️  Microservicio QR (Worker Mode) corriendo en puerto 8080")
 	fmt.Println("---------------------------------------------------------")
 
-	log.Fatal(app.Listen(":3006"))
+	log.Fatal(app.Listen(":3006")) // Puerto interno de Docker
 }

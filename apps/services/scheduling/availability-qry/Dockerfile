@@ -5,8 +5,7 @@ FROM node:18-slim AS runner
 ENV NODE_ENV=production
 WORKDIR /app
 
-# Install dumb-init to handle kernel signals (SIGTERM, SIGINT) professionally
-RUN apk add --no-cache dumb-init
+RUN apt-get update && apt-get install -y --no-install-recommends dumb-init && rm -rf /var/lib/apt/lists/*
 
 # Copy root package files for dependency installation
 COPY package*.json ./
@@ -15,7 +14,6 @@ COPY package*.json ./
 RUN npm ci --only=production --ignore-scripts && npm cache clean --force
 
 # Copy the pre-compiled code from the Nx 'dist' folder
-# The build is performed in the CI/CD pipeline, not inside Docker
 ARG SERVICE_PATH
 COPY dist/apps/services/${SERVICE_PATH} ./dist
 

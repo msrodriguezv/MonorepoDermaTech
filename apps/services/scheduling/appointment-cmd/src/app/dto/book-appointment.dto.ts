@@ -1,10 +1,6 @@
-import { IsNotEmpty, IsUUID, IsISO8601 } from 'class-validator';
+import { IsNotEmpty, IsUUID, IsISO8601, IsString, MinLength } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
-/**
- * Data Transfer Object for Booking an Appointment.
- * Note: The Student ID is NOT included here for security (extracted from JWT).
- */
 export class BookAppointmentDto {
   
   @ApiProperty({ 
@@ -24,10 +20,11 @@ export class BookAppointmentDto {
   readonly startTime: string;
 
   @ApiProperty({ 
-    description: 'End time of the appointment (ISO 8601 format)', 
-    example: '2024-01-20T10:30:00.000Z' 
+    description: 'Brief description of symptoms for AI Triage', 
+    example: 'Dolor de cabeza intenso y visión borrosa' 
   })
-  @IsISO8601()
+  @IsString()
   @IsNotEmpty()
-  readonly endTime: string;
+  @MinLength(10)
+  readonly symptoms: string;
 }

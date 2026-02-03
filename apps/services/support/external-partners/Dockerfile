@@ -1,12 +1,11 @@
 # STEP 1: Multi-stage build for production optimization
-FROM node:18-alpine AS runner
+FROM node:18-slim
 
 # Set production environment
 ENV NODE_ENV=production
 WORKDIR /app
 
-# Install dumb-init to handle kernel signals (SIGTERM, SIGINT) professionally
-RUN apk add --no-cache dumb-init
+RUN apt-get update && apt-get install -y dumb-init
 
 # Copy root package files for dependency installation
 COPY package*.json ./

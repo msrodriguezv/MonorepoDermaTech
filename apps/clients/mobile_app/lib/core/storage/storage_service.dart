@@ -2,10 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Servicio unificado para manejar persistencia de datos.
-/// Soluciona el error de "Secure Context" en Web usando SharedPreferences como fallback.
 class StorageService {
-  // Instancia única (Singleton) para no crear múltiples objetos
   static final StorageService _instance = StorageService._internal();
   factory StorageService() => _instance;
   StorageService._internal();

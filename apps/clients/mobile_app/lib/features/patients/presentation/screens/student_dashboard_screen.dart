@@ -2,13 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:dermatech_mobile/core/storage/storage_service.dart';
-
-// --- CORE & ARCHITECTURE IMPORTS ---
 import '../../../../core/network/api_client.dart';
 import '../../../auth/data/datasources/auth_remote_data_source.dart';
 import '../../../auth/presentation/screens/login_screen.dart';
-
-// --- FEATURE IMPORTS ---
 import '../../data/datasources/patient_remote_data_source.dart';
 import '../../../appointments/data/datasources/appointment_remote_data_source.dart';
 import '../../data/models/patient_profile_model.dart';
@@ -16,12 +12,7 @@ import '../../../appointments/data/models/appointment_model.dart';
 import 'book_appointment_screen.dart';
 
 class StudentDashboardScreen extends StatefulWidget {
-  final String studentName;
-
-  const StudentDashboardScreen({
-    super.key,
-    required this.studentName,
-  });
+  const StudentDashboardScreen({super.key});
 
   @override
   State<StudentDashboardScreen> createState() => _StudentDashboardScreenState();
@@ -32,7 +23,6 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   PatientProfileModel? _profile;
   List<AppointmentModel> _appointments = [];
   String? _errorMessage;
-
   final _storage = StorageService();
 
   @override
@@ -44,11 +34,11 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   Future<void> _fetchDashboardData() async {
     try {
       final apiClient = ApiClient();
-      final dataSource = PatientRemoteDataSourceImpl(apiClient: apiClient);
+      final patientDataSource = PatientRemoteDataSourceImpl(apiClient: apiClient);
       final appointmentDataSource = AppointmentRemoteDataSourceImpl(apiClient: apiClient);
-      
+
       final results = await Future.wait([
-        dataSource.getPatientProfile(),
+        patientDataSource.getPatientProfile(),
         appointmentDataSource.getMyAppointments(),
       ]);
 
@@ -56,9 +46,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
         setState(() {
           _profile = results[0] as PatientProfileModel;
           _appointments = results[1] as List<AppointmentModel>;
-          
           _appointments.sort((a, b) => b.date.compareTo(a.date));
-          
           _isLoading = false;
         });
       }
@@ -69,7 +57,6 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
           _isLoading = false;
         });
       }
-      debugPrint("[DASHBOARD] Error: $error");
     }
   }
 
@@ -81,8 +68,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
         final authDataSource = AuthRemoteDataSourceImpl(apiClient: apiClient);
         await authDataSource.logout(token);
       }
-    } catch (e) {
-      debugPrint("⚠️ [LOGOUT] Warning: $e");
+    } catch (_) {
     } finally {
       await _storage.deleteAll();
       if (mounted) {
@@ -112,20 +98,29 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
+              const SizedBox(height: 10),
               ElevatedButton(
-                  onPressed: _fetchDashboardData, child: const Text("Reintentar"))
+                  onPressed: () {
+                    setState(() {
+                      _isLoading = true;
+                      _errorMessage = null;
+                    });
+                    _fetchDashboardData();
+                  },
+                  child: const Text("Reintentar"))
             ],
           ),
         ),
       );
     }
 
-    // Datos del Perfil
     final displayFaculty = _profile?.faculty ?? "Facultad no registrada";
     final displayCareer = _profile?.career ?? "Carrera no registrada";
-    final displaySemester = "${_profile?.currentSemester ?? 1}° Semestre";
+    final displaySemester = _profile?.currentSemester != null
+        ? "${_profile!.currentSemester}° Semestre"
+        : "Semestre no registrado";
     final displayCode = _profile?.studentCode ?? "N/A";
-    final displayName = _profile?.fullName ?? widget.studentName;
+    final displayName = _profile?.fullName ?? "Estudiante";
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
@@ -147,17 +142,10 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 1. HEADER CARD (Perfil)
             _buildProfileHeader(displayName, displayFaculty, displayCareer, displaySemester),
-
             const SizedBox(height: 30),
-
-            // 2. QR ACCESS PASS (Real)
             _buildQrCard(displayCode),
-
             const SizedBox(height: 35),
-
-            // 3. APPOINTMENTS SECTION (Lista Real)
             const Text(
               "Mis Citas Médicas",
               style: TextStyle(
@@ -166,15 +154,11 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                   color: Color(0xFF0A2342)),
             ),
             const SizedBox(height: 15),
-
             if (_appointments.isEmpty)
               _buildEmptyState()
             else
               ..._appointments.map((appt) => _AppointmentCard(appointment: appt)),
-
             const SizedBox(height: 25),
-
-            // 4. BOTÓN AGENDAR
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
@@ -184,7 +168,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                     MaterialPageRoute(
                         builder: (context) => const BookAppointmentScreen()),
                   );
-                  // Al volver, recargamos los datos por si agendó algo nuevo
+                  setState(() => _isLoading = true);
                   _fetchDashboardData();
                 },
                 icon: const Icon(Icons.calendar_month_rounded,
@@ -284,8 +268,6 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                   fontSize: 11,
                   fontWeight: FontWeight.bold)),
           const SizedBox(height: 24),
-          
-          // QR REAL usando qr_flutter
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
@@ -294,13 +276,15 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
               borderRadius: BorderRadius.circular(12),
             ),
             child: QrImageView(
-              data: studentCode, // DATOS REALES
+              data: studentCode,
               version: QrVersions.auto,
               size: 160.0,
               foregroundColor: const Color(0xFF0A2342),
+              errorStateBuilder: (cxt, err) {
+                return const Center(child: Text("Sin código", textAlign: TextAlign.center));
+              },
             ),
           ),
-
           const SizedBox(height: 20),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -332,7 +316,6 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   }
 }
 
-// --- CARD DINÁMICO ---
 class _AppointmentCard extends StatelessWidget {
   final AppointmentModel appointment;
 
@@ -340,7 +323,6 @@ class _AppointmentCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Lógica de colores según estado
     Color statusColor;
     String statusText;
 
@@ -367,8 +349,7 @@ class _AppointmentCard extends StatelessWidget {
         statusText = appointment.status;
     }
 
-    // Formateo de fecha
-    final formattedDate = DateFormat('dd MMM, yyyy', 'es').format(appointment.date);
+    final formattedDate = DateFormat('dd MMM, yyyy').format(appointment.date);
     final formattedTime = DateFormat('hh:mm a').format(appointment.date);
 
     return Container(

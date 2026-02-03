@@ -1,8 +1,8 @@
 name: "03. BACKEND PROD"
 
 on:
-  #push:
-    #branches: [ developer ]
+  push:
+    branches: [ developer ]
   workflow_dispatch:
 
 env:
@@ -21,13 +21,13 @@ jobs:
       - uses: actions/checkout@v3
         with: { fetch-depth: 0 }
       
-      # Node.js Tests (NestJS Microservices)
+      # Node.js Tests
       - uses: actions/setup-node@v3
         with: { node-version: 18, cache: 'npm' }
       - run: npm ci --legacy-peer-deps
       - run: npx nx run-many --target=test --all --parallel=3 --ci
       
-      # Python Tests (AI Agent)
+      # Python Tests
       - uses: actions/setup-python@v4
         with: { python-version: '3.11' }
       - run: |
@@ -35,7 +35,7 @@ jobs:
           pip install flask pytest pytest-mock
           pytest test_main.py || true
       
-      # Go Tests (QR Ingest)
+      # Go Tests
       - uses: actions/setup-go@v4
         with: { go-version: '1.21' }
       - run: |
@@ -44,11 +44,10 @@ jobs:
 
   # ============================================================================
   # JOB 2: ANALYZE STATE (THE BRAIN)
-  # Detects changes in Git AND inspects Production Servers via SSH
   # ============================================================================
   analyze-state:
     name: 🧠 Analyze & Calculate Targets
-    needs: backend-quality-gate # 👈 WAIT FOR TESTS TO PASS
+    needs: backend-quality-gate
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -68,26 +67,57 @@ jobs:
             api-gateway: 'apps/services/api-gateway/**'
             appointment-cmd: 'apps/services/scheduling/appointment-cmd/**'
             availability-qry: 'apps/services/scheduling/availability-qry/**'
-            external-partners: 'apps/services/support/external-partners/**'
-            triage-engine: 'apps/services/triage/triage-engine/**'
             qr-ingest: 'apps/services/triage/qr-ingest/**'
+            triage-engine: 'apps/services/triage/triage-engine/**'
             ai-agent: 'apps/services/ai-agent/**'
+            external-partners: 'apps/services/support/external-partners/**'
 
-      # --- 2. SETUP SSH (To inspect Prod) ---
+      # --- 2. SETUP SSH (PROD) ---
       - name: Configure SSH Key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+          
+          # Configurar SSH config apuntando al Bastion de PRODUCCION
+          cat > ~/.ssh/config << EOF
+          Host bastion
+            HostName ${{ env.PROD_BASTION_PUBLIC_IP }}
+            User ec2-user
+            IdentityFile ~/.ssh/id_rsa
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ServerAliveInterval 60
+            ServerAliveCountMax 3
+          
+          Host node-a
+            HostName 10.3.1.10
+            User ec2-user
+            IdentityFile ~/.ssh/id_rsa
+            ProxyJump bastion
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ServerAliveInterval 60
+            ServerAliveCountMax 3
+          
+          Host node-b
+            HostName 10.4.1.10
+            User ec2-user
+            IdentityFile ~/.ssh/id_rsa
+            ProxyJump bastion
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ServerAliveInterval 60
+            ServerAliveCountMax 3
+          EOF
+          chmod 600 ~/.ssh/config
 
       # --- 3. INSPECT NODES & CALCULATE MATRIX ---
       - name: 🕵️‍♂️ Inspect Nodes & Merge Lists
         id: set-matrix
-        env:
-          BASTION: ${{ env.PROD_BASTION_PUBLIC_IP }}
-          NODE_A: 10.3.1.10
-          NODE_B: 10.4.1.10
         run: |
+          set -e
+          
           # Define Service Metadata (Name -> Path,Arg)
           declare -A CONFIG=(
             ["auth-service"]="apps/services/core/auth-service/Dockerfile,core/auth-service"
@@ -95,13 +125,18 @@ jobs:
             ["api-gateway"]="apps/services/api-gateway/Dockerfile,api-gateway"
             ["appointment-cmd"]="apps/services/scheduling/appointment-cmd/Dockerfile,scheduling/appointment-cmd"
             ["availability-qry"]="apps/services/scheduling/availability-qry/Dockerfile,scheduling/availability-qry"
-            ["external-partners"]="apps/services/support/external-partners/Dockerfile,support/external-partners"
             ["triage-engine"]="apps/services/triage/triage-engine/Dockerfile,triage/triage-engine"
             ["qr-ingest"]="apps/services/triage/qr-ingest/Dockerfile,triage/qr-ingest"
             ["ai-agent"]="apps/services/ai-agent/Dockerfile,ai-agent"
+            ["external-partners"]="apps/services/support/external-partners/Dockerfile,support/external-partners"
           )
 
-          ALL_SERVICES="${!CONFIG[@]}"
+          # Lista completa de servicios activos en PROD
+          ALL_SERVICES=("auth-service" "patient-service" "api-gateway" "appointment-cmd" "availability-qry" "qr-ingest" "triage-engine" "ai-agent" "external-partners")
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📋 STEP A: Detecting Code Changes"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
           # --- STEP A: Get Code Changes ---
           CHANGED_SERVICES=""
@@ -117,32 +152,32 @@ jobs:
           
           echo "📝 Changed in Git: $CHANGED_SERVICES"
 
-          # --- STEP B: Inspect Running Containers (SSH via Prod Bastion) ---
-          # ⚠️ SOLUCIÓN: Ignorar verificación de host estricta y known_hosts
-          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-          REMOTE_CMD="sudo docker ps --format '{{.Names}}' || true"
+          # --- STEP B: Inspect Running Containers (SSH) ---
+          REMOTE_CMD='sudo docker ps --format "{{.Names}}" 2>/dev/null | grep -E "^(auth-service|patient-service|api-gateway|appointment-cmd|availability-qry|external-partners|triage-engine|qr-ingest|ai-agent)$" || true'
           
           echo "📡 Connecting to Prod Nodes..."
-          RUNNING_A=$(ssh $SSH_OPTS -i ~/.ssh/id_rsa -J ec2-user@$BASTION ec2-user@$NODE_A "$REMOTE_CMD" || echo "")
-          RUNNING_B=$(ssh $SSH_OPTS -i ~/.ssh/id_rsa -J ec2-user@$BASTION ec2-user@$NODE_B "$REMOTE_CMD" || echo "")
-
-          echo "🔎 DEBUG - Running on A: $RUNNING_A"
-          echo "🔎 DEBUG - Running on B: $RUNNING_B"
+          RUNNING_A=$(ssh -o ConnectTimeout=15 node-a "$REMOTE_CMD" 2>&1) || { echo "⚠️ Failed Node A"; RUNNING_A=""; }
+          RUNNING_B=$(ssh -o ConnectTimeout=15 node-b "$REMOTE_CMD" 2>&1) || { echo "⚠️ Failed Node B"; RUNNING_B=""; }
 
           # --- STEP C: Calculate Missing Services ---
           MISSING_SERVICES=""
-          for svc in $ALL_SERVICES; do
-            if [[ "$RUNNING_A" != *"$svc"* ]] || [[ "$RUNNING_B" != *"$svc"* ]]; then
+          for svc in "${ALL_SERVICES[@]}"; do
+            IN_A=false; IN_B=false
+            if echo "$RUNNING_A" | grep -q "^${svc}$"; then IN_A=true; fi
+            if echo "$RUNNING_B" | grep -q "^${svc}$"; then IN_B=true; fi
+            
+            if [[ "$IN_A" == false ]] || [[ "$IN_B" == false ]]; then
               MISSING_SERVICES="$MISSING_SERVICES $svc"
             fi
           done
-          echo "❌ Missing/Stopped Services: $MISSING_SERVICES"
+          echo "❌ Missing/Stopped Services in PROD: $MISSING_SERVICES"
 
           # --- STEP D: Merge Lists (Unique) ---
-          TARGETS=$(echo "$CHANGED_SERVICES $MISSING_SERVICES" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+          TARGETS=$(echo "$CHANGED_SERVICES $MISSING_SERVICES" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ')
           echo "🎯 FINAL TARGET LIST: $TARGETS"
 
           if [[ -z "$TARGETS" ]] || [[ "$TARGETS" == " " ]]; then
+             echo "✅ No targets to deploy."
              echo "has_targets=false" >> $GITHUB_OUTPUT
              echo "matrix=[]" >> $GITHUB_OUTPUT
              exit 0
@@ -179,19 +214,15 @@ jobs:
         include: ${{ fromJson(needs.analyze-state.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v3
-
       - uses: actions/setup-node@v3
         with: { node-version: 18 }
       - run: npm ci --legacy-peer-deps
-      # Build for Production (Optimization enabled)
       - run: npx nx run-many --target=build --all --configuration=production --parallel=3
-      
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
-
       - name: Build and Push
         uses: docker/build-push-action@v4
         with:
@@ -202,7 +233,7 @@ jobs:
           build-args: SERVICE_PATH=${{ matrix.arg }}
 
   # ============================================================================
-  # JOB 4: SURGICAL DEPLOY (SCRIPT APPROACH)
+  # JOB 4: SURGICAL DEPLOY PROD (SCRIPT APPROACH)
   # ============================================================================
   deploy-surgical:
     name: 🚀 Surgical Deploy PROD
@@ -224,10 +255,26 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+          
+          cat > ~/.ssh/config << EOF
+          Host bastion
+            HostName ${{ env.PROD_BASTION_PUBLIC_IP }}
+            User ec2-user
+            IdentityFile ~/.ssh/id_rsa
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+          
+          Host target-node
+            HostName ${{ matrix.ip }}
+            User ec2-user
+            IdentityFile ~/.ssh/id_rsa
+            ProxyJump bastion
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+          EOF
+          chmod 600 ~/.ssh/config
 
-      # --- GENERATE PROD COMPOSE FILE ---
-      # This preserves all Production Variables while using the QA generation method
-      - name: Generate Compose File
+      - name: Generate Compose File (PROD)
         run: |
           cat > docker-compose.yml << EOF
           version: '3.8'
@@ -298,7 +345,7 @@ jobs:
                 - PORT=3000
                 - JWT_SECRET=${{ secrets.JWT_SECRET }}
                 - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
-                - KAFKA_CLIENT_ID=appointment-cmd
+                - KAFKA_CLIENT_ID=appointment-cmd              
                 - KAFKA_GROUP_ID=appointment-service-group
                 - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
                 - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
@@ -331,28 +378,42 @@ jobs:
               restart: always
               ports: ["3005:3000"]
               environment:
-                - JWT_SECRET=${{ secrets.JWT_SECRET }}
-            triage-engine:
-              image: ${{ secrets.DOCKER_USERNAME }}/triage-engine:latest
-              restart: always
-              ports: ["3006:3000"]
-              environment:
+                - PORT=3000
                 - JWT_SECRET=${{ secrets.JWT_SECRET }}
             qr-ingest:
               image: ${{ secrets.DOCKER_USERNAME }}/qr-ingest:latest
               restart: always
               ports: ["8080:8080"]
               environment:
+                - PORT=3000
                 - JWT_SECRET=${{ secrets.JWT_SECRET }}
+            triage-engine:
+              image: ${{ secrets.DOCKER_USERNAME }}/triage-engine:latest
+              restart: always
+              ports: ["3006:3000"] 
+              environment:
+                - PORT=3000
+                - QR_SERVICE_URL=http://qr-ingest:3000/generate
+                - AI_SERVICE_URL=http://ai-agent:3000/analyze
+                # KAFKA
+                - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
+                - KAFKA_CLIENT_ID=triage-engine-server
+                - KAFKA_GROUP_ID=triage-engine-group
+                - DB_HOST=${{ secrets.DATABASE_HOST }}
+                - DB_USER=${{ secrets.DATABASE_USER }}
+                - DB_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+                - DB_NAME=${{ secrets.DATABASE_NAME }}
+                - DB_PORT=${{ secrets.DATABASE_PORT }}
+                - DB_SYNC=${{ secrets.DATABASE_SYNC }}
             ai-agent:
               image: ${{ secrets.DOCKER_USERNAME }}/ai-agent:latest
               restart: always
-              ports: ["5000:5000"]
+              ports: ["5000:5000"] 
               environment:
+                - PORT=3000
                 - JWT_SECRET=${{ secrets.JWT_SECRET }}
           EOF
 
-      # Create deploy script that will run on the remote PROD node
       - name: Create Remote Deploy Script
         env:
           TARGETS: ${{ needs.analyze-state.outputs.target_list }}
@@ -362,97 +423,70 @@ jobs:
           cat > deploy-script.sh << 'SCRIPT_EOF'
           #!/bin/bash
           set -e
-
           DOCKER_USER="$1"
           DOCKER_PASS="$2"
           TARGETS="$3"
 
           echo '🔄 Starting PROD deployment process...'
-
-          # Validate compose file exists
-          if [ ! -f /home/ec2-user/docker-compose.yml ]; then
-            echo '❌ ERROR: docker-compose.yml not found'
-            exit 1
-          fi
-
-          # Docker login
+          
+          # Login
           echo "$DOCKER_PASS" | sudo docker login -u "$DOCKER_USER" --password-stdin
-
-          echo "🎯 Target services: $TARGETS"
-
-          # Change to compose directory
           cd /home/ec2-user
 
-          # Pull and deploy each service individually (Surgical)
           for service in $TARGETS; do
             service=$(echo "$service" | xargs)
             if [ -z "$service" ]; then continue; fi
             
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "------------------------------------------------"
             echo "📦 Processing: $service"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             
-            if sudo docker compose pull "$service"; then
-              echo "✅ Pull successful: $service"
-            else
-              echo "⚠️  Warning: Failed to pull $service"
-            fi
+            # Pull
+            sudo docker compose pull "$service"
             
-            # PROD: Ensure no downtime for other services, deploy only target
-            if sudo docker compose up -d --no-deps "$service"; then
-              echo "✅ Deploy successful: $service"
+            # Deploy Surgical (No Deps to avoid restarting everything)
+            sudo docker compose up -d --force-recreate --no-deps "$service"
+            
+            # Fast Verification
+            sleep 2
+            if sudo docker ps | grep -q "$service"; then
+               echo "✅ $service is running."
             else
-              echo "❌ ERROR: Failed to deploy $service"
-              exit 1
+               echo "⚠️  WARNING: $service might have crashed. Checking logs..."
+               sudo docker logs "$service" --tail 10
             fi
           done
 
-          echo "🧹 Cleaning up old images..."
+          echo "✅ Deployment completed on $(hostname)"
+          
+          echo "🧹 Cleaning up dangling images..."
           sudo docker image prune -f
-
-          echo "✅ PROD Deployment completed successfully on $(hostname)"
+          
           SCRIPT_EOF
-
           chmod +x deploy-script.sh
 
-      # Execute via PROD BASTION
       - name: 🚀 Execute Deploy via Bastion
         env:
           TARGETS: ${{ needs.analyze-state.outputs.target_list }}
-          BASTION: ${{ env.PROD_BASTION_PUBLIC_IP }}
-          NODE_IP: ${{ matrix.ip }}
           DOCKER_USER: ${{ secrets.DOCKER_USERNAME }}
           DOCKER_PASS: ${{ secrets.DOCKER_PASSWORD }}
         run: |
-          # Encode files
+          # Encode file Base64
           COMPOSE_B64=$(cat docker-compose.yml | base64 -w 0)
           SCRIPT_B64=$(cat deploy-script.sh | base64 -w 0)
           
-          # Copy key to bastion
-          # ⚠️ SOLUCIÓN: Ignorar verificación de host
-          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-          
-          scp $SSH_OPTS -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@$BASTION:/home/ec2-user/key.pem
-          
-          # Execute double-hop
-          ssh $SSH_OPTS -i ~/.ssh/id_rsa ec2-user@$BASTION bash << EOF
+          ssh target-node bash << EOF
             set -e
-            chmod 600 /home/ec2-user/key.pem
             
-            echo "🚀 Deploying to PROD Node: $NODE_IP..."
+            # Decode files in the destine code
+            echo '$COMPOSE_B64' | base64 -d > /home/ec2-user/docker-compose.yml
+            echo '$SCRIPT_B64' | base64 -d > /home/ec2-user/deploy-script.sh
+            chmod +x /home/ec2-user/deploy-script.sh
             
-            ssh $SSH_OPTS -i /home/ec2-user/key.pem ec2-user@$NODE_IP bash << 'REMOTE_EOF'
-              set -e
-              
-              echo '$COMPOSE_B64' | base64 -d > /home/ec2-user/docker-compose.yml
-              echo '$SCRIPT_B64' | base64 -d > /home/ec2-user/deploy-script.sh
-              chmod +x /home/ec2-user/deploy-script.sh
-              
-              /home/ec2-user/deploy-script.sh "$DOCKER_USER" "$DOCKER_PASS" "$TARGETS"
-              
-              rm -f /home/ec2-user/deploy-script.sh
-          REMOTE_EOF
+            # execute a deployment
+            /home/ec2-user/deploy-script.sh "$DOCKER_USER" "$DOCKER_PASS" "$TARGETS"
             
-            rm -f /home/ec2-user/key.pem
-            echo "✅ Deployment to $NODE_IP completed"
+            # Cleaning
+            rm -f /home/ec2-user/deploy-script.sh
           EOF
+          
+          echo "✅ Deployment to ${{ matrix.name }} completed"

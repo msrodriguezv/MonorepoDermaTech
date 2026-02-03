@@ -93,13 +93,10 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
 
       if (!mounted) return;
 
-      // 3. Success -> Navigate to Dashboard
-      final fullName = "${_firstNameController.text.trim()} ${_lastNameController.text.trim()}";
-
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => StudentDashboardScreen(studentName: fullName),
+          builder: (_) => const StudentDashboardScreen(),
         ),
       );
 

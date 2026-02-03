@@ -6,7 +6,6 @@ class ApiClient {
   late final Dio _dio;
   
   ApiClient() {
-    // 1. Initialize Dio
     _dio = Dio(BaseOptions(
       baseUrl: Environment.authBaseUrl,
       connectTimeout: const Duration(seconds: 30),
@@ -17,9 +16,7 @@ class ApiClient {
       },
     ));
 
-    // 2. Register the Interceptor
-    // Ahora solo pasamos '_dio'. El interceptor ya sabe cómo buscar el token
-    // usando el StorageService internamente.
+    // Register AuthInterceptor
     _dio.interceptors.add(AuthInterceptor(_dio));
   }
 

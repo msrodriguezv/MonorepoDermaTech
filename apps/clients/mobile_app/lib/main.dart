@@ -1,26 +1,42 @@
 import 'package:flutter/material.dart';
-import 'package:intl/date_symbol_data_local.dart'; 
-import 'features/auth/presentation/screens/auth_check_screen.dart';
+import 'package:intl/date_symbol_data_local.dart';
+import 'package:flutter_web_plugins/url_strategy.dart';
 
-void main() async{
+import 'core/storage/storage_service.dart';
+import 'config/router/app_router.dart';
+
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await initializeDateFormatting('es');
   
-  runApp(const DermatechApp());
-}
+  // 1. Initialize dependencies
+  await initializeDateFormatting('es');
+  usePathUrlStrategy(); // Removes the "#" from URL
 
-/// **DermatechApp**
-/// The root widget of the application.
+  // 2. CHECK SESSION BEFORE APP STARTS (The Fix for F5)
+  // We read the token from SharedPreferences (Web) or SecureStorage (Mobile).
+  final storage = StorageService();
+  final token = await storage.read(key: 'accessToken');
+
+  // 3. Determine initial state
+  final bool isAuthenticated = token != null && token.isNotEmpty;
+
+  runApp(DermatechApp(isAuthenticated: isAuthenticated));
+}
+.
 class DermatechApp extends StatelessWidget {
-  const DermatechApp({super.key});
+  final bool isAuthenticated;
+
+  const DermatechApp({super.key, required this.isAuthenticated});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+   
+    final routerConfig = createAppRouter(isAuthenticated);
+
+    return MaterialApp.router(
       debugShowCheckedModeBanner: false,
       title: 'Dermatech Mobile',
-      
-      // Global Theme Configuration
+
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0A2342)),
         useMaterial3: true,
@@ -31,10 +47,7 @@ class DermatechApp extends StatelessWidget {
         ),
       ),
 
-      // We do not load LoginScreen directly. We load AuthCheckScreen first.
-      // This allows the app to check for an existing session (Token) 
-      // and redirect to the Dashboard automatically.
-      home: const AuthCheckScreen(),
+      routerConfig: routerConfig,
     );
   }
 }

@@ -1,3 +1,9 @@
+import * as crypto from 'crypto';
+
+if (!global.crypto) {
+  // @ts-expect-error: Polyfill for Node 18+ compatibility
+  global.crypto = crypto;
+}
 import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';

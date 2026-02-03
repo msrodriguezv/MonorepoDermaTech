@@ -9,13 +9,17 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_web_plugins:
+    sdk: flutter
   # HTTP client
   dio: ^5.9.0
   # Secure Storage
   flutter_secure_storage: ^10.0.0
+  http: ^1.2.0
   shared_preferences: ^2.5.4
   qr_flutter: ^4.1.0
   intl: ^0.20.2
+  go_router: ^13.0.0
 
 # 3. Dev Dependencies (Testing tools)
 dev_dependencies:

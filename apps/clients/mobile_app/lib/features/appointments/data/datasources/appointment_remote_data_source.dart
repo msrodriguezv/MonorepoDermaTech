@@ -1,34 +1,42 @@
-import 'package:flutter/foundation.dart';
+import 'package:dio/dio.dart';
 import '../../../../core/network/api_client.dart';
 import '../models/appointment_model.dart';
 
-abstract class AppointmentRemoteDataSource {
-  Future<List<AppointmentModel>> getMyAppointments();
+abstract class AuthRemoteDataSource {
+  Future<TokenResponseModel> login(LoginRequestModel request);
+  Future<void> register(RegisterRequestModel request);
+  Future<void> logout(String token);
 }
 
-class AppointmentRemoteDataSourceImpl implements AppointmentRemoteDataSource {
+class AuthRemoteDataSourceImpl implements AuthRemoteDataSource {
   final ApiClient apiClient;
 
-  AppointmentRemoteDataSourceImpl({required this.apiClient});
+  AuthRemoteDataSourceImpl({required this.apiClient});
 
   @override
-  Future<List<AppointmentModel>> getMyAppointments() async {
-    try {
-      final response = await apiClient.get('/appointments/my-history');
+  Future<TokenResponseModel> login(LoginRequestModel request) async {
+    const url = '/auth/login';
+    final response = await apiClient.post(url, request.toJson());
+    return TokenResponseModel.fromJson(response.data);
+  }
 
-      if (response.statusCode == 200) {
-        if (response.data is List) {
-          final List<dynamic> data = response.data;
-          return data.map((json) => AppointmentModel.fromJson(json)).toList();
-        } else {
-          return [];
-        }
-      } else {
-        return [];
-      }
-    } catch (e) {
-      debugPrint("[AppointmentRemoteDataSource] Error fetching appointments: $e");
-      return [];
-    }
+  @override
+  Future<void> register(RegisterRequestModel request) async {
+    const url = '/auth/register';
+    await apiClient.post(url, request.toJson());
+  }
+
+  @override
+  Future<void> logout(String token) async {
+    // Explicit Authorization header for Logout to ensure correct token invalidation
+    await apiClient.post(
+      '/auth/logout', 
+      null, 
+      options: Options(
+        headers: {
+          'Authorization': 'Bearer $token',
+        },
+      ),
+    );
   }
 }
