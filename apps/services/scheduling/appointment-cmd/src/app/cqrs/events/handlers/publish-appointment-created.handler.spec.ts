@@ -1,46 +1,35 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { Logger } from '@nestjs/common';
+import { ClientKafka } from '@nestjs/microservices';
 import { PublishAppointmentCreatedHandler } from './publish-appointment-created.handler';
 import { AppointmentCreatedEvent } from '../impl/appointment-created.event';
 import { of } from 'rxjs';
 
 describe('PublishAppointmentCreatedHandler', () => {
   let handler: PublishAppointmentCreatedHandler;
-  
-  // Mocks
-  let mockKafkaClient: any;
-  let mockLogger: any;
+  let kafkaClient: ClientKafka;
+
+  // Creamos un Mock tipado parcialmente para ClientKafka
+  const mockKafkaClient: Partial<Record<keyof ClientKafka, jest.Mock>> = {
+    emit: jest.fn().mockReturnValue(of({})),
+    connect: jest.fn().mockResolvedValue(null),
+    close: jest.fn().mockResolvedValue(null),
+  };
 
   beforeEach(async () => {
-    // 1. Configurar Mocks completos (incluyendo connect/subscribe para que no fallen los hooks)
-    mockKafkaClient = {
-      emit: jest.fn().mockReturnValue(of({})),
-      connect: jest.fn().mockResolvedValue(true),
-      subscribeToResponseOf: jest.fn(),
-      close: jest.fn(),
-    };
-
-    mockLogger = {
-      log: jest.fn(),
-      error: jest.fn(),
-      warn: jest.fn(),
-    };
+    jest.clearAllMocks();
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PublishAppointmentCreatedHandler,
         {
-          provide: 'KAFKA_SERVICE_APPOINTMENT', // El token correcto
+          provide: 'KAFKA_SERVICE_APPOINTMENT',
           useValue: mockKafkaClient,
         },
-        // Opcional: Si quisieras mockear el logger interno, pero Nest lo maneja bien.
       ],
     }).compile();
 
     handler = module.get<PublishAppointmentCreatedHandler>(PublishAppointmentCreatedHandler);
-    
-    // IMPORTANTE: Silenciamos el logger real para no ensuciar la terminal con errores falsos
-    (handler as any).logger = mockLogger;
+    kafkaClient = module.get<ClientKafka>('KAFKA_SERVICE_APPOINTMENT');
   });
 
   it('should be defined', () => {
@@ -48,48 +37,50 @@ describe('PublishAppointmentCreatedHandler', () => {
   });
 
   describe('handle', () => {
-    it('should transform the event and emit it to Kafka topic "booking.events"', async () => {
-      // --- PREPARACIÓN ---
+    it('should connect via onModuleInit, transform the event and emit it to Kafka', async () => {
+      // Arrange
       const eventDate = new Date('2025-01-20T10:00:00Z');
+      const symptoms = 'Dolor de cabeza intenso';
+      
       const event = new AppointmentCreatedEvent(
         'appt-123',
         'doc-456',
         'student-789',
         eventDate,
+        symptoms,
       );
 
-      // 🔥 TRUCO CLAVE: Forzamos la conexión a TRUE manualmente
-      // Accedemos a la propiedad privada usando 'as any' para saltar la restricción de TypeScript
-      (handler as any).isKafkaConnected = true;
-
-      // --- EJECUCIÓN ---
+      // Act
+      // 1. Simulamos el ciclo de vida real: NestJS llama a onModuleInit al arrancar.
+      // Esto establece isKafkaConnected = true internamente sin usar hacks (as any).
+      await handler.onModuleInit();
+      
+      // 2. Ejecutamos el handler
       await handler.handle(event);
 
-      // --- VERIFICACIÓN ---
-      expect(mockKafkaClient.emit).toHaveBeenCalledWith(
-        'booking.events',
-        expect.objectContaining({
-          event_id: 'appt-123',
-          type: 'booking.appointment_created',
-          data: expect.objectContaining({
-            appointment_id: 'appt-123',
-            doctor_id: 'doc-456',
-            student_id: 'student-789'
-          })
-        })
+      // Assert
+      expect(kafkaClient.connect).toHaveBeenCalled();
+      expect(kafkaClient.emit).toHaveBeenCalledWith(
+        'booking.appointment_created',
+        {
+          appointment_id: 'appt-123',
+          doctor_id: 'doc-456',
+          student_id: 'student-789',
+          start_time: eventDate.toISOString(),
+          symptoms: symptoms,
+        }
       );
     });
 
-    it('should NOT emit if Kafka is disconnected', async () => {
-      const event = new AppointmentCreatedEvent('1', '2', '3', new Date());
-
-      // Simulamos desconexión
-      (handler as any).isKafkaConnected = false;
+    it('should NOT emit if module has not been initialized (disconnected)', async () => {
+      // Arrange
+      const event = new AppointmentCreatedEvent(
+        '1', '2', '3', new Date(), 'test symptoms'
+      );
 
       await handler.handle(event);
 
-      // Verificamos que NO se llamó a emit
-      expect(mockKafkaClient.emit).not.toHaveBeenCalled();
+      expect(kafkaClient.emit).not.toHaveBeenCalled();
     });
   });
 });

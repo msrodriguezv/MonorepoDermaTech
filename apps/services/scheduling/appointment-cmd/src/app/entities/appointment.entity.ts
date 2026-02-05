@@ -62,6 +62,11 @@ export class Appointment {
    * Clinical notes added by the nurse during the triage process.
    * Stores vital signs or preliminary observations.
    */
+
+  @ApiProperty({ example: 'Manchas rojas en la cara', description: 'Patient reported symptoms' })
+  @Column({ name: 'symptoms', type: 'text', nullable: true })
+  symptoms: string;
+
   @ApiProperty({ example: 'BP: 120/80, Weight: 70kg, No fever.', description: 'Triage notes added by the nurse' })
   @Column({ name: 'nurse_notes', type: 'text', nullable: true })
   nurseNotes: string;

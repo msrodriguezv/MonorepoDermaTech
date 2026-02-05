@@ -1,6 +1,6 @@
 import { IQueryHandler, QueryHandler } from '@nestjs/cqrs';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like } from 'typeorm';
+import { Repository } from 'typeorm';
 import { GetStudentAppointmentsQuery } from '../impl/get-student-appointments.query';
 import { Appointment } from '../../../entities/appointment.entity';
 
@@ -16,8 +16,9 @@ export class GetStudentAppointmentsHandler implements IQueryHandler<GetStudentAp
 
     return this.appointmentRepo.find({
       where: {
-        studentId: Like(`%${studentId}%`),
+        studentId: studentId,
       },
+      relations: ['doctor'], 
       order: {
         startTime: 'DESC',
       },

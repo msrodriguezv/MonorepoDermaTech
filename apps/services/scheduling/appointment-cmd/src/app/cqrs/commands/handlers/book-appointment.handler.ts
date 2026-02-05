@@ -11,7 +11,7 @@ import { Doctor } from '../../../entities/doctor.entity';
 @CommandHandler(BookAppointmentCommand)
 export class BookAppointmentHandler implements ICommandHandler<BookAppointmentCommand> {
   private readonly logger = new Logger(BookAppointmentHandler.name);
-  private readonly APPOINTMENT_DURATION_MINUTES = 30; // Regla de Negocio Estricta
+  private readonly APPOINTMENT_DURATION_MINUTES = 30;
 
   constructor(
     @InjectRepository(Appointment)
@@ -24,7 +24,6 @@ export class BookAppointmentHandler implements ICommandHandler<BookAppointmentCo
   async execute(command: BookAppointmentCommand): Promise<Appointment> {
     const { studentId, dto } = command;
     
-    // 1. Time Calculation (Backend enforced)
     const startTime = new Date(dto.startTime);
     const endTime = new Date(startTime.getTime() + this.APPOINTMENT_DURATION_MINUTES * 60000);
 
@@ -32,7 +31,6 @@ export class BookAppointmentHandler implements ICommandHandler<BookAppointmentCo
       throw new BadRequestException('Cannot book appointments in the past.');
     }
 
-    // 2. Doctor Validation
     const doctor = await this.doctorRepository.findOneBy({ id: dto.doctorId });
     if (!doctor) {
       throw new NotFoundException(`Doctor with ID ${dto.doctorId} not found.`);
@@ -41,8 +39,6 @@ export class BookAppointmentHandler implements ICommandHandler<BookAppointmentCo
       throw new ConflictException('Doctor is currently not accepting appointments.');
     }
 
-    // 3. Overlap Check (Concurrency Safe Logic)
-    // Formula: (StartA < EndB) and (EndA > StartB)
     const overlappingAppointment = await this.appointmentRepository
       .createQueryBuilder('appointment')
       .where('appointment.doctorId = :doctorId', { doctorId: dto.doctorId })
@@ -56,26 +52,24 @@ export class BookAppointmentHandler implements ICommandHandler<BookAppointmentCo
       throw new ConflictException('The selected time slot is already booked.');
     }
 
-    // 4. Persistence (Postgres)
-    // Nota: Guardamos la cita relacional. Los síntomas viajan en el evento.
     const newAppointment = this.appointmentRepository.create({
       doctorId: dto.doctorId,
       studentId: studentId,
       startTime: startTime,
       endTime: endTime,
       status: AppointmentStatus.SCHEDULED,
+      symptoms: dto.symptoms, 
     });
 
     const savedAppointment = await this.appointmentRepository.save(newAppointment);
 
-    // 5. Event Publishing (Async Flow trigger)
     this.eventBus.publish(
       new AppointmentCreatedEvent(
         savedAppointment.id,
         savedAppointment.doctorId,
         savedAppointment.studentId,
         savedAppointment.startTime,
-        dto.symptoms // Pasamos los síntomas al bus
+        dto.symptoms 
       ),
     );
 

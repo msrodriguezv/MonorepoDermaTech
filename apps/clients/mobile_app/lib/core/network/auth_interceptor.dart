@@ -15,7 +15,6 @@ class AuthInterceptor extends Interceptor {
 
   @override
   Future<void> onRequest(RequestOptions options, RequestInterceptorHandler handler) async {
-    // Read from storage (SharedPreferences on Web / SecureStorage on Mobile)
     final accessToken = await _storage.read(key: 'accessToken');
 
     if (accessToken != null && accessToken.isNotEmpty) {
@@ -44,7 +43,6 @@ class AuthInterceptor extends Interceptor {
         final refreshToken = await _storage.read(key: 'refreshToken');
 
         if (refreshToken == null) {
-          // No refresh token available, force logout
           await _performLogout(handler, err);
           return;
         }
@@ -52,17 +50,27 @@ class AuthInterceptor extends Interceptor {
         // Use a separate Dio instance to avoid circular interceptors
         final tokenDio = Dio(BaseOptions(baseUrl: Environment.authBaseUrl));
         
+        // Backend expects { "refreshToken": "..." }
         final response = await tokenDio.post('/auth/refresh', data: {
           'refreshToken': refreshToken
         });
 
         if (response.statusCode == 200 || response.statusCode == 201) {
-          // Extract tokens securely handling different backend structures
-          final newAccessToken = response.data['accessToken'] ?? response.data['backendTokens']['accessToken'];
-          final newRefreshToken = response.data['refreshToken'] ?? response.data['backendTokens']['refreshToken'];
+          // --- CORRECCIÓN CRÍTICA AQUÍ ---
+          final responseData = response.data;
+          
+          // Tu backend envuelve la respuesta en 'data', así que buscamos ahí primero.
+          // Estructura: { success: true, message: "...", data: { accessToken: "..." } }
+          final tokensData = responseData['data'] ?? responseData;
+
+          final newAccessToken = tokensData['accessToken'];
+          final newRefreshToken = tokensData['refreshToken'];
 
           if (newAccessToken != null) {
             await _storage.write(key: 'accessToken', value: newAccessToken);
+          } else {
+            // Si el backend dice OK pero no hay token, algo está muy mal -> Logout
+            throw Exception("Access Token not found in refresh response");
           }
           
           if (newRefreshToken != null) {
@@ -79,6 +87,7 @@ class AuthInterceptor extends Interceptor {
           await _performLogout(handler, err);
         }
       } catch (e) {
+        // Si el refresh falla (ej: refresh token expirado), hacemos logout forzoso
         await _performLogout(handler, err);
       } finally {
         _isRefreshing = false;
@@ -109,6 +118,7 @@ class AuthInterceptor extends Interceptor {
   /// Clears storage and propagates the error to trigger UI logout
   Future<void> _performLogout(ErrorInterceptorHandler handler, DioException err) async {
     await _storage.deleteAll();
+    // Propagamos el error para que la UI (router) detecte el estado y redirija a Login
     return handler.next(err);
   }
 }

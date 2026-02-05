@@ -1,16 +1,11 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:dermatech_mobile/core/storage/storage_service.dart';
 import '../../../../core/network/api_client.dart';
 import '../../data/datasources/auth_remote_data_source.dart';
 import '../../../../features/patients/data/datasources/patient_remote_data_source.dart';
 import '../../data/models/auth_models.dart';
-import 'register_screen.dart';
-import '../../../patients/presentation/screens/complete_profile_screen.dart';
-import '../../../patients/presentation/screens/student_dashboard_screen.dart';
-import '../../../nurse/presentation/screens/nurse_dashboard_screen.dart';
-import '../../../admin/presentation/screens/admin_dashboard_screen.dart';
-import '../../../doctor/presentation/screens/doctor_dashboard_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -89,16 +84,19 @@ class _LoginScreenState extends State<LoginScreen> {
 
       case 'DOCTOR':
       case 'MEDICO':
-        _navigateTo(const DoctorDashboardScreen());
+        // Asegúrate de tener la ruta '/doctor' en tu app_router
+        context.go('/doctor'); 
         break;
 
       case 'NURSE':
       case 'ENFERMERO':
-        _navigateTo(const NurseDashboardScreen());
+        // Asegúrate de tener la ruta '/nurse' en tu app_router
+        context.go('/nurse');
         break;
 
       case 'ADMIN':
-        _navigateTo(const AdminDashboardScreen());
+        // Asegúrate de tener la ruta '/admin' en tu app_router
+        context.go('/admin');
         break;
 
       default:
@@ -115,22 +113,19 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
 
       if (status.isProfileComplete) {
-        _navigateTo(const StudentDashboardScreen());
+        // ✅ Perfil completo -> Vamos al Dashboard (/profile)
+        context.go('/profile');
       } else {
-        _navigateTo(CompleteProfileScreen(email: _emailController.text.trim()));
+        // ✅ Perfil incompleto -> Vamos a completar perfil
+        // Pasamos el email como objeto 'extra' porque GoRouter no recomienda pasar datos sensibles en query params
+        context.go('/profile/complete', extra: _emailController.text.trim());
       }
     } catch (e) {
       if (mounted) {
-        _navigateTo(CompleteProfileScreen(email: _emailController.text.trim()));
+        // Si falla la verificación, asumimos incompleto por seguridad
+        context.go('/profile/complete', extra: _emailController.text.trim());
       }
     }
-  }
-
-  void _navigateTo(Widget screen) {
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (context) => screen),
-    );
   }
 
   void _handleLoginError(Object error) {
@@ -281,12 +276,8 @@ class _LoginScreenState extends State<LoginScreen> {
                                 GestureDetector(
                                   onTap: () {
                                     if (!_isLoading) {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                            builder: (context) =>
-                                                const RegisterScreen()),
-                                      );
+                                      // ✅ REFACTOR: Usamos context.push para ir a registro
+                                      context.push('/register');
                                     }
                                   },
                                   child: const Text(

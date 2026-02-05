@@ -1,13 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:dermatech_mobile/core/storage/storage_service.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../patients/data/datasources/patient_remote_data_source.dart';
-import 'login_screen.dart';
-import '../../../patients/presentation/screens/student_dashboard_screen.dart';
-import '../../../patients/presentation/screens/complete_profile_screen.dart';
-import '../../../doctor/presentation/screens/doctor_dashboard_screen.dart';
-import '../../../admin/presentation/screens/admin_dashboard_screen.dart';
-import '../../../nurse/presentation/screens/nurse_dashboard_screen.dart';
 
 class AuthCheckScreen extends StatefulWidget {
   const AuthCheckScreen({super.key});
@@ -19,6 +14,8 @@ class AuthCheckScreen extends StatefulWidget {
 class _AuthCheckScreenState extends State<AuthCheckScreen> {
   final _storage = StorageService();
 
+  static const Color _brandColor = Color(0xFF0A2342);
+
   @override
   void initState() {
     super.initState();
@@ -26,69 +23,64 @@ class _AuthCheckScreenState extends State<AuthCheckScreen> {
   }
 
   Future<void> _initializeSessionCheck() async {
-    await Future.delayed(const Duration(milliseconds: 1500));
+    await Future.delayed(const Duration(milliseconds: 1000));
+
+    if (!mounted) return;
 
     try {
       final String? accessToken = await _storage.read(key: 'accessToken');
       final String? userRole = await _storage.read(key: 'userRole');
 
       if (accessToken != null && accessToken.isNotEmpty && userRole != null) {
-        if (!mounted) return;
         await _decideNavigationAndRedirect(userRole);
       } else {
-        if (!mounted) return;
         _navigateToLogin();
       }
     } catch (error) {
-      if (mounted) _navigateToLogin();
+      _navigateToLogin();
     }
   }
 
   Future<void> _decideNavigationAndRedirect(String role) async {
     final String normalizedRole = role.toUpperCase().trim();
-    Widget targetScreen;
 
     if (normalizedRole == 'STUDENT' || normalizedRole == 'PATIENT') {
-      try {
-        final apiClient = ApiClient();
-        final patientDataSource = PatientRemoteDataSourceImpl(apiClient: apiClient);
-        final status = await patientDataSource.getProfileStatus();
-
-        if (status.isProfileComplete) {
-          targetScreen = const StudentDashboardScreen();
-        } else {
-          final savedEmail = await _storage.read(key: 'userEmail');
-          targetScreen = CompleteProfileScreen(email: savedEmail ?? '');
-        }
-      } catch (e) {
-        if (!mounted) return;
-        _navigateToLogin();
-        return;
-      }
+      await _handleStudentFlow();
     } else if (normalizedRole.contains('DOCTOR') || normalizedRole.contains('MEDICO')) {
-      targetScreen = const DoctorDashboardScreen();
+      context.go('/doctor');
     } else if (normalizedRole.contains('NURSE') || normalizedRole.contains('ENFERMERO')) {
-      targetScreen = const NurseDashboardScreen();
+      context.go('/nurse');
     } else if (normalizedRole.contains('ADMIN')) {
-      targetScreen = const AdminDashboardScreen();
+      context.go('/admin');
     } else {
-      targetScreen = const LoginScreen();
+      _navigateToLogin();
     }
+  }
 
-    if (!mounted) return;
+  Future<void> _handleStudentFlow() async {
+    try {
+      final apiClient = ApiClient();
+      final patientDataSource = PatientRemoteDataSourceImpl(apiClient: apiClient);
+      final status = await patientDataSource.getProfileStatus();
 
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (_) => targetScreen),
-      (route) => false,
-    );
+      if (!mounted) return;
+
+      if (status.isProfileComplete) {
+        context.go('/profile');
+      } else {
+        final savedEmail = await _storage.read(key: 'userEmail');
+        context.go('/profile/complete', extra: savedEmail ?? '');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _navigateToLogin();
+    }
   }
 
   void _navigateToLogin() {
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-    );
+    if (mounted) {
+      context.go('/login');
+    }
   }
 
   @override
@@ -99,12 +91,21 @@ class _AuthCheckScreenState extends State<AuthCheckScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.local_hospital_rounded, size: 90, color: Color(0xFF0D47A1)),
+            Icon(Icons.local_hospital_rounded, size: 90, color: _brandColor),
             SizedBox(height: 24),
             CircularProgressIndicator(
               strokeWidth: 3,
-              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF0D47A1)),
+              valueColor: AlwaysStoppedAnimation<Color>(_brandColor),
             ),
+            SizedBox(height: 20),
+            Text(
+              "Iniciando sesión...",
+              style: TextStyle(
+                color: _brandColor, 
+                fontSize: 16, 
+                fontWeight: FontWeight.w500
+              ),
+            )
           ],
         ),
       ),

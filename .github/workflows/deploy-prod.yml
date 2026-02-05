@@ -1,8 +1,8 @@
 name: "PROD: V2. TURBO DEPLOY DermaTech Global Infrastructure"
 
 on:
-  push:
-    branches: [ developer ]
+  #push:
+    #branches: [ main ]
   workflow_dispatch:
 
 env:
@@ -17,7 +17,7 @@ env:
 
 jobs:
   # ============================================================================
-  # 1. INITIAL VERIFICATIONS & CONNECTIVITY
+  # 1. INITIAL VERIFICATIONS
   # ============================================================================
   test-bastion-connection:
     name: 🔌 Verify PROD Connectivity
@@ -39,26 +39,32 @@ jobs:
             fi
           fi
 
-      - name: Verify SSH Port Availability
+      - name: Check Bastion Reachability
         run: timeout 30 bash -c "until cat < /dev/null > /dev/tcp/${{ env.PROD_BASTION_PUBLIC_IP }}/22; do sleep 5; done"
 
   backend-quality-gate:
-    name: 🛡️ Backend Quality Gate
+    name: 🛡️ Backend Quality Assurance
     needs: test-bastion-connection
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
         with: { fetch-depth: 0 }
+
+      # --- NODE.JS SUITE ---
       - uses: actions/setup-node@v3
         with: { node-version: 18, cache: 'npm' }
       - run: npm ci --legacy-peer-deps
       - run: npx nx run-many --target=test --all --parallel=3 --ci
+
+      # --- PYTHON SUITE ---
       - uses: actions/setup-python@v4
         with: { python-version: '3.11' }
       - run: |
           cd apps/services/ai-agent
           pip install flask pytest pytest-mock
           pytest test_main.py || true
+
+      # --- GO SUITE ---
       - uses: actions/setup-go@v4
         with: { go-version: '1.21' }
       - run: |
@@ -163,7 +169,7 @@ jobs:
         with: { name: 'VPC_NODE_A', path: 'VPC_NODE_A' }
       - uses: actions/download-artifact@v4
         with: { name: 'VPC_NODE_B', path: 'VPC_NODE_B' }
-      - name: Extract Networking Metadata
+      - name: Extract VPC Metadata
         run: |
           EVENTS_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_EVENTS/vpc_id.txt | head -n 1)
           STATE_ID=$(grep -o 'vpc-[a-z0-9]*' VPC_STATE/vpc_id.txt | head -n 1)
@@ -174,14 +180,14 @@ jobs:
           echo "VPC_NODE_A=$NODE_A_ID" >> $GITHUB_ENV
           echo "VPC_NODE_B=$NODE_B_ID" >> $GITHUB_ENV
       
-      - name: Deploy Orchestrator Hub
+      - name: Deploy PROD Hub
         env:
           AWS_PROFILE: prod-dermatech
           AWS_REGION: us-east-1
         run: |
           cd infrastructure/terraform/environments-prod/account-01-prod
           terraform init -reconfigure
-          # Seguridad: Se remueve destroy si falla para PROD
+          # Seguridad: Sin comando destroy automático
           terraform apply -auto-approve \
             -var="events_vpc_id=${{ env.VPC_EVENTS }}" \
             -var="state_vpc_id=${{ env.VPC_STATE }}" \
@@ -192,7 +198,7 @@ jobs:
           echo "ALB_URL=$ALB_DNS" > alb_dns.txt
 
       # ========================================================================
-      # 🛡️ BLINDAJE DE RUTAS PROD (SAFETY NET) - FUNCIONALIDAD ADAPTADA
+      # 🛡️ BLINDAJE DE RUTAS PROD (SAFETY NET) - CRÍTICO
       # ========================================================================
       - name: Force Route Injection PROD (Safety Net)
         env:
@@ -200,14 +206,13 @@ jobs:
           AWS_REGION: us-east-1
         run: |
           echo "🛡️ Verifying Routes in PROD Bastion Table..."
-          # Obtener ID de la tabla publica de PROD (Tag: dermatech-prod-public-rt)
+          # ID de la tabla PUBLICA de PROD (Tag: dermatech-prod-public-rt)
           RT_ID=$(aws ec2 describe-route-tables --filters "Name=tag:Name,Values=dermatech-prod-public-rt" --query "RouteTables[0].RouteTableId" --output text)
           
           ensure_route() {
             CIDR=$1
             PEER_NAME=$2
             echo "Checking route for $CIDR..."
-            # Buscar ID del Peering (Naming convention: prod-to-*)
             PCX_ID=$(aws ec2 describe-vpc-peering-connections --filters "Name=tag:Name,Values=$PEER_NAME" --query "VpcPeeringConnections[0].VpcPeeringConnectionId" --output text)
             
             if [ "$PCX_ID" == "None" ] || [ -z "$PCX_ID" ]; then
@@ -215,7 +220,7 @@ jobs:
                return
             fi
 
-            # Intentar crear la ruta. Si ya existe, da error controlado pero continuamos.
+            # Intenta crear la ruta. Si ya existe, da error controlado y sigue.
             aws ec2 create-route --route-table-id $RT_ID --destination-cidr-block $CIDR --vpc-peering-connection-id $PCX_ID || echo "✅ Route to $CIDR likely exists."
           }
 
@@ -224,15 +229,17 @@ jobs:
           ensure_route "10.3.0.0/16" "prod-to-node-a-peering"
           ensure_route "10.4.0.0/16" "prod-to-node-b-peering"
       
-      - name: Upload ALB Endpoint
+      - name: Upload ALB Meta
         uses: actions/upload-artifact@v4
         with:
           name: ALB_DNS
           path: infrastructure/terraform/environments-prod/account-01-prod/alb_dns.txt
 
   # ============================================================================
-  # 3. BUILD MULTIPLATFORM (MANDATORY)
+  # 3. BUILD MULTIPLATFORM PROD (MANDATORY)
   # ============================================================================
+  
+  # A. Compile Backend, Web y Android (Linux)
   compile-code:
     name: 🔨 Build PROD Web & Android
     needs: [backend-quality-gate]
@@ -245,20 +252,26 @@ jobs:
         with: { channel: 'stable' }
       - uses: actions/setup-node@v3
         with: { node-version: 18, cache: 'npm' }
-      - name: Install Node Dependencies
-        run: npm ci --legacy-peer-deps
-      - name: Build NestJS Services
-        run: npx nx run-many --target=build --all --configuration=production
-      - name: Build Flutter Web
+
+      - name: Build Backend Services
+        run: |
+          npm ci --legacy-peer-deps
+          npx nx run-many --target=build --all --configuration=production
+
+      # --- FLUTTER WEB (PROD) ---
+      - name: Build Flutter Web (PROD)
         run: |
           cd apps/clients/mobile_app
           flutter pub get
           flutter build web --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
-      - name: Build Android APK
+      
+      # --- FLUTTER ANDROID APK (PROD) ---
+      - name: Build Android APK (PROD)
         run: |
           cd apps/clients/mobile_app
           flutter build apk --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
           mv build/app/outputs/flutter-apk/app-release.apk dermatech-prod-android.apk
+
       - uses: actions/upload-artifact@v4
         with: { name: 'dist-files', path: 'dist' }
       - uses: actions/upload-artifact@v4
@@ -266,6 +279,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: 'android-apk', path: 'apps/clients/mobile_app/dermatech-prod-android.apk' }
 
+  # B. Compile Windows Desktop (Windows Runner)
   build-desktop:
     name: 🖥️ Build PROD Windows EXE
     needs: [backend-quality-gate]
@@ -274,19 +288,25 @@ jobs:
       - uses: actions/checkout@v3
       - uses: subosito/flutter-action@v2
         with: { channel: 'stable' }
-      - name: Build Windows Application
+      
+      - name: Build Windows App (PROD)
         run: |
           cd apps/clients/mobile_app
           flutter config --enable-windows-desktop
           flutter pub get
           flutter build windows --release --dart-define=API_URL=${{ env.PUBLIC_API_URL }}
+          
       - name: Package Windows Build
         run: |
           cd apps/clients/mobile_app/build/windows/x64/runner/Release
           Compress-Archive -Path * -DestinationPath ..\..\..\..\..\..\dermatech-prod-windows.zip
+
       - uses: actions/upload-artifact@v4
         with: { name: 'windows-app', path: 'apps/clients/mobile_app/dermatech-prod-windows.zip' }
 
+  # ============================================================================
+  # 4. DOCKER & DEPLOY PROD
+  # ============================================================================
   docker-build:
     name: 🐳 Docker Build & Push
     needs: compile-code
@@ -331,12 +351,12 @@ jobs:
         with: { name: 'dist-files', path: 'dist' }
       - uses: actions/download-artifact@v4
         with: { name: 'flutter-build', path: 'apps/clients/mobile_app/build/web' }
-      - name: Login to Docker Hub
+      - name: Docker Registry Login
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
-      - name: Build and Push Image
+      - name: Push Production Image
         uses: docker/build-push-action@v4
         with:
           context: .
@@ -350,12 +370,9 @@ jobs:
     needs: [prod-hub, docker-build]
     runs-on: ubuntu-latest
     steps:
-      - name: Configure SSH Key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-      - name: Execute Relay Deployment
+      - name: Setup SSH
+        run: mkdir -p ~/.ssh && echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
+      - name: Relay Deployment
         run: |
           cat > docker-compose.yml <<'EOF'
           version: '3.8'
@@ -425,12 +442,9 @@ jobs:
     needs: [prod-hub, docker-build]
     runs-on: ubuntu-latest
     steps:
-      - name: Configure SSH Key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-      - name: Execute Relay Deployment
+      - name: Setup SSH
+        run: mkdir -p ~/.ssh && echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
+      - name: Relay Deployment
         run: |
           cat > docker-compose.yml <<'EOF'
           version: '3.8'
@@ -438,14 +452,14 @@ jobs:
             redis:
               image: redis:7.2-alpine
               restart: always
-              ports: ["6379:6379"]
               command: redis-server --appendonly yes --requirepass ${{ secrets.REDIS_PASSWORD }}
+              ports: ["6379:6379"]
               volumes: ["/data/redis:/data"]
             grafana:
               image: grafana/grafana:latest
               restart: always
-              ports: ["3000:3000"]
               environment: { GF_SECURITY_ADMIN_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }} }
+              ports: ["3000:3000"]
               volumes: ["/data/grafana:/var/lib/grafana"]
           EOF
 
@@ -476,19 +490,16 @@ jobs:
     strategy:
       matrix:
         include:
-          - node_ip: 10.3.1.10
+          - ip: 10.3.1.10
             node_name: node-a
-          - node_ip: 10.4.1.10
+          - ip: 10.4.1.10
             node_name: node-b
     steps:
       - uses: actions/download-artifact@v4
         with: { name: 'ALB_DNS', path: 'ALB_DNS' }
-      - name: Configure SSH Key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-      - name: Generate Massive Docker Compose
+      - name: Setup SSH
+        run: mkdir -p ~/.ssh && echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
+      - name: Relay Deployment
         run: |
           cat > docker-compose.yml <<'EOF'
           version: '3.8'
@@ -516,7 +527,6 @@ jobs:
               ports: ["3001:3000"]
               environment:
                 - KAFKA_BROKERS=${{ env.EVENTS_PRIVATE_IP }}:9092
-                - KAFKA_GROUP_ID=${{ secrets.KAFKA_GROUP_ID }}
                 - REDIS_HOST=${{ env.STATE_PRIVATE_IP }}
                 - REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
                 - DB_HOST=${{ secrets.DATABASE_HOST }}
@@ -559,18 +569,13 @@ jobs:
               ports: ["5000:5000"]
           EOF
 
-      - name: 🚀 Execute Deployment (Relay)
-        run: |
-          echo "📦 Sending resources to Bastion..."
-          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/app-compose-${{ matrix.node_name }}.yml
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa docker-compose.yml ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/apps.yml
           scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }}:/home/ec2-user/deploy-key
           
-          echo "🔄 Running Docker via Bastion Relay to ${{ matrix.node_name }}..."
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ env.PROD_BASTION_PUBLIC_IP }} << 'BASTION_EOF'
             chmod 600 /home/ec2-user/deploy-key
-            scp -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key /home/ec2-user/app-compose-${{ matrix.node_name }}.yml ec2-user@${{ matrix.node_ip }}:/home/ec2-user/docker-compose.yml
-            
-            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ matrix.node_ip }} "
+            scp -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key /home/ec2-user/apps.yml ec2-user@${{ matrix.ip }}:/home/ec2-user/docker-compose.yml
+            ssh -o StrictHostKeyChecking=no -i /home/ec2-user/deploy-key ec2-user@${{ matrix.ip }} "
               if ! command -v docker &> /dev/null; then
                  sudo yum update -y && sudo yum install -y docker && sudo service docker start
               fi
@@ -583,8 +588,7 @@ jobs:
               sudo docker compose pull
               sudo docker compose up -d --remove-orphans
             "
-            # Limpieza segura
-            rm /home/ec2-user/deploy-key /home/ec2-user/app-compose-${{ matrix.node_name }}.yml
+            rm /home/ec2-user/deploy-key /home/ec2-user/apps.yml
           BASTION_EOF
 
       - name: 🏁 Final Summary
@@ -595,7 +599,7 @@ jobs:
           echo "🌐 URL: https://$ALB_DNS"
 
   # ============================================================================
-  # 5. TEST REAL CHARGE (SMOKE TEST)
+  # 5. TEST CHARGE PROD (SMOKE TEST)
   # ============================================================================
   load-testing:
     name: 🔥 PROD Smoke Test (Real Domain)
@@ -614,7 +618,7 @@ jobs:
   # ============================================================================
   # 6. PUBLISH PROD RELEASE (MULTIPLATFORM)
   # ============================================================================
-  publish-release:
+  publish-prod-release:
     name: 📦 Publish PROD Release
     needs: [load-testing, compile-code, build-desktop]
     runs-on: ubuntu-latest
@@ -634,12 +638,12 @@ jobs:
           name: "PRODUCTION Release v1.0.${{ github.run_number }}"
           body: |
             ## 🚀 PROD Deployment Successful
-            **Plataformas generadas:**
-            - 🤖 Android APK
-            - 🖥️ Windows EXE
-            - 🌐 Web (Desplegada en Servidor)
+            **Binarios Multiplataforma:**
+            - 🤖 Android APK (Listo para instalar)
+            - 🖥️ Windows EXE (Descomprimir y ejecutar)
+            - 🌐 Web (En línea)
             
-            **URL Web:** https://martharodriguez_prod2.distribuidauce.org
+            **URL Oficial:** https://martharodriguez_prod2.distribuidauce.org
           files: |
             dermatech-prod-android.apk
             dermatech-prod-windows.zip

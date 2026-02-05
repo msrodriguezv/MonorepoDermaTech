@@ -23,11 +23,11 @@ import { AppointmentCreatedHandler } from './cqrs/events/appointment-created.han
     SharedAuthModule,
   ],
   controllers: [
-    AvailabilityController, // HTTP Endpoint
+    AvailabilityController, 
+    AppointmentCreatedHandler,
   ],
   providers: [
-    RedisProvider,             // Database Connection
-    AppointmentCreatedHandler, // Kafka Consumer
+    RedisProvider,
   ],
 })
 export class AppModule {}

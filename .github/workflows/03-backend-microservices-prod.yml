@@ -1,8 +1,8 @@
 name: "03. BACKEND PROD"
 
 on:
-  push:
-    branches: [ developer ]
+  #push:
+    #branches: [ developer ]
   workflow_dispatch:
 
 env:

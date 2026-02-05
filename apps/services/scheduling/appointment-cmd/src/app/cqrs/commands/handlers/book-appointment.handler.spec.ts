@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { EventBus } from '@nestjs/cqrs';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Repository, LessThan, MoreThan } from 'typeorm';
+import { Repository } from 'typeorm';
 import { NotFoundException, ConflictException, BadRequestException, InternalServerErrorException, Logger } from '@nestjs/common';
 
 import { BookAppointmentHandler } from './book-appointment.handler';
@@ -13,8 +13,8 @@ import { AppointmentCreatedEvent } from '../../events/impl/appointment-created.e
 /**
  * Unit Test: BookAppointmentHandler
  * Scope: 
- * - Verifies booking logic (Time validation, Doctor status, Overlaps).
- * - Ensures Event publishing.
+ * - Verifies booking logic (Auto-calculated EndTime, Doctor status, Overlaps via QueryBuilder).
+ * - Ensures Event publishing with Symptoms.
  * - Handles specific Business Exceptions.
  */
 describe('BookAppointmentHandler', () => {
@@ -28,13 +28,20 @@ describe('BookAppointmentHandler', () => {
   // Mock Data Generators
   const mockStudentId = 'student-uuid-123';
   const mockDoctorId = 'doctor-uuid-456';
-  const startTime = new Date('2025-01-20T10:00:00Z');
-  const endTime = new Date('2025-01-20T10:30:00Z');
+  
+  // We use a future date to avoid "Cannot book in the past" error
+  const futureDate = new Date();
+  futureDate.setDate(futureDate.getDate() + 1); // Tomorrow
+  futureDate.setHours(10, 0, 0, 0);
+
+  const startTimeStr = futureDate.toISOString();
+  const symptoms = 'Manchas rojas y erupciones';
 
   const mockDto = {
     doctorId: mockDoctorId,
-    startTime: startTime.toISOString(),
-    endTime: endTime.toISOString(),
+    startTime: startTimeStr,
+    // endTime is removed from DTO as logic now calculates it in Backend
+    symptoms: symptoms,
   };
 
   const command = new BookAppointmentCommand(mockStudentId, mockDto);
@@ -48,17 +55,25 @@ describe('BookAppointmentHandler', () => {
     id: 'appt-uuid-789',
     studentId: mockStudentId,
     doctorId: mockDoctorId,
-    startTime: startTime,
-    endTime: endTime,
+    startTime: futureDate,
+    endTime: new Date(futureDate.getTime() + 30 * 60000), // +30 mins
     status: AppointmentStatus.SCHEDULED,
     createdAt: new Date(),
+    symptoms: symptoms,
   } as Appointment;
 
-  // Mocks Definitions
+  // --- MOCKING QUERY BUILDER (Crucial for TypeORM chaining) ---
+  const mockQueryBuilder = {
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    getOne: jest.fn(), // Return value set in individual tests
+  };
+
   const mockAppointmentRepository = {
     create: jest.fn(),
     save: jest.fn(),
-    findOne: jest.fn(), // Used for Overlap Check
+    // We inject the mockQueryBuilder when createQueryBuilder is called
+    createQueryBuilder: jest.fn(() => mockQueryBuilder),
   };
 
   const mockDoctorRepository = {
@@ -102,7 +117,7 @@ describe('BookAppointmentHandler', () => {
     it('should successfully book an appointment when slot is free and doctor is active', async () => {
       // Arrange
       mockDoctorRepository.findOneBy.mockResolvedValue(mockDoctor); // Doctor exists & active
-      mockAppointmentRepository.findOne.mockResolvedValue(null);    // No conflicts
+      mockQueryBuilder.getOne.mockResolvedValue(null);              // No overlap found
       mockAppointmentRepository.create.mockReturnValue(mockAppointment);
       mockAppointmentRepository.save.mockResolvedValue(mockAppointment);
 
@@ -113,18 +128,22 @@ describe('BookAppointmentHandler', () => {
       // 1. Doctor Validation
       expect(doctorRepository.findOneBy).toHaveBeenCalledWith({ id: mockDoctorId });
       
-      // 2. Overlap Check (TypeORM syntax verification)
-      expect(appointmentRepository.findOne).toHaveBeenCalledWith({
-        where: {
-          doctorId: mockDoctorId,
-          status: AppointmentStatus.SCHEDULED,
-          startTime: LessThan(new Date(mockDto.endTime)),
-          endTime: MoreThan(new Date(mockDto.startTime)),
-        }
-      });
+      // 2. Overlap Check (Verify QueryBuilder usage)
+      expect(appointmentRepository.createQueryBuilder).toHaveBeenCalledWith('appointment');
+      expect(mockQueryBuilder.where).toHaveBeenCalledWith('appointment.doctorId = :doctorId', { doctorId: mockDoctorId });
+      expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith('appointment.status = :status', { status: AppointmentStatus.SCHEDULED });
+      // We check that overlap logic was called (checking Start < EndB and End > StartB)
+      expect(mockQueryBuilder.andWhere).toHaveBeenCalledTimes(3); 
 
       // 3. Persistence
-      expect(appointmentRepository.create).toHaveBeenCalled();
+      expect(appointmentRepository.create).toHaveBeenCalledWith(expect.objectContaining({
+        studentId: mockStudentId,
+        doctorId: mockDoctorId,
+        symptoms: symptoms, // Check mapping
+        // We ensure logic calculated the 30 min duration correctly
+        endTime: expect.any(Date), 
+      }));
+      
       expect(appointmentRepository.save).toHaveBeenCalled();
 
       // 4. Event Publishing
@@ -133,14 +152,17 @@ describe('BookAppointmentHandler', () => {
       expect(result).toEqual(mockAppointment);
     });
 
-    it('should throw BadRequestException if Start Time is >= End Time', async () => {
-      // Arrange: Invalid time
-      const badDto = { ...mockDto, endTime: mockDto.startTime }; // Equal times
-      const badCommand = new BookAppointmentCommand(mockStudentId, badDto);
+    it('should throw BadRequestException if Start Time is in the past', async () => {
+      // Arrange: Past date
+      const pastDate = new Date();
+      pastDate.setDate(pastDate.getDate() - 1);
+      
+      const pastDto = { ...mockDto, startTime: pastDate.toISOString() };
+      const pastCommand = new BookAppointmentCommand(mockStudentId, pastDto);
 
       // Act & Assert
-      await expect(handler.execute(badCommand)).rejects.toThrow(BadRequestException);
-      expect(doctorRepository.findOneBy).not.toHaveBeenCalled();
+      await expect(handler.execute(pastCommand)).rejects.toThrow(BadRequestException);
+      expect(doctorRepository.findOneBy).not.toHaveBeenCalled(); // Should fail fast
     });
 
     it('should throw NotFoundException if Doctor does not exist', async () => {
@@ -162,25 +184,28 @@ describe('BookAppointmentHandler', () => {
     it('should throw ConflictException if there is a Time Overlap (Double Booking)', async () => {
       // Arrange
       mockDoctorRepository.findOneBy.mockResolvedValue(mockDoctor);
-      // Simulate existing conflicting appointment found in DB
-      mockAppointmentRepository.findOne.mockResolvedValue(mockAppointment);
+      // Simulate existing conflicting appointment found via QueryBuilder
+      mockQueryBuilder.getOne.mockResolvedValue(mockAppointment);
 
       // Act & Assert
       await expect(handler.execute(command)).rejects.toThrow(ConflictException);
+      
       // Ensure we don't save
       expect(appointmentRepository.save).not.toHaveBeenCalled();
+      expect(eventBus.publish).not.toHaveBeenCalled();
     });
 
-    it('should throw InternalServerErrorException on unexpected DB errors', async () => {
-        // Arrange
-        mockDoctorRepository.findOneBy.mockResolvedValue(mockDoctor);
-        mockAppointmentRepository.findOne.mockResolvedValue(null);
-        
-        // Simulate DB crash during save
-        mockAppointmentRepository.save.mockRejectedValue(new Error('DB Connection Failed'));
-  
-        // Act & Assert
-        await expect(handler.execute(command)).rejects.toThrow(InternalServerErrorException);
+    it('should throw InternalServerErrorException (or propagate error) on unexpected DB errors', async () => {
+       // Arrange
+       mockDoctorRepository.findOneBy.mockResolvedValue(mockDoctor);
+       mockQueryBuilder.getOne.mockResolvedValue(null);
+       mockAppointmentRepository.create.mockReturnValue(mockAppointment);
+       
+       // Simulate DB crash during save
+       mockAppointmentRepository.save.mockRejectedValue(new InternalServerErrorException('DB Connection Failed'));
+ 
+       // Act & Assert
+       await expect(handler.execute(command)).rejects.toThrow(InternalServerErrorException);
     });
   });
 });

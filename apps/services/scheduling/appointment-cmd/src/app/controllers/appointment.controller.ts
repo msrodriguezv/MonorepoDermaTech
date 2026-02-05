@@ -8,6 +8,7 @@ import { GetStudentAppointmentsQuery } from '../cqrs/queries/impl/get-student-ap
 import { GetClinicalQueueQuery } from '../cqrs/queries/impl/get-clinical-queue.query';
 import { TriagePatientCommand } from '../cqrs/commands/impl/triage-patient.command';
 import { BookAppointmentCommand } from '../cqrs/commands/impl/book-appointment.command';
+import { CancelAppointmentCommand } from '../cqrs/commands/impl/cancel-appointment.command';
 
 import { TriageDecisionDto } from '../dto/triage-decision.dto';
 import { AppointmentStatus } from '../entities/appointment.entity';
@@ -73,6 +74,20 @@ export class AppointmentController {
   ) {
     return this.commandBus.execute(
       new TriagePatientCommand(id, dto)
+    );
+  }
+
+  @Patch(':id/cancel')
+  @Roles(UserRole.STUDENT)
+  @ApiTags('Appointments (Student)')
+  @ApiOperation({ summary: 'Cancel an existing appointment' })
+  @ApiResponse({ status: 200, description: 'Appointment status updated to CANCELLED.' })
+  async cancelAppointment(
+    @Param('id') id: string,
+    @User() user: JwtPayload
+  ) {
+    return this.commandBus.execute(
+      new CancelAppointmentCommand(id, user.sub)
     );
   }
 }
