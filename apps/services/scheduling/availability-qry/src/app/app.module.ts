@@ -10,6 +10,7 @@ import { RedisProvider } from './configs/redis.config';
 // Features (We will create these files in the NEXT step)
 import { AvailabilityController } from './controllers/availability.controller';
 import { AppointmentCreatedHandler } from './cqrs/events/appointment-created.handler';
+import { AppointmentCancelledHandler } from './cqrs/events/appointment-cancelled.handler';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { AppointmentCreatedHandler } from './cqrs/events/appointment-created.han
   controllers: [
     AvailabilityController, 
     AppointmentCreatedHandler,
+    AppointmentCancelledHandler,
   ],
   providers: [
     RedisProvider,

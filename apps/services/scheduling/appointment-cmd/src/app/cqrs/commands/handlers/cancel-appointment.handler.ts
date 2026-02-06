@@ -1,10 +1,12 @@
-import { CommandHandler, ICommandHandler } from '@nestjs/cqrs';
+// 1. IMPORTAR EventBus
+import { CommandHandler, ICommandHandler, EventBus } from '@nestjs/cqrs'; 
 import { Logger, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { CancelAppointmentCommand } from '../impl/cancel-appointment.command';
 import { Appointment, AppointmentStatus } from '../../../entities/appointment.entity';
+import { AppointmentCancelledEvent } from '../../events/impl/appointment-cancelled.event'; 
 
 @CommandHandler(CancelAppointmentCommand)
 export class CancelAppointmentHandler implements ICommandHandler<CancelAppointmentCommand> {
@@ -13,6 +15,7 @@ export class CancelAppointmentHandler implements ICommandHandler<CancelAppointme
   constructor(
     @InjectRepository(Appointment)
     private readonly appointmentRepository: Repository<Appointment>,
+    private readonly eventBus: EventBus, 
   ) {}
 
   async execute(command: CancelAppointmentCommand): Promise<Appointment> {
@@ -41,6 +44,14 @@ export class CancelAppointmentHandler implements ICommandHandler<CancelAppointme
     const updatedAppointment = await this.appointmentRepository.save(appointment);
 
     this.logger.log(`🚫 Appointment cancelled: ${updatedAppointment.id} by Student: ${studentId}`);
+
+    this.eventBus.publish(
+      new AppointmentCancelledEvent(
+        updatedAppointment.id,
+        updatedAppointment.doctorId,
+        updatedAppointment.startTime 
+      )
+    );
 
     return updatedAppointment;
   }

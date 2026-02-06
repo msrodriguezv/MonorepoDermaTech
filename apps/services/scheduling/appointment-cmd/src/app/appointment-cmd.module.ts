@@ -17,6 +17,7 @@ import { CreateDoctorHandler } from './cqrs/commands/handlers/create-doctor.hand
 import { UpdateDoctorHandler } from './cqrs/commands/handlers/update-doctor.handler';
 import { TriagePatientHandler } from './cqrs/commands/handlers/triage-patient.handler';
 import { CancelAppointmentHandler } from './cqrs/commands/handlers/cancel-appointment.handler';
+import { PublishAppointmentCancelledHandler } from './cqrs/events/handlers/publish-appointment-cancelled.handler';
 
 // Queries
 import { GetStudentAppointmentsHandler } from './cqrs/queries/handlers/get-student-appointments.handler';
@@ -86,6 +87,7 @@ import { PublishAppointmentCreatedHandler } from './cqrs/events/handlers/publish
     BookAppointmentHandler,
     TriagePatientHandler,  
     CancelAppointmentHandler,
+    PublishAppointmentCancelledHandler,
     // Queries
     GetClinicalQueueHandler, 
     GetStudentAppointmentsHandler,
